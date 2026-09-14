@@ -20,23 +20,5 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Check shell scripts parse
-        run: bash -n deploy/scripts/*.sh
-
-      - name: Check Python helper parses
-        run: python3 -m py_compile deploy/scripts/state-bundle-validate.py
-
-      - name: Run state-bundle validator tests
-        run: python3 -m unittest discover -s deploy/tests -p 'test_*.py'
-
-      - name: Test homepage
-        run: cargo test --manifest-path Vapor-Homepage-Server/Cargo.toml --locked
-
-      - name: Test docs
-        run: cargo test --manifest-path Vapor-Docs-Server/Cargo.toml --locked
-
-      - name: Test identity
-        run: cargo test --manifest-path Vapor-Identity-Server/Cargo.toml --locked
-
-      - name: Test diagnostics
-        run: cargo test --manifest-path Vapor-Diagnostics-Server/Cargo.toml --locked
+      - name: Run Platform Server test recipe
+        run: deploy/scripts/test.sh
