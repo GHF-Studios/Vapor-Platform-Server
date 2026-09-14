@@ -14,7 +14,7 @@ chown -R "${VAPOR_USER}:${VAPOR_GROUP}" "${VAPOR_STATE_ROOT}"
 find "${VAPOR_STATE_ROOT}" -type d -exec chmod 0750 {} +
 find "${VAPOR_STATE_ROOT}" -type f -exec chmod 0640 {} +
 
-install_secret_env "${VAPOR_CONFIG_DIR}/root.env" \
+install_secret_env "${VAPOR_CONFIG_DIR}/platform.env" \
 "VAPOR_DOMAIN=${VAPOR_DOMAIN}
 VAPOR_BRANCH=${VAPOR_BRANCH}
 # Optional pre-DNS HTTP test host, for example a server IP address:

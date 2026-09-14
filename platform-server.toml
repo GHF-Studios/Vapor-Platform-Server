@@ -1,4 +1,4 @@
-[server_root]
+[platform_server]
 name = "Vapor Platform Server"
 status = "pre-dns-deployed"
 public_domain = "vapor.ghf-studios.site"

@@ -5,5 +5,5 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=-/etc/vapor-server/root.env
-ExecStart=/usr/bin/flock -n /run/vapor-server-deploy.lock /opt/vapor-server-root/deploy/scripts/deploy.sh
+EnvironmentFile=-/etc/vapor-server/platform.env
+ExecStart=/usr/bin/flock -n /run/vapor-server-deploy.lock /opt/vapor-platform-server/deploy/scripts/deploy.sh

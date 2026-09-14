@@ -13,7 +13,7 @@ Current baseline:
 - branch-based source deployment from `Vapor-Platform-Server`;
 - state under `/var/lib/vapor-server`;
 - service env files under `/etc/vapor-server`;
-- source checkout under `/opt/vapor-server-root`.
+- source checkout under `/opt/vapor-platform-server`.
 
 No secrets belong in this repository. The bootstrap script creates server-local
 admin tokens in `/etc/vapor-server/*.env` when those files do not already exist.
@@ -41,7 +41,7 @@ for smoke testing only; the intended public endpoint remains
 
 - `scripts/bootstrap-ubuntu.sh`: install OS packages, create users/directories,
   and create server-local env files.
-- `scripts/deploy.sh`: clone/update the root repo, update submodules, build
+- `scripts/deploy.sh`: clone/update the Platform Server repo, update submodules, build
   services, install units/proxy config, and restart services.
 - `scripts/install-auto-deploy.sh`: install a systemd timer that periodically
   runs `deploy.sh` against the configured branch.
@@ -77,11 +77,11 @@ for smoke testing only; the intended public endpoint remains
   token-protected docs endpoint.
 - `scripts/smoke-diagnostics.sh`: upload a diagnostics smoke run and verify
   obvious secret redaction.
-- `scripts/build-vapor-root-docs-bundle.sh`: build a curated Vapor docs tar.gz
+- `scripts/build-vapor-client-docs-bundle.sh`: build a curated Vapor docs tar.gz
   bundle from a local Vapor Client checkout.
 - `scripts/upload-docs-via-http.sh`: upload a docs bundle to the public docs
   route, such as `http://82.165.77.104/docs` before DNS is ready.
 - `scripts/upload-docs-via-ssh.sh`: alternate upload path that posts from the
   VPS to the local docs service.
-- `scripts/deploy-vapor-root-docs.sh`: build and deploy the curated docs bundle
+- `scripts/deploy-vapor-client-docs.sh`: build and deploy the curated docs bundle
   in one operator command.

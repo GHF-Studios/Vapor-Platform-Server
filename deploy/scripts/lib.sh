@@ -8,13 +8,13 @@ REPO_ROOT="$(cd -- "${DEPLOY_DIR}/.." && pwd)"
 VAPOR_DOMAIN="${VAPOR_DOMAIN:-vapor.ghf-studios.site}"
 VAPOR_REPO_URL="${VAPOR_REPO_URL:-https://github.com/GHF-Studios/Vapor-Platform-Server.git}"
 VAPOR_BRANCH="${VAPOR_BRANCH:-main}"
-VAPOR_DEPLOY_ROOT="${VAPOR_DEPLOY_ROOT:-/opt/vapor-server-root}"
+VAPOR_DEPLOY_ROOT="${VAPOR_DEPLOY_ROOT:-/opt/vapor-platform-server}"
 VAPOR_STATE_ROOT="${VAPOR_STATE_ROOT:-/var/lib/vapor-server}"
 VAPOR_CONFIG_DIR="${VAPOR_CONFIG_DIR:-/etc/vapor-server}"
-if [ -r "${VAPOR_CONFIG_DIR}/root.env" ]; then
+if [ -r "${VAPOR_CONFIG_DIR}/platform.env" ]; then
   set -a
   # shellcheck disable=SC1090
-  source "${VAPOR_CONFIG_DIR}/root.env"
+  source "${VAPOR_CONFIG_DIR}/platform.env"
   set +a
 fi
 

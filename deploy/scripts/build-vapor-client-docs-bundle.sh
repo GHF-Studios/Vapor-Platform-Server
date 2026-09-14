@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'USAGE'
-usage: build-vapor-root-docs-bundle.sh --vapor-root PATH [--output PATH]
+usage: build-vapor-client-docs-bundle.sh --vapor-client PATH [--output PATH]
 
 Builds a curated Vapor Client docs site bundle as a tar.gz archive suitable for
 uploading to Vapor-Docs-Server /current.tar.gz.
@@ -14,17 +14,17 @@ material.
 USAGE
 }
 
-VAPOR_ROOT=""
+VAPOR_CLIENT=""
 OUTPUT=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --vapor-root)
+    --vapor-client)
       if [ "$#" -lt 2 ]; then
         usage
         exit 2
       fi
-      VAPOR_ROOT="$2"
+      VAPOR_CLIENT="$2"
       shift 2
       ;;
     --output)
@@ -46,19 +46,19 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "${VAPOR_ROOT}" ]; then
+if [ -z "${VAPOR_CLIENT}" ]; then
   usage
   exit 2
 fi
 
-VAPOR_ROOT="$(cd -- "${VAPOR_ROOT}" && pwd)"
-if [ ! -f "${VAPOR_ROOT}/App.vapor.toml" ]; then
-  echo "error: ${VAPOR_ROOT} does not look like Vapor Client source" >&2
+VAPOR_CLIENT="$(cd -- "${VAPOR_CLIENT}" && pwd)"
+if [ ! -f "${VAPOR_CLIENT}/App.vapor.toml" ]; then
+  echo "error: ${VAPOR_CLIENT} does not look like Vapor Client source" >&2
   exit 1
 fi
 
 if [ -z "${OUTPUT}" ]; then
-  OUTPUT="$(mktemp --suffix=.tar.gz vapor-root-docs.XXXXXXXXXX)"
+  OUTPUT="$(mktemp --suffix=.tar.gz vapor-client-docs.XXXXXXXXXX)"
 else
   OUTPUT="$(realpath -m -- "${OUTPUT}")"
 fi
@@ -77,7 +77,7 @@ cleanup() {
 trap cleanup EXIT
 
 install -d -m 0755 "${SITE}"
-install -d -m 0755 "${SITE}/root"
+install -d -m 0755 "${SITE}/client"
 install -d -m 0755 "${SITE}/shell"
 install -d -m 0755 "${SITE}/vapor"
 
@@ -99,13 +99,13 @@ copy_tree_if_present() {
   fi
 }
 
-copy_if_present "${VAPOR_ROOT}/README.md" "${SITE}/root/README.md"
-copy_if_present "${VAPOR_ROOT}/App.vapor.toml" "${SITE}/root/App.vapor.toml"
-copy_if_present "${VAPOR_ROOT}/App-Source.vapor.toml" "${SITE}/root/App-Source.vapor.toml"
-copy_tree_if_present "${VAPOR_ROOT}/Vapor-Shell/crates/vapor_shell/docs" "${SITE}/shell"
-copy_tree_if_present "${VAPOR_ROOT}/Vapor/docs/roadmap" "${SITE}/vapor/roadmap"
+copy_if_present "${VAPOR_CLIENT}/README.md" "${SITE}/client/README.md"
+copy_if_present "${VAPOR_CLIENT}/App.vapor.toml" "${SITE}/client/App.vapor.toml"
+copy_if_present "${VAPOR_CLIENT}/App-Source.vapor.toml" "${SITE}/client/App-Source.vapor.toml"
+copy_tree_if_present "${VAPOR_CLIENT}/Vapor-Shell/crates/vapor_shell/docs" "${SITE}/shell"
+copy_tree_if_present "${VAPOR_CLIENT}/Vapor/docs/roadmap" "${SITE}/vapor/roadmap"
 
-BOOKS_ROOT="${VAPOR_ROOT}/Vapor/docs/books"
+BOOKS_ROOT="${VAPOR_CLIENT}/Vapor/docs/books"
 if [ -d "${BOOKS_ROOT}" ]; then
   install -d -m 0755 "${SITE}/books"
   while IFS= read -r -d '' book; do
@@ -148,11 +148,11 @@ li { margin: .25rem 0; }
   <li><a href="shell/steam-development.md">Steam development</a></li>
   <li><a href="shell/discovery.md">Discovery</a></li>
 </ul>
-<h2>Root context</h2>
+<h2>Client context</h2>
 <ul>
-  <li><a href="root/README.md">Vapor Client README</a></li>
-  <li><a href="root/App.vapor.toml">Runtime manifest</a></li>
-  <li><a href="root/App-Source.vapor.toml">Source manifest</a></li>
+  <li><a href="client/README.md">Vapor Client README</a></li>
+  <li><a href="client/App.vapor.toml">Runtime manifest</a></li>
+  <li><a href="client/App-Source.vapor.toml">Source manifest</a></li>
   <li><a href="vapor/roadmap/README.md">Roadmap</a></li>
 </ul>
 HTML
