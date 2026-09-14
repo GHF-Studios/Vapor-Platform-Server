@@ -37,11 +37,10 @@ VAPOR_IDENTITY_DASHBOARD_PASSWORD=$(random_token)
 VAPOR_IDENTITY_STEAM_APP_ID=2122620
 VAPOR_IDENTITY_STEAM_AUTH_IDENTITY=vapor-identity
 VAPOR_IDENTITY_COOKIE_PATH=/
-# false is only for pre-DNS HTTP-by-IP smoke testing; set true after HTTPS.
-VAPOR_IDENTITY_COOKIE_SECURE=false
-# Optional stable origin for browser redirects, for example http://82.165.77.104
-# before DNS or https://vapor.ghf-studios.site after DNS:
-VAPOR_IDENTITY_PUBLIC_ORIGIN=
+VAPOR_IDENTITY_COOKIE_SECURE=true
+# Browser identity is canonical on the HTTPS Vapor domain. Override manually
+# only for an intentional non-production deployment.
+VAPOR_IDENTITY_PUBLIC_ORIGIN=https://${VAPOR_DOMAIN}
 # Set on the server when available; never commit the value:
 VAPOR_IDENTITY_STEAM_WEB_API_KEY=
 # Set after creating the GitHub OAuth/GitHub App registration:

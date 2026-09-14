@@ -1,6 +1,6 @@
 [platform_server]
 name = "Vapor Platform Server"
-status = "pre-dns-deployed"
+status = "deployed"
 public_domain = "vapor.ghf-studios.site"
 
 [deployment]

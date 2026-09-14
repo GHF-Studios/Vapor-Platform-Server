@@ -43,6 +43,13 @@ install_secret_env \
 VAPOR_REGISTRY_STATE=${VAPOR_STATE_ROOT}/registry
 VAPOR_REGISTRY_DB=${VAPOR_STATE_ROOT}/registry/registry.sqlite3"
 
+# Browser identity has exactly one canonical public origin. This deliberately
+# updates only non-secret settings; provider credentials remain untouched.
+"${VAPOR_DEPLOY_ROOT}/deploy/scripts/configure-identity-auth.sh" \
+  --public-origin "https://${VAPOR_DOMAIN}" \
+  --cookie-secure true \
+  --cookie-path /
+
 cargo build --release --locked \
   --manifest-path "${VAPOR_DEPLOY_ROOT}/Vapor-Homepage-Server/Cargo.toml" \
   --target-dir "${VAPOR_DEPLOY_ROOT}/target"

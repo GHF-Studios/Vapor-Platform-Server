@@ -18,7 +18,7 @@ trap 'rm -f "${fallback_block}"' EXIT
 if [ -n "${VAPOR_HTTP_FALLBACK_HOST}" ]; then
   cat > "${fallback_block}" <<EOF
 http://${VAPOR_HTTP_FALLBACK_HOST} {
-	import vapor_routes
+	redir https://${VAPOR_DOMAIN}{uri} permanent
 }
 EOF
 fi
@@ -36,5 +36,5 @@ systemctl enable caddy.service
 
 echo "caddy: installed config for ${VAPOR_DOMAIN}"
 if [ -n "${VAPOR_HTTP_FALLBACK_HOST}" ]; then
-  echo "caddy: installed pre-DNS HTTP fallback for ${VAPOR_HTTP_FALLBACK_HOST}"
+  echo "caddy: installed canonical HTTP redirect for ${VAPOR_HTTP_FALLBACK_HOST}"
 fi
