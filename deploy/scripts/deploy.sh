@@ -43,6 +43,18 @@ install_secret_env \
 VAPOR_REGISTRY_STATE=${VAPOR_STATE_ROOT}/registry
 VAPOR_REGISTRY_DB=${VAPOR_STATE_ROOT}/registry/registry.sqlite3"
 
+# Docs publication depends on a server-local token. Bootstrap creates this on a
+# fresh host; recreate it if an existing deployment lost the config file.
+install_dir root "${VAPOR_GROUP}" 0750 "${VAPOR_CONFIG_DIR}"
+install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/docs"
+if [ ! -e "${VAPOR_CONFIG_DIR}/docs.env" ]; then
+  install_secret_env \
+    "${VAPOR_CONFIG_DIR}/docs.env" \
+"VAPOR_DOCS_BIND=127.0.0.1:7112
+VAPOR_DOCS_STATE=${VAPOR_STATE_ROOT}/docs
+VAPOR_DOCS_ADMIN_TOKEN=$(random_token)"
+fi
+
 # Browser identity has exactly one canonical public origin. This deliberately
 # updates only non-secret settings; provider credentials remain untouched.
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/configure-identity-auth.sh" \
