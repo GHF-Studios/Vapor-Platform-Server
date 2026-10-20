@@ -106,11 +106,15 @@ copy_tree_if_present "${VAPOR_CLIENT}/Vapor-CLI/crates/vapor_cli/docs" "${SITE}/
 copy_tree_if_present "${VAPOR_CLIENT}/Vapor/docs/roadmap" "${SITE}/vapor/roadmap"
 
 BOOKS_ROOT="${VAPOR_CLIENT}/Vapor/docs/books"
+MDBOOK_AVAILABLE=0
+if command -v mdbook >/dev/null 2>&1 && mdbook --version >/dev/null 2>&1; then
+  MDBOOK_AVAILABLE=1
+fi
 if [ -d "${BOOKS_ROOT}" ]; then
   install -d -m 0755 "${SITE}/books"
   while IFS= read -r -d '' book; do
     book_name="$(basename -- "$(dirname -- "${book}")")"
-    if command -v mdbook >/dev/null 2>&1; then
+    if [ "${MDBOOK_AVAILABLE}" -eq 1 ]; then
       mdbook build "$(dirname -- "${book}")" --dest-dir "${SITE}/books/${book_name}"
     else
       copy_tree_if_present "$(dirname -- "${book}")/src" "${SITE}/books/${book_name}/src"
@@ -119,43 +123,83 @@ if [ -d "${BOOKS_ROOT}" ]; then
   done < <(find "${BOOKS_ROOT}" -mindepth 2 -maxdepth 2 -name book.toml -print0 | sort -z)
 fi
 
-cat > "${SITE}/index.html" <<'HTML'
-<!doctype html>
+python3 - "${SITE}" "${BOOKS_ROOT}" "${VAPOR_CLIENT}/Vapor-CLI/crates/vapor_cli/docs" <<'PYINDEX'
+from html import escape
+from pathlib import Path
+import sys
+import tomllib
+from urllib.parse import quote
+
+site, books_root, guides_root = map(Path, sys.argv[1:])
+books = []
+if books_root.is_dir():
+    for config_path in sorted(books_root.glob("*/book.toml")):
+        metadata = tomllib.loads(config_path.read_text(encoding="utf-8")).get("book", {})
+        name = config_path.parent.name
+        built_index = site / "books" / name / "index.html"
+        summary = site / "books" / name / "src" / "SUMMARY.md"
+        target = built_index if built_index.is_file() else summary
+        if target.is_file():
+            books.append(
+                (
+                    metadata.get("title", name),
+                    metadata.get("description", ""),
+                    target.relative_to(site).as_posix(),
+                )
+            )
+
+guides = []
+if guides_root.is_dir():
+    for guide in sorted(guides_root.rglob("*.md")):
+        relative = guide.relative_to(guides_root).as_posix()
+        lines = guide.read_text(encoding="utf-8").splitlines()
+        title = next(
+            (
+                line.strip()[2:].strip()
+                for line in lines
+                if line.strip().startswith("# ") and line.strip()[2:].strip()
+            ),
+            guide.stem.replace("-", " ").replace("_", " "),
+        )
+        guides.append((title, "shell/" + quote(relative, safe="/")))
+
+book_links = "\n".join(
+    f'<li><a href="{escape(path, quote=True)}">{escape(title)}</a>{f"<p>{escape(description)}</p>" if description else ""}</li>'
+    for title, description, path in books
+)
+guide_links = "\n".join(
+    f'<li><a href="{escape(path, quote=True)}">{escape(title)}</a></li>' for title, path in guides
+)
+client_links = []
+for relative, label in (
+    ("client/README.md", "Vapor Client README"),
+    ("client/App.vapor.toml", "Runtime manifest"),
+    ("client/App-Source.vapor.toml", "Source manifest"),
+    ("vapor/roadmap/README.md", "Roadmap"),
+):
+    if (site / relative).is_file():
+        client_links.append(f'<li><a href="{escape(relative, quote=True)}">{escape(label)}</a></li>')
+
+contents = f"""<!doctype html>
 <meta charset="utf-8">
 <title>Vapor Documentation</title>
 <style>
-body { max-width: 960px; margin: 3rem auto; padding: 0 1.5rem; font: 16px/1.5 system-ui, sans-serif; }
-code { background: #f4f4f4; padding: .1rem .25rem; border-radius: .2rem; }
-li { margin: .25rem 0; }
+body {{ max-width: 960px; margin: 3rem auto; padding: 0 1.5rem; font: 16px/1.5 system-ui, sans-serif; }}
+code {{ background: #f4f4f4; padding: .1rem .25rem; border-radius: .2rem; }}
+li {{ margin: .25rem 0; }}
 </style>
 <h1>Vapor Documentation</h1>
 <p>This is the current deployed Vapor documentation bundle.</p>
 <h2>Product books</h2>
-<ul>
-  <li><a href="books/index/index.html">Docs index</a></li>
-  <li><a href="books/vapor/index.html">Vapor Book</a></li>
-  <li><a href="books/sdk/index.html">SDK Book</a></li>
-  <li><a href="books/launcher/index.html">Launcher Book</a></li>
-  <li><a href="books/distribution/index.html">Distribution Book</a></li>
-  <li><a href="books/internals/index.html">Internals Book</a></li>
-  <li><a href="books/cookbook/index.html">Cookbook</a></li>
-</ul>
-<h2>Shell docs</h2>
-<ul>
-  <li><a href="shell/commands.md">Commands</a></li>
-  <li><a href="shell/setup.md">Setup</a></li>
-  <li><a href="shell/distribution.md">Distribution</a></li>
-  <li><a href="shell/steam-development.md">Steam development</a></li>
-  <li><a href="shell/discovery.md">Discovery</a></li>
-</ul>
+<ul>{book_links}</ul>
+<h2>Shell guides</h2>
+<ul>{guide_links}</ul>
 <h2>Client context</h2>
-<ul>
-  <li><a href="client/README.md">Vapor Client README</a></li>
-  <li><a href="client/App.vapor.toml">Runtime manifest</a></li>
-  <li><a href="client/App-Source.vapor.toml">Source manifest</a></li>
-  <li><a href="vapor/roadmap/README.md">Roadmap</a></li>
-</ul>
-HTML
+<ul>{''.join(client_links)}</ul>
+"""
+(site / "index.html").write_text(contents, encoding="utf-8")
+PYINDEX
+
 
 tar -C "${SITE}" -czf "${OUTPUT}" .
 echo "${OUTPUT}"
