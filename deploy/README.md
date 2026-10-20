@@ -81,7 +81,8 @@ for smoke testing only; the intended public endpoint remains
   bundle from a local Vapor Client checkout.
 - `scripts/upload-docs-via-http.sh`: upload a docs bundle to the public docs
   route, such as `http://82.165.77.104/docs` before DNS is ready.
-- `scripts/upload-docs-via-ssh.sh`: alternate upload path that posts from the
-  VPS to the local docs service.
+- `scripts/upload-docs-via-ssh.sh`: stages a public docs bundle over SCP, then
+  prompts for VPS sudo access and posts from the VPS to its local docs service.
+  The docs admin token stays in the server's root-readable configuration.
 - `scripts/deploy-vapor-client-docs.sh`: build and deploy the curated docs bundle
   in one operator command.
