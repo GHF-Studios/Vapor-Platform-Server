@@ -102,7 +102,7 @@ copy_tree_if_present() {
 copy_if_present "${VAPOR_CLIENT}/README.md" "${SITE}/client/README.md"
 copy_if_present "${VAPOR_CLIENT}/App.vapor.toml" "${SITE}/client/App.vapor.toml"
 copy_if_present "${VAPOR_CLIENT}/App-Source.vapor.toml" "${SITE}/client/App-Source.vapor.toml"
-copy_tree_if_present "${VAPOR_CLIENT}/Vapor-Shell/crates/vapor_shell/docs" "${SITE}/shell"
+copy_tree_if_present "${VAPOR_CLIENT}/Vapor-CLI/crates/vapor_cli/docs" "${SITE}/shell"
 copy_tree_if_present "${VAPOR_CLIENT}/Vapor/docs/roadmap" "${SITE}/vapor/roadmap"
 
 BOOKS_ROOT="${VAPOR_CLIENT}/Vapor/docs/books"
