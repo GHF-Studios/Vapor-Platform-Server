@@ -40,6 +40,10 @@ while the implementation is still moving quickly.
 - Identity/auth concerns belong on the identity side. Other services should use
   identity-issued authorization later instead of inventing incompatible auth
   systems.
+- Registry owns the canonical Vapor Workshop catalog: typed content identity,
+  content-to-Workshop bindings, discovery metadata, and version/channel records.
+  Steam tags are discovery hints, not enforced Vapor types. Identity supplies
+  verified author and role authorization facts; it does not own catalog data.
 - Server state must be restorable service-by-service and as a composed whole:
   empty initialization, export, import, and rebuild-from-source are first-class
   operational goals.

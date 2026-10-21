@@ -30,6 +30,25 @@ existing service just to avoid naming a new boundary.
 - MCP/ACP/capability work is future work and is not part of the initial server
   MVP.
 
+## Accepted Workshop catalog authority
+
+The canonical Vapor catalog belongs to the future Registry service. Registry
+will own typed content identity and type, the binding between Vapor content
+IDs and Steam Workshop items, discoverability metadata, and version/channel
+records. Steam Workshop remains the transport and distribution provider; its
+tags and free-form descriptions are not authoritative Vapor content types.
+
+Identity remains the canonical source of people, linked Steam/GitHub accounts,
+roles, and authorization facts. Registry asks Identity (or consumes
+Identity-issued authorization) when a catalog write requires a verified
+author or elevated role. Identity does not own catalog records, and Registry
+does not copy or redefine user roles.
+
+This is an accepted target boundary, not a claim that the Registry API or its
+persistent catalog is implemented today. Until then, client-side Workshop
+tags are discovery hints only and must not be presented as enforced Vapor
+semantics.
+
 ## Boundary map
 
 | Domain | Boundary | Responsibilities | Non-responsibilities |
