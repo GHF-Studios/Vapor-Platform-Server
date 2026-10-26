@@ -12,6 +12,8 @@ Vapor-Platform-Server/
   Vapor-Docs-Server/          -> Vapor-Docs-Server
   Vapor-Identity-Server/      -> Vapor-Identity-Server
   Vapor-Diagnostics-Server/   -> Vapor-Diagnostics-Server
+  Vapor-Registry-Server/      -> Vapor-Registry-Server
+  Atlas/                      -> Atlas
 
   deploy/
     caddy/
@@ -25,13 +27,15 @@ Vapor-Platform-Server/
     vapor_server_shared/   # optional later
 ```
 
-The four services should remain independently rebuildable and deployable. This
-orchestration repo owns orchestration, not service business logic.
+The five runtime services should remain independently rebuildable and
+deployable. This orchestration repo owns orchestration, not service business
+logic.
 
 ## Single-domain route map
 
 ```text
 /                         -> homepage
+/atlas/                   -> Atlas static knowledge site
 /docs/                    -> docs
 /login                    -> identity browser login/register
 /admin                    -> identity admin dashboard shell
@@ -43,6 +47,9 @@ orchestration repo owns orchestration, not service business logic.
 
 - Homepage: expected to remain mostly stateless.
 - Docs: owns uploaded/generated docs artifacts and current/version pointers.
+- Atlas: owns its source in `GHF-Studios/Atlas`; Platform Server builds that
+  source into a separate static tree served at `/atlas/`. It has no mutable
+  server-side state.
 - Identity: owns linked Steam/GitHub identities, roles, and auth/session state.
 - Diagnostics: owns opt-in diagnostics uploads, indexes, retention metadata,
   and export/import data.
@@ -65,8 +72,8 @@ state, pre-DNS HTTP fallback routing, health checks, smoke checks, and whole
 server file-state export/restore scripts exist and are tracked here.
 
 The service implementations are still early scaffolds and remain owned by their
-own repositories. This orchestration repo owns deployment/orchestration, not service
-business logic.
+own repositories. Atlas is separately owned source built as static output. This
+orchestration repo owns deployment/orchestration, not service business logic.
 
 See `docs/decisions-and-backlog.md` for the accepted boundaries, pending
 decisions, and future/backburner items that should not be lost.
@@ -79,6 +86,9 @@ introspection contract that should replace service-local token scaffolds.
 
 See `docs/docs-publication-contract.md` for current documentation publication,
 validation, and export semantics.
+
+See `docs/atlas-publication-contract.md` for the separate Atlas static-site
+publication and retention contract.
 
 See `docs/diagnostics-report-contract.md` for the structured diagnostics
 upload, privacy, redaction, storage, and quota contract.

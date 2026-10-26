@@ -11,6 +11,8 @@ VAPOR_BRANCH="${VAPOR_BRANCH:-main}"
 VAPOR_DEPLOY_ROOT="${VAPOR_DEPLOY_ROOT:-/opt/vapor-platform-server}"
 VAPOR_STATE_ROOT="${VAPOR_STATE_ROOT:-/var/lib/vapor-server}"
 VAPOR_CONFIG_DIR="${VAPOR_CONFIG_DIR:-/etc/vapor-server}"
+VAPOR_ATLAS_REF="${VAPOR_ATLAS_REF:-main}"
+VAPOR_ATLAS_WEB_ROOT="${VAPOR_ATLAS_WEB_ROOT:-/srv/vapor-web/atlas}"
 if [ -r "${VAPOR_CONFIG_DIR}/platform.env" ]; then
   set -a
   # shellcheck disable=SC1090

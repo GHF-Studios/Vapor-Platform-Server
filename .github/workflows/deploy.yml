@@ -112,6 +112,10 @@ jobs:
             >/dev/null
 
           curl --fail --silent --show-error \
+            "${base}/atlas/" \
+            >/dev/null
+
+          curl --fail --silent --show-error \
             "${base}/docs/healthz" \
             >/dev/null
 

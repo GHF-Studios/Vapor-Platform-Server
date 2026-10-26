@@ -17,6 +17,8 @@ find "${VAPOR_STATE_ROOT}" -type f -exec chmod 0640 {} +
 install_secret_env "${VAPOR_CONFIG_DIR}/platform.env" \
 "VAPOR_DOMAIN=${VAPOR_DOMAIN}
 VAPOR_BRANCH=${VAPOR_BRANCH}
+# Atlas is source-owned by GHF-Studios/Atlas; change this ref to pin/roll back.
+VAPOR_ATLAS_REF=main
 # Optional pre-DNS HTTP test host, for example a server IP address:
 # VAPOR_HTTP_FALLBACK_HOST="
 

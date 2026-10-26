@@ -42,7 +42,9 @@ for smoke testing only; the intended public endpoint remains
 - `scripts/bootstrap-ubuntu.sh`: install OS packages, create users/directories,
   and create server-local env files.
 - `scripts/deploy.sh`: clone/update the Platform Server repo, update submodules, build
-  services, install units/proxy config, and restart services.
+  services, publish Atlas, install units/proxy config, and restart services.
+- `scripts/deploy-atlas.sh`: fetch the configured Atlas ref and atomically publish
+  its generated static site under `/srv/vapor-web/atlas`, separately from Docs.
 - `scripts/install-auto-deploy.sh`: install a systemd timer that periodically
   runs `deploy.sh` against the configured branch.
 - `scripts/install-state-backup.sh`: install a systemd timer that periodically

@@ -1,6 +1,12 @@
 (vapor_routes) {
 	encode zstd gzip
 
+	redir /atlas /atlas/ permanent
+	handle_path /atlas/* {
+		root * /srv/vapor-web/atlas/current
+		file_server
+	}
+
 	handle_path /docs/* {
 		reverse_proxy 127.0.0.1:7112
 	}

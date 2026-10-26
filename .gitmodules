@@ -13,3 +13,7 @@
 [submodule "Vapor-Registry-Server"]
 	path = Vapor-Registry-Server
 	url = https://github.com/GHF-Studios/Vapor-Registry-Server.git
+[submodule "Atlas"]
+	path = Atlas
+	url = https://github.com/GHF-Studios/Atlas.git
+	branch = main

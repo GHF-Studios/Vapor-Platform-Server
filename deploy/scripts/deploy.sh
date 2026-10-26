@@ -28,6 +28,10 @@ else
   git -C "${VAPOR_DEPLOY_ROOT}" submodule update --init --recursive
 fi
 
+# Atlas is a separately owned static site. Build it to its own public tree;
+# never send its bundle through the Docs service's replacement endpoint.
+"${VAPOR_DEPLOY_ROOT}/deploy/scripts/deploy-atlas.sh"
+
 # Existing installations did not have Registry state/config. Create them
 # idempotently here as well as in bootstrap so adding Registry does not require
 # manual VPS migration before the normal deployment workflow can succeed.

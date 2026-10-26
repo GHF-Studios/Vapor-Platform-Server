@@ -21,6 +21,7 @@ check_unauthenticated_http_contracts \
   --docs-base "${base}/docs" \
   --identity-base "${base}/api/identity" \
   --diagnostics-base "${base}/api/diagnostics"
+curl --fail --silent --show-error "${base}/atlas/" >/dev/null
 curl --fail --silent --show-error "${base}/login" >/dev/null
 curl --fail --silent --show-error "${base}/admin" >/dev/null
 
