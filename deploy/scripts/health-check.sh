@@ -7,25 +7,26 @@ source "${SCRIPT_DIR}/lib.sh"
 # shellcheck source=http-contract-checks.sh
 source "${SCRIPT_DIR}/http-contract-checks.sh"
 
-curl --fail --silent --show-error http://127.0.0.1:7111/healthz >/dev/null
+wait_for_http "Vapor Homepage" vapor-homepage.service http://127.0.0.1:7111/healthz
 
-curl --fail --silent --show-error http://127.0.0.1:7112/healthz >/dev/null
+wait_for_http "Vapor Docs" vapor-docs.service http://127.0.0.1:7112/healthz
 curl --fail --silent --show-error http://127.0.0.1:7112/status >/dev/null
 
-curl --fail --silent --show-error http://127.0.0.1:7113/healthz >/dev/null
+wait_for_http "Vapor Identity" vapor-identity.service http://127.0.0.1:7113/healthz
 curl --fail --silent --show-error http://127.0.0.1:7113/v1/auth/status >/dev/null
 
-curl --fail --silent --show-error http://127.0.0.1:7114/healthz >/dev/null
+wait_for_http "Vapor Diagnostics" vapor-diagnostics.service http://127.0.0.1:7114/healthz
 curl --fail --silent --show-error http://127.0.0.1:7114/status >/dev/null
 
 # Verify the static Atlas site through the same local Caddy route clients use.
 # Resolving the canonical host to loopback avoids depending on public DNS here.
-curl --fail --silent --show-error \
-  --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
+wait_for_http \
+  "Atlas through Caddy" \
+  caddy.service \
   "https://${VAPOR_DOMAIN}/atlas/" \
-  >/dev/null
+  --resolve "${VAPOR_DOMAIN}:443:127.0.0.1"
 
-curl --fail --silent --show-error http://127.0.0.1:7115/healthz >/dev/null
+wait_for_http "Vapor Registry" vapor-registry.service http://127.0.0.1:7115/healthz
 curl --fail --silent --show-error \
   http://127.0.0.1:7115/v1/ecosystems/ghf-studios/vapor \
   >/dev/null

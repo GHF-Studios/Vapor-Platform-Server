@@ -59,3 +59,40 @@ install_dir() {
 
   install -d -o "$owner" -g "$group" -m "$mode" "$path"
 }
+
+wait_for_http() {
+  local label="$1"
+  local unit="$2"
+  local url="$3"
+  local attempts="${VAPOR_HEALTH_CHECK_ATTEMPTS:-30}"
+  local interval="${VAPOR_HEALTH_CHECK_INTERVAL_SECONDS:-1}"
+  local attempt
+  local -a curl_options=("${@:4}")
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if curl \
+      --fail \
+      --silent \
+      --show-error \
+      --connect-timeout 1 \
+      --max-time 3 \
+      "${curl_options[@]}" \
+      "$url" \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+
+    if ((attempt < attempts)); then
+      sleep "$interval"
+    fi
+  done
+
+  echo "error: ${label} did not become ready after ${attempts} attempts: ${url}" >&2
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl status --no-pager --full "$unit" >&2 || true
+  fi
+  if command -v journalctl >/dev/null 2>&1; then
+    journalctl --unit "$unit" --since "5 minutes ago" --no-pager >&2 || true
+  fi
+  return 1
+}
