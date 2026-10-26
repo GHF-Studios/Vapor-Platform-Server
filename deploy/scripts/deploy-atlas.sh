@@ -27,13 +27,16 @@ git -C "${ATLAS_REPO}" fetch --quiet origin "${VAPOR_ATLAS_REF}"
 SOURCE_REVISION="$(git -C "${ATLAS_REPO}" rev-parse --verify 'FETCH_HEAD^{commit}')"
 git -C "${ATLAS_REPO}" checkout --quiet --detach "${SOURCE_REVISION}"
 
-if [ -L "${CURRENT_LINK}" ] && [ "$(basename -- "$(readlink -- "${CURRENT_LINK}")")" = "${SOURCE_REVISION}" ]; then
+if [ -L "${CURRENT_LINK}" ] \
+  && [ "$(basename -- "$(readlink -- "${CURRENT_LINK}")")" = "${SOURCE_REVISION}" ] \
+  && [ -s "${CURRENT_LINK}/index.html" ] \
+  && [ -s "${CURRENT_LINK}/atlas.json" ]; then
   echo "atlas: ${SOURCE_REVISION} is already published"
   exit 0
 fi
 
 RELEASE_DIR="${RELEASES_DIR}/${SOURCE_REVISION}"
-if [ ! -d "${RELEASE_DIR}" ]; then
+if [ ! -s "${RELEASE_DIR}/index.html" ] || [ ! -s "${RELEASE_DIR}/atlas.json" ]; then
   STAGING_DIR="$(mktemp -d "${VAPOR_ATLAS_WEB_ROOT}/.staging.XXXXXXXX")"
   trap 'rm -rf -- "${STAGING_DIR}"' EXIT
 
@@ -46,6 +49,7 @@ if [ ! -d "${RELEASE_DIR}" ]; then
 
   find "${STAGING_DIR}" -type d -exec chmod 0755 {} +
   find "${STAGING_DIR}" -type f -exec chmod 0644 {} +
+  rm -rf -- "${RELEASE_DIR}"
   mv -- "${STAGING_DIR}" "${RELEASE_DIR}"
   trap - EXIT
 fi
