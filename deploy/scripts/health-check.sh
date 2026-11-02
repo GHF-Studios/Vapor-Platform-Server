@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+report_failed_check() {
+  local status="$?"
+  local command="$BASH_COMMAND"
+  local line="${BASH_LINENO[0]:-0}"
+  local failure_file="${VAPOR_HEALTH_CHECK_FAILURE_FILE:-/var/tmp/vapor-health-check-failure.txt}"
+  trap - ERR
+  printf 'health-check: line %s failed (exit %s): %s\n' "$line" "$status" "$command" >&2
+  (
+    umask 077
+    printf 'line=%s\nexit=%s\ncommand=%s\n' "$line" "$status" "$command" > "$failure_file"
+  ) 2>/dev/null || true
+  exit "$status"
+}
+trap report_failed_check ERR
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
