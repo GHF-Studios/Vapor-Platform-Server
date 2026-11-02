@@ -7,12 +7,15 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 CARGO="${CARGO:-cargo}"
 TARGET_DIR="${VAPOR_PLATFORM_SERVER_TARGET_DIR:-${REPO_ROOT}/target}"
 
-SERVICES=(
+PACKAGES=(
+  .
   Vapor-Homepage-Server
   Vapor-Docs-Server
   Vapor-Identity-Server
   Vapor-Diagnostics-Server
   Vapor-Registry-Server
+  Vapor-Artifact-Server
+  Vapor-Build-Cache-Server
 )
 
 echo "test: shell syntax"
@@ -38,10 +41,13 @@ trap - EXIT
 echo "test: state-bundle validator"
 python3 -m unittest discover   -s "${REPO_ROOT}/deploy/tests"   -p 'test_*.py'
 
-for service in "${SERVICES[@]}"; do
-  echo "test: ${service}"
+for package in "${PACKAGES[@]}"; do
+  echo "test: ${package}"
 
-  "${CARGO}" test     --locked     --manifest-path "${REPO_ROOT}/${service}/Cargo.toml"     --target-dir "${TARGET_DIR}"
+  "${CARGO}" test \
+    --locked \
+    --manifest-path "${REPO_ROOT}/${package}/Cargo.toml" \
+    --target-dir "${TARGET_DIR}"
 done
 
 echo "test: all Vapor Platform Server checks passed"
