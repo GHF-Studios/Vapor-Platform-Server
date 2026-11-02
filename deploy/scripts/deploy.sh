@@ -7,6 +7,41 @@ source "${SCRIPT_DIR}/lib.sh"
 
 require_root
 
+if [ "$#" -eq 1 ] && [ "$1" = "--bootstrap" ]; then
+  if [ -e "${VAPOR_DEPLOY_ROOT}/.git" ] || [ -n "$(find "${VAPOR_DEPLOY_ROOT}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    echo "error: --bootstrap is only for an empty first-install checkout; use an approved request for updates" >&2
+    exit 2
+  fi
+  if [ "${VAPOR_BRANCH}" != "main" ] || [ "${VAPOR_REPO_URL}" != "https://github.com/GHF-Studios/Vapor-Platform-Server.git" ]; then
+    echo "error: first-install bootstrap is restricted to the official main repository" >&2
+    exit 2
+  fi
+  install -d -o root -g root -m 0755 "${VAPOR_DEPLOY_ROOT}"
+  git clone --branch main "${VAPOR_REPO_URL}" "${VAPOR_DEPLOY_ROOT}"
+  BOOTSTRAP_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD)"
+  python3 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/verify-deploy-source.py" \
+    --root "${VAPOR_DEPLOY_ROOT}" --commit "${BOOTSTRAP_REVISION}" >/dev/null
+  git -C "${VAPOR_DEPLOY_ROOT}" submodule update --init
+  VAPOR_DEPLOY_BOOTSTRAP=1 exec "${VAPOR_DEPLOY_ROOT}/deploy/scripts/deploy.sh" --approved "${BOOTSTRAP_REVISION}"
+fi
+
+if [ "$#" -ne 2 ] || [ "$1" != "--approved" ] || [[ ! "$2" =~ ^[A-Fa-f0-9]{40}$ ]]; then
+  echo "error: use --approved <full-commit>; --bootstrap is only for a new empty installation" >&2
+  exit 2
+fi
+APPROVED_REVISION="$2"
+if [ "${VAPOR_DEPLOY_BOOTSTRAP:-}" != "1" ]; then
+  if [[ ! "${VAPOR_APPROVED_DEPLOY_ID:-}" =~ ^[0-9a-fA-F-]{36}$ ]] || [[ ! "${VAPOR_APPROVED_DEPLOY_VERSION:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: approved request context is missing; invoke deploy.sh through the request worker" >&2
+    exit 2
+  fi
+  QUEUE_DB="${VAPOR_PLATFORM_DB:-${VAPOR_PLATFORM_STATE:-${VAPOR_STATE_ROOT}/platform}/platform.sqlite3}"
+  python3 "${SCRIPT_DIR}/deploy-request-queue.py" --database "${QUEUE_DB}" verify \
+    --id "${VAPOR_APPROVED_DEPLOY_ID}" \
+    --version "${VAPOR_APPROVED_DEPLOY_VERSION}" \
+    --commit "${APPROVED_REVISION}"
+fi
+
 case "${VAPOR_SERVER_MODE}" in
   monolith|services) ;;
   *)
@@ -36,28 +71,19 @@ record_deploy_operation() {
 }
 trap record_deploy_operation EXIT
 
-install -d -o root -g root -m 0755 "${VAPOR_DEPLOY_ROOT}"
-
 if [ ! -d "${VAPOR_DEPLOY_ROOT}/.git" ]; then
-  if [ -n "$(find "${VAPOR_DEPLOY_ROOT}" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-    echo "error: ${VAPOR_DEPLOY_ROOT} is not empty and is not a git checkout" >&2
-    exit 1
-  fi
-
-  git clone \
-    --recurse-submodules \
-    --branch "${VAPOR_BRANCH}" \
-    "${VAPOR_REPO_URL}" \
-    "${VAPOR_DEPLOY_ROOT}"
-else
-  git -C "${VAPOR_DEPLOY_ROOT}" fetch origin "${VAPOR_BRANCH}"
-  git -C "${VAPOR_DEPLOY_ROOT}" checkout "${VAPOR_BRANCH}"
-  git -C "${VAPOR_DEPLOY_ROOT}" reset --hard "origin/${VAPOR_BRANCH}"
-  git -C "${VAPOR_DEPLOY_ROOT}" submodule sync --recursive
-  git -C "${VAPOR_DEPLOY_ROOT}" submodule update --init --recursive
+  echo "error: approved deployment checkout is missing; initialize it through the documented bootstrap procedure" >&2
+  exit 1
 fi
-
-DEPLOY_OPERATION_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+if [ -n "$(git -C "${VAPOR_DEPLOY_ROOT}" status --porcelain)" ]; then
+  echo "error: deployment checkout has local changes" >&2
+  exit 1
+fi
+DEPLOY_OPERATION_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD)"
+if [ "${DEPLOY_OPERATION_REVISION}" != "${APPROVED_REVISION}" ]; then
+  echo "error: checked out revision does not match the approved revision" >&2
+  exit 1
+fi
 
 # Atlas is a separately owned static site. Build it to its own public tree;
 # never send its bundle through the Docs service's replacement endpoint.
@@ -80,6 +106,7 @@ VAPOR_REGISTRY_DB=${VAPOR_STATE_ROOT}/registry/registry.sqlite3"
 
 install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/updates"
 install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/build-cache"
+install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/platform"
 
 # Docs publication depends on a server-local token. Bootstrap creates this on a
 # fresh host; recreate it if an existing deployment lost the config file.
@@ -104,6 +131,10 @@ ensure_env_assignment \
   "${VAPOR_CONFIG_DIR}/platform.env" \
   VAPOR_PLATFORM_OPERATIONS_FILE \
   "${VAPOR_STATE_ROOT}/operations/latest.json"
+ensure_env_assignment \
+  "${VAPOR_CONFIG_DIR}/platform.env" \
+  VAPOR_PLATFORM_STATE \
+  "${VAPOR_STATE_ROOT}/platform"
 install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/docs"
 if [ ! -e "${VAPOR_CONFIG_DIR}/docs.env" ]; then
   install_secret_env \

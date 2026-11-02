@@ -16,16 +16,14 @@ if [ ! -d "${ATLAS_REPO}/.git" ] && [ ! -f "${ATLAS_REPO}/.git" ]; then
   exit 1
 fi
 
-if ! git check-ref-format --branch "${VAPOR_ATLAS_REF}" >/dev/null 2>&1; then
-  echo "error: invalid VAPOR_ATLAS_REF: ${VAPOR_ATLAS_REF}" >&2
+if [ -n "$(git -C "${ATLAS_REPO}" status --porcelain)" ]; then
+  echo "error: Atlas submodule has local changes; refusing to publish an unpinned revision" >&2
   exit 1
 fi
 
 install -d -o root -g root -m 0755 "${VAPOR_ATLAS_WEB_ROOT}"
 install -d -o root -g root -m 0755 "${RELEASES_DIR}"
-git -C "${ATLAS_REPO}" fetch --quiet origin "${VAPOR_ATLAS_REF}"
-SOURCE_REVISION="$(git -C "${ATLAS_REPO}" rev-parse --verify 'FETCH_HEAD^{commit}')"
-git -C "${ATLAS_REPO}" checkout --quiet --detach "${SOURCE_REVISION}"
+SOURCE_REVISION="$(git -C "${ATLAS_REPO}" rev-parse --verify 'HEAD^{commit}')"
 
 if [ -L "${CURRENT_LINK}" ] \
   && [ "$(basename -- "$(readlink -- "${CURRENT_LINK}")")" = "${SOURCE_REVISION}" ] \

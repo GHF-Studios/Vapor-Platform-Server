@@ -1,5 +1,6 @@
 mod admin;
 mod admin_auth;
+mod deploy_requests;
 
 use axum::Router;
 use std::env;
@@ -10,6 +11,7 @@ const DEFAULT_BIND: &str = "127.0.0.1:7110";
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind = env::var("VAPOR_PLATFORM_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
+    deploy_requests::initialize().await?;
     let identity = vapor_identity_server::routers_from_env().await?;
     let artifacts = vapor_artifact_server::routers_from_env().await?;
     let registry = vapor_registry_server::routers_from_env().await?;

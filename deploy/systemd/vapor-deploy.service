@@ -1,9 +1,9 @@
 [Unit]
-Description=Deploy Vapor Platform Server from configured branch
+Description=Execute one root-approved Vapor Platform deployment request
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/vapor-server/platform.env
-ExecStart=/usr/bin/flock -n /run/vapor-server-deploy.lock /opt/vapor-platform-server/deploy/scripts/deploy.sh
+ExecStart=/usr/bin/flock -n /run/vapor-server-deploy.lock /opt/vapor-platform-server/deploy/scripts/run-approved-deploy.sh

@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodic Vapor server deployment check
+Description=Poll for root-approved Vapor Platform deployment requests
 
 [Timer]
 OnBootSec=5min

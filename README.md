@@ -91,7 +91,7 @@ repo composes those into whole-conglomerate export/import.
 ## Current status
 
 The repository contains the single-VPS deployment slice: Caddy, systemd service
-units, automatic branch polling deployment, SQLite-backed identity state,
+units, CI-created human-approved deployment requests, SQLite-backed identity state,
 pre-DNS HTTP fallback routing, health checks, smoke checks, and whole-server
 file-state export/restore scripts. Current live deployment evidence is tracked
 separately in `docs/deployment-status.md`; source changes alone do not imply a
@@ -122,6 +122,9 @@ upload, privacy, redaction, storage, and quota contract.
 
 See `docs/operations-evidence-and-recovery-contract.md` for state-bundle
 validation, restore behavior, and recovery boundaries.
+
+See `docs/human-approved-operations-api.md` for the CI request, root approval,
+exact-revision worker, and one-time bootstrap contract.
 
 See `docs/deployment-status.md` for the latest recorded VPS deployment status.
 

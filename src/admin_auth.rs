@@ -31,6 +31,7 @@ struct AuthorizationRequest<'a> {
     audience: &'static str,
     session_token: &'a str,
     policy: AuthorizationPolicy,
+    include_profile_id: bool,
 }
 
 #[derive(Serialize)]
@@ -48,6 +49,7 @@ struct AuthorizationRequirement {
 #[derive(Deserialize)]
 struct AuthorizationDecision {
     allowed: bool,
+    profile_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -79,6 +81,17 @@ pub(crate) async fn authorize_root_with_client(
     endpoint: &str,
     client: &reqwest::Client,
 ) -> Result<(), AuthFailure> {
+    authorize_root_profile_with_client(headers, service_token, endpoint, client)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn authorize_root_profile_with_client(
+    headers: &HeaderMap,
+    service_token: Option<&str>,
+    endpoint: &str,
+    client: &reqwest::Client,
+) -> Result<String, AuthFailure> {
     let session_token = session_token(headers).ok_or(AuthFailure::Unauthorized)?;
     let service_token = service_token
         .filter(|token| valid_service_token(token))
@@ -97,6 +110,7 @@ pub(crate) async fn authorize_root_with_client(
                 role: "root",
             }],
         },
+        include_profile_id: true,
     };
     let response = client
         .post(endpoint)
@@ -124,7 +138,7 @@ pub(crate) async fn authorize_root_with_client(
     let decision: AuthorizationDecision =
         serde_json::from_slice(&body).map_err(|_| AuthFailure::Unavailable)?;
     if decision.allowed {
-        Ok(())
+        decision.profile_id.ok_or(AuthFailure::Unavailable)
     } else {
         Err(AuthFailure::Forbidden)
     }
@@ -190,6 +204,7 @@ mod tests {
         audience: String,
         session_token: String,
         policy: RequestPolicy,
+        include_profile_id: bool,
     }
 
     #[derive(Deserialize)]
@@ -208,6 +223,7 @@ mod tests {
     struct Decision {
         allowed: bool,
         expires_at_unix: i64,
+        profile_id: Option<String>,
     }
 
     async fn check(
@@ -224,13 +240,15 @@ mod tests {
             && body.policy.mode == "all"
             && body.policy.requirements.len() == 1
             && body.policy.requirements[0].kind == "role"
-            && body.policy.requirements[0].role == "root";
+            && body.policy.requirements[0].role == "root"
+            && body.include_profile_id;
         *state.observed.lock().unwrap() = valid;
         (
             StatusCode::OK,
             Json(Decision {
                 allowed: state.allowed && valid,
                 expires_at_unix: 0,
+                profile_id: Some("test-root-profile".to_string()),
             }),
         )
     }

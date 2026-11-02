@@ -22,7 +22,11 @@ echo "test: shell syntax"
 bash -n "${SCRIPT_DIR}"/*.sh
 
 echo "test: Python helper syntax"
-python3 -m py_compile "${SCRIPT_DIR}/state-bundle-validate.py"
+python3 -m py_compile \
+  "${SCRIPT_DIR}/state-bundle-validate.py" \
+  "${SCRIPT_DIR}/deploy-request-queue.py" \
+  "${SCRIPT_DIR}/verify-deploy-source.py"
+rm -rf -- "${SCRIPT_DIR}/__pycache__"
 
 echo "test: Atlas source and static site build"
 python3 "${REPO_ROOT}/Atlas/tools/atlas.py" validate --root "${REPO_ROOT}/Atlas"

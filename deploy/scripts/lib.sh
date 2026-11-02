@@ -12,7 +12,6 @@ VAPOR_SERVER_MODE="${VAPOR_SERVER_MODE:-monolith}"
 VAPOR_DEPLOY_ROOT="${VAPOR_DEPLOY_ROOT:-/opt/vapor-platform-server}"
 VAPOR_STATE_ROOT="${VAPOR_STATE_ROOT:-/var/lib/vapor-server}"
 VAPOR_CONFIG_DIR="${VAPOR_CONFIG_DIR:-/etc/vapor-server}"
-VAPOR_ATLAS_REF="${VAPOR_ATLAS_REF:-main}"
 VAPOR_ATLAS_WEB_ROOT="${VAPOR_ATLAS_WEB_ROOT:-/srv/vapor-web/atlas}"
 if [ -r "${VAPOR_CONFIG_DIR}/platform.env" ]; then
   set -a
@@ -24,6 +23,14 @@ fi
 VAPOR_USER="${VAPOR_USER:-vapor}"
 VAPOR_GROUP="${VAPOR_GROUP:-vapor}"
 VAPOR_HTTP_FALLBACK_HOST="${VAPOR_HTTP_FALLBACK_HOST:-}"
+VAPOR_TOOLCHAIN_ROOT="${VAPOR_TOOLCHAIN_ROOT:-/opt/vapor/tools}"
+VAPOR_CARGO_HOME="${VAPOR_CARGO_HOME:-${VAPOR_TOOLCHAIN_ROOT}/cargo}"
+VAPOR_RUSTUP_HOME="${VAPOR_RUSTUP_HOME:-${VAPOR_TOOLCHAIN_ROOT}/rustup}"
+if [ -x "${VAPOR_CARGO_HOME}/bin/cargo" ]; then
+  export CARGO_HOME="${VAPOR_CARGO_HOME}"
+  export RUSTUP_HOME="${VAPOR_RUSTUP_HOME}"
+  export PATH="${VAPOR_CARGO_HOME}/bin:${PATH}"
+fi
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then

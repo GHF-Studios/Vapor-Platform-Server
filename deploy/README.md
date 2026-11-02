@@ -10,7 +10,7 @@ Current baseline:
 - Caddy reverse proxy and HTTPS;
 - systemd service units;
 - SQLite-backed identity state;
-- branch-based source deployment from `Vapor-Platform-Server`;
+- human-approved, exact-revision deployment from `Vapor-Platform-Server`;
 - state under `/var/lib/vapor-server`;
 - service env files under `/etc/vapor-server`;
 - source checkout under `/opt/vapor-platform-server`.
@@ -22,17 +22,20 @@ admin tokens in `/etc/vapor-server/*.env` when those files do not already exist.
 
 ## First-run outline
 
-After DNS points `vapor.ghf-studios.site` at the VPS:
+After DNS points `vapor.ghf-studios.site` at the VPS, run the explicit
+first-install bootstrap once. Normal updates then require a CI request and a
+root approval in the Operations dashboard:
 
 ```bash
 sudo deploy/scripts/bootstrap-ubuntu.sh
-sudo deploy/scripts/deploy.sh
+sudo deploy/scripts/deploy.sh --bootstrap
 ```
 
 The scripts are intended to be idempotent, but they are still real server
 operations: package installation, system user creation, systemd unit
-installation, Caddy configuration, source checkout/update, service build, and
-service restart.
+installation, Caddy configuration, initial source checkout, service build, and
+service restart. `--bootstrap` is accepted only when the deployment checkout is
+empty. It is an explicit first-install/migration action; updates use approvals.
 
 Before DNS is active, a temporary HTTP-only fallback can be rendered by setting
 `VAPOR_HTTP_FALLBACK_HOST` when installing Caddy or running `deploy.sh`. This is
@@ -43,22 +46,29 @@ for smoke testing only; the intended public endpoint remains
 
 - `scripts/bootstrap-ubuntu.sh`: install OS packages, create users/directories,
   and create server-local env files.
-- `scripts/deploy.sh`: clone/update the Platform Server repo, update submodules,
-  publish Atlas, and build/restart either the composed host (default) or the
-  independently runnable services (`VAPOR_SERVER_MODE=services`). The composed
-  mode refuses to deploy until the root `Cargo.lock` is committed. It writes a
-  safe latest-result record under `${VAPOR_STATE_ROOT}/operations/` for the
-  read-only Platform Operations page.
-- `scripts/deploy-atlas.sh`: fetch the configured Atlas ref and atomically publish
-  its generated static site under `/srv/vapor-web/atlas`, separately from Docs.
-- `scripts/install-auto-deploy.sh`: install a systemd timer that periodically
-  runs `deploy.sh` against the configured branch.
+- `scripts/deploy.sh`: perform the explicit first bootstrap or deploy one exact
+  revision after verifying the worker's SQLite claim. It publishes Atlas and
+  builds/restarts either the composed host (default) or independently runnable
+  services (`VAPOR_SERVER_MODE=services`). The composed mode requires the root
+  `Cargo.lock`. It writes a safe latest-result record under
+  `${VAPOR_STATE_ROOT}/operations/`.
+- `scripts/run-approved-deploy.sh`: atomically claim one approved, unexpired
+  request, verify its immutable root tree and every submodule gitlink, check the
+  commit remains reachable from the protected branch, verify the exact
+  first-party submodule source URLs, then invoke only the fixed deployment
+  script. A request is terminal after one execution attempt.
+- `scripts/deploy-atlas.sh`: validate and atomically publish the Atlas commit
+  pinned by the approved root revision under `/srv/vapor-web/atlas`, separately
+  from Docs.
+- `scripts/install-auto-deploy.sh`: install a systemd timer that polls the
+  approved-request worker. An empty queue is a no-op; the timer never deploys
+  the latest branch by itself.
 - `scripts/install-state-backup.sh`: install a systemd timer that periodically
   runs `export-state.sh`.
 - `scripts/harden-vps.sh`: make SSH key-only explicit and enable UFW for
   SSH/HTTP/HTTPS.
-- `scripts/install-github-actions-deploy-user.sh`: create a restricted deploy
-  user for GitHub Actions to trigger `vapor-deploy.service`.
+- `scripts/install-github-actions-deploy-user.sh`: legacy/manual service helper;
+  GitHub Actions no longer receives SSH access or permission to start deploys.
 - `scripts/configure-identity-auth.sh`: update server-local identity provider
   configuration in `/etc/vapor-server/identity.env` without committing secrets,
   including GitHub browser OAuth credentials and public redirect origin.
@@ -82,6 +92,9 @@ for smoke testing only; the intended public endpoint remains
 - `scripts/install-systemd.sh`: install/enable the composed host unit.
 - `scripts/install-services-systemd.sh`: install/enable the individual service
   units for `VAPOR_SERVER_MODE=services`.
+- Platform's request database lives at
+  `${VAPOR_STATE_ROOT}/platform/platform.sqlite3` and is included in whole-state
+  export/import bundles.
 - In independent-services mode, the cross-service `/admin` toolbench returns
   `503` instead of routing the removed Identity `/admin` page. The shared
   toolbench is served by the composed Platform process in the default mode.

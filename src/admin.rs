@@ -198,6 +198,98 @@ const JS: &str = r#"
         history.textContent = 'Operation history is temporarily unavailable.';
       });
   }
+
+  const deployRequests = document.querySelector('#deploy-requests');
+  if (deployRequests) {
+    const refreshDeployRequests = async () => {
+      let response;
+      let requests;
+      try {
+        response = await fetch('/api/admin/deploy-requests', { credentials: 'same-origin', cache: 'no-store' });
+        requests = await response.json().catch(() => null);
+      } catch (_) {
+        deployRequests.textContent = 'Deploy approvals are temporarily unavailable.';
+        return;
+      }
+      deployRequests.replaceChildren();
+      if (!response.ok) {
+        deployRequests.textContent = response.status === 401 ? 'Sign in to review deploy requests.' :
+          response.status === 403 ? 'Root access is required to review deploy requests.' :
+          'Deploy approvals are temporarily unavailable.';
+        return;
+      }
+      const items = Array.isArray(requests) ? requests : [];
+      if (!items.length) {
+        deployRequests.textContent = 'No deploy requests have been recorded.';
+        return;
+      }
+      for (const item of items) {
+        const card = document.createElement('article');
+        card.className = 'card';
+        const heading = document.createElement('h3');
+        heading.textContent = `${item.repository} · ${item.branch} · ${item.status}`;
+        const revision = document.createElement('p');
+        revision.textContent = `Commit ${item.commit} · tree ${item.tree}`;
+        const pins = document.createElement('p');
+        pins.className = 'muted';
+        pins.textContent = `${Array.isArray(item.submodules) ? item.submodules.length : 0} pinned service revisions · expires ${item.expires_at_unix}`;
+        const summary = document.createElement('p');
+        summary.textContent = item.summary;
+        const workflow = document.createElement('a');
+        workflow.href = item.workflow_url;
+        workflow.rel = 'noopener noreferrer';
+        workflow.textContent = 'Open successful CI run';
+        card.append(heading, revision, pins, summary, workflow);
+        if (item.result_detail) {
+          const outcome = document.createElement('p');
+          outcome.className = 'muted';
+          outcome.textContent = item.result_detail;
+          card.append(outcome);
+        }
+        const details = document.createElement('details');
+        const summaryLabel = document.createElement('summary');
+        summaryLabel.textContent = 'Pinned submodules';
+        const list = document.createElement('ul');
+        for (const pin of (Array.isArray(item.submodules) ? item.submodules : [])) {
+          const line = document.createElement('li');
+          line.textContent = `${pin.path}: ${pin.commit}`;
+          list.append(line);
+        }
+        details.append(summaryLabel, list);
+        card.append(details);
+        for (const decision of (item.status === 'pending' ? ['approve', 'reject'] : [])) {
+          const form = document.createElement('form');
+          form.className = 'inline';
+          const label = document.createElement('label');
+          const confirmed = document.createElement('input');
+          confirmed.type = 'checkbox';
+          confirmed.required = true;
+          const wording = decision === 'approve' ? 'I reviewed this exact revision' : 'I intend to reject this request';
+          label.append(confirmed, document.createTextNode(` ${wording}`));
+          const button = document.createElement('button');
+          button.type = 'submit';
+          button.textContent = decision === 'approve' ? 'Approve deploy' : 'Reject';
+          form.append(label, button);
+          form.addEventListener('submit', async event => {
+            event.preventDefault();
+            if (!confirmed.checked) return;
+            button.disabled = true;
+            const result = await fetch(`/api/admin/deploy-requests/${encodeURIComponent(item.id)}/${decision}`, {
+              method: 'POST', credentials: 'same-origin', cache: 'no-store',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ expected_version: item.version, confirmed: true,
+                reason: decision === 'approve' ? 'approved in Platform Operations' : 'rejected in Platform Operations' })
+            });
+            if (result.ok) await refreshDeployRequests();
+            else { button.disabled = false; button.textContent = `Failed (${result.status}); reload`; }
+          });
+          card.append(form);
+        }
+        deployRequests.append(card);
+      }
+    };
+    refreshDeployRequests();
+  }
 })();
 "#;
 
@@ -210,6 +302,7 @@ pub fn router() -> Router {
         .route("/api/admin/operations", get(operations_status))
         .route("/admin/assets/admin.css", get(stylesheet))
         .route("/admin/assets/admin.js", get(script))
+        .merge(crate::deploy_requests::router())
 }
 
 async fn landing() -> Response {
@@ -264,7 +357,7 @@ async fn operations(headers: axum::http::HeaderMap) -> Response {
     html_response(
         StatusCode::OK,
         "text/html; charset=utf-8",
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"muted\">Read-only live service status. No deploy or recovery action is available here.</p><section id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><h2>Deployment and recovery history</h2><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading protected operation history…</p></div><a href=\"/docs\">Open server runbooks and recovery docs</a></section></main></body></html>".to_owned(),
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"muted\">Review the exact tested revision before approving a production deploy.</p><section id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><h2>Pending deploy approvals</h2><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading pending requests…</p></div></section><section class=\"card\"><h2>Deployment and recovery history</h2><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading protected operation history…</p></div><a href=\"/docs\">Open server runbooks and recovery docs</a></section></main></body></html>".to_owned(),
     )
 }
 
@@ -678,7 +771,9 @@ mod tests {
             && body["session_token"] == SESSION
             && body["policy"]["mode"] == "all"
             && body["policy"]["requirements"][0]["role"] == "root";
-        Json(json!({"allowed": valid, "expires_at_unix": 0}))
+        Json(
+            json!({"allowed": valid, "expires_at_unix": 0, "profile_id": if valid { Some("mock-root-profile") } else { None }}),
+        )
     }
 
     async fn mock_probe(

@@ -3,9 +3,10 @@
 Atlas is maintained in `GHF-Studios/Atlas`. Platform Server checks it out as a
 source submodule and publishes its generated static site at `/atlas/`.
 
-- `VAPOR_ATLAS_REF` selects the source branch; it defaults to `main`.
-- The normal Platform Server deployment poll fetches the selected ref. No Atlas
-  SSH credential or Docs upload token is needed.
+- The root repository pins an exact Atlas commit as a submodule revision. CI
+  submits that gitlink with the deployment request, and the approval worker
+  publishes only the pinned commit. No Atlas SSH credential or Docs upload
+  token is needed.
 - Publication validates Atlas records before building. A failed validation or
   build leaves the currently served site unchanged.
 - Builds are placed in a commit-named release directory under

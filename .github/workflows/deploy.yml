@@ -1,189 +1,97 @@
-name: Deploy Vapor Platform Server
+name: Request Vapor Platform deployment approval
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
-
-concurrency:
-  group: vapor-platform-server-deploy
-  cancel-in-progress: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: vapor-platform-deploy-request
+  cancel-in-progress: false
+
 jobs:
-  deploy:
-    name: Trigger VPS deploy
+  tested-revision:
+    name: Require composed Platform CI
+    uses: ./.github/workflows/ci.yml
+
+  request-approval:
+    name: Create pending deploy request
+    needs: tested-revision
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - name: Check required secrets
-        id: deploy-secrets
-        shell: bash
+      - name: Check out the exact tested revision and submodule pins
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Check request credentials
+        id: request-secrets
         env:
-          VAPOR_DEPLOY_HOST: ${{ secrets.VAPOR_DEPLOY_HOST }}
-          VAPOR_DEPLOY_USER: ${{ secrets.VAPOR_DEPLOY_USER }}
-          VAPOR_DEPLOY_SSH_KEY: ${{ secrets.VAPOR_DEPLOY_SSH_KEY }}
-          VAPOR_DEPLOY_KNOWN_HOSTS: ${{ secrets.VAPOR_DEPLOY_KNOWN_HOSTS }}
+          VAPOR_DEPLOY_REQUEST_TOKEN: ${{ secrets.VAPOR_DEPLOY_REQUEST_TOKEN }}
           VAPOR_DEPLOY_PUBLIC_BASE: ${{ vars.VAPOR_DEPLOY_PUBLIC_BASE }}
         run: |
           set -euo pipefail
-          ready=true
-          for name in VAPOR_DEPLOY_HOST VAPOR_DEPLOY_USER VAPOR_DEPLOY_SSH_KEY VAPOR_DEPLOY_KNOWN_HOSTS; do
-            if [ -z "${!name}" ]; then
-              echo "::notice::missing optional deployment secret ${name}; skipping deploy trigger"
-              ready=false
-            fi
-          done
-          echo "ready=${ready}" >> "${GITHUB_OUTPUT}"
-          if [ "${ready}" = "true" ]; then
-            echo "::notice::deployment trigger is configured"
+          if [[ -z "${VAPOR_DEPLOY_REQUEST_TOKEN}" || -z "${VAPOR_DEPLOY_PUBLIC_BASE}" ]]; then
+            echo "configured=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::CI passed; pending deploy request skipped because VAPOR_DEPLOY_REQUEST_TOKEN or VAPOR_DEPLOY_PUBLIC_BASE is missing"
           else
-            echo "::notice::deployment trigger skipped; configure the required VAPOR_DEPLOY_* secrets to enable it"
-          fi
-          if [ -n "${VAPOR_DEPLOY_PUBLIC_BASE}" ]; then
-            echo "public_smoke=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "public_smoke=false" >> "${GITHUB_OUTPUT}"
-            echo "::notice::optional VAPOR_DEPLOY_PUBLIC_BASE variable is not set; skipping public HTTP smoke"
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Configure SSH
-        if: steps.deploy-secrets.outputs.ready == 'true'
-        shell: bash
+      - name: Submit exact revision for root approval
+        if: steps.request-secrets.outputs.configured == 'true'
         env:
-          VAPOR_DEPLOY_SSH_KEY: ${{ secrets.VAPOR_DEPLOY_SSH_KEY }}
-          VAPOR_DEPLOY_KNOWN_HOSTS: ${{ secrets.VAPOR_DEPLOY_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          install -d -m 0700 "${HOME}/.ssh"
-          printf '%s\n' "${VAPOR_DEPLOY_SSH_KEY}" > "${HOME}/.ssh/vapor_deploy"
-          chmod 0600 "${HOME}/.ssh/vapor_deploy"
-          printf '%s\n' "${VAPOR_DEPLOY_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
-          chmod 0600 "${HOME}/.ssh/known_hosts"
-
-      - name: Trigger deploy service
-        if: steps.deploy-secrets.outputs.ready == 'true'
-        shell: bash
-        env:
-          VAPOR_DEPLOY_HOST: ${{ secrets.VAPOR_DEPLOY_HOST }}
-          VAPOR_DEPLOY_USER: ${{ secrets.VAPOR_DEPLOY_USER }}
-        run: |
-          set -euo pipefail
-          ssh \
-            -i "${HOME}/.ssh/vapor_deploy" \
-            -o ConnectTimeout=20 \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            "${VAPOR_DEPLOY_USER}@${VAPOR_DEPLOY_HOST}" \
-            'sudo -n /usr/bin/systemctl start vapor-deploy.service'
-
-      - name: Show deploy service status
-        if: always() && steps.deploy-secrets.outputs.ready == 'true'
-        shell: bash
-        env:
-          VAPOR_DEPLOY_HOST: ${{ secrets.VAPOR_DEPLOY_HOST }}
-          VAPOR_DEPLOY_USER: ${{ secrets.VAPOR_DEPLOY_USER }}
-        run: |
-          set -euo pipefail
-          ssh \
-            -i "${HOME}/.ssh/vapor_deploy" \
-            -o ConnectTimeout=20 \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            "${VAPOR_DEPLOY_USER}@${VAPOR_DEPLOY_HOST}" \
-            'sudo -n /usr/bin/systemctl status --no-pager vapor-deploy.service' || true
-
-      - name: Public HTTP smoke
-        if: steps.deploy-secrets.outputs.ready == 'true' && steps.deploy-secrets.outputs.public_smoke == 'true'
-        shell: bash
-        env:
+          VAPOR_DEPLOY_REQUEST_TOKEN: ${{ secrets.VAPOR_DEPLOY_REQUEST_TOKEN }}
           VAPOR_DEPLOY_PUBLIC_BASE: ${{ vars.VAPOR_DEPLOY_PUBLIC_BASE }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
+          payload="$(python3 - <<'PY'
+          import json, os, subprocess
 
-          base="${VAPOR_DEPLOY_PUBLIC_BASE%/}"
-
-          curl --fail --silent --show-error \
-            "${base}/healthz" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/atlas/" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/docs/healthz" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/docs/status" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/api/identity/healthz" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/api/identity/v1/auth/status" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/api/diagnostics/healthz" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/api/diagnostics/status" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/api/registry/healthz" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/api/registry/v1/status" \
-            >/dev/null
-
-          curl --fail --silent --show-error \
-            "${base}/api/registry/v1/ecosystems/ghf-studios/vapor" \
-            >/dev/null
-
-          identity_audit_status="$(
-            curl \
-              --silent \
-              --show-error \
-              --output /dev/null \
-              --write-out "%{http_code}" \
-              "${base}/api/identity/v1/admin/audit"
+          root_tree = subprocess.check_output(
+              ["git", "rev-parse", f"{os.environ['GITHUB_SHA']}^{{tree}}"], text=True
+          ).strip()
+          pins = []
+          for line in subprocess.check_output(
+              ["git", "ls-tree", os.environ["GITHUB_SHA"]], text=True
+          ).splitlines():
+              metadata, path = line.split("\t", 1)
+              mode, kind, commit = metadata.split()
+              if mode == "160000" and kind == "commit":
+                  pins.append({"path": path, "commit": commit})
+          payload = {
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "branch": os.environ["GITHUB_REF_NAME"],
+              "commit": os.environ["GITHUB_SHA"],
+              "tree": root_tree,
+              "submodules": sorted(pins, key=lambda item: item["path"]),
+              "workflow_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              "summary": "Composed Platform CI passed.",
+          }
+          print(json.dumps(payload, separators=(",", ":")))
+          PY
           )"
-
-          if [ "${identity_audit_status}" != "401" ]; then
-            echo \
-              "expected unauthenticated identity audit to return 401, got ${identity_audit_status}" \
-              >&2
+          response_file="$(mktemp)"
+          trap 'rm -f -- "${response_file}"' EXIT
+          status="$(curl --silent --show-error --connect-timeout 5 --max-time 30 --output "${response_file}" --write-out '%{http_code}' \
+            --request POST \
+            --header "authorization: Bearer ${VAPOR_DEPLOY_REQUEST_TOKEN}" \
+            --header 'content-type: application/json' \
+            --data "${payload}" \
+            "${VAPOR_DEPLOY_PUBLIC_BASE%/}/api/admin/deploy-requests")"
+          if [[ "${status}" != "202" ]]; then
+            echo "deploy request was not accepted (HTTP ${status})" >&2
+            cat "${response_file}" >&2
             exit 1
           fi
-
-          identity_revoke_status="$(
-            curl \
-              --silent \
-              --show-error \
-              --output /dev/null \
-              --write-out "%{http_code}" \
-              --request POST \
-              --header "content-type: application/json" \
-              --data '{"role":"root","steam_id64":"76561190000000000","github_login":"nobody"}' \
-              "${base}/api/identity/v1/admin/roles/revoke"
-          )"
-
-          if [ "${identity_revoke_status}" != "401" ]; then
-            echo \
-              "expected unauthenticated identity role revoke to return 401, got ${identity_revoke_status}" \
-              >&2
-            exit 1
-          fi
-
-          echo "public-http: health/status checks passed for ${base}"
+          echo "Pending root approval request created."

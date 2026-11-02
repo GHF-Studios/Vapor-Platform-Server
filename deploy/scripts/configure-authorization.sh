@@ -21,6 +21,8 @@ artifact_token_key="VAPOR_ARTIFACT_IDENTITY_AUTHZ_TOKEN"
 identity_build_cache_key="VAPOR_IDENTITY_BUILD_CACHE_ADMIN_AUTHZ_TOKEN"
 build_cache_token_key="VAPOR_BUILD_CACHE_IDENTITY_AUTHZ_TOKEN"
 build_cache_orchestrator_key="VAPOR_BUILD_CACHE_ORCHESTRATOR_TOKEN"
+identity_request_key="VAPOR_IDENTITY_PLATFORM_REQUEST_AUTHZ_TOKEN"
+platform_request_key="VAPOR_PLATFORM_IDENTITY_REQUEST_AUTHZ_TOKEN"
 
 if [ ! -f "$identity_env" ] || [ ! -f "$registry_env" ] || [ ! -f "$platform_env" ] || [ ! -f "$artifact_env" ] || [ ! -f "$build_cache_env" ]; then
   echo "error: all service env files must exist before configuring authorization" >&2
@@ -54,6 +56,8 @@ artifact_token="$(read_env_value "$artifact_env" "$artifact_token_key")"
 identity_build_cache_token="$(read_env_value "$identity_env" "$identity_build_cache_key")"
 build_cache_token="$(read_env_value "$build_cache_env" "$build_cache_token_key")"
 build_cache_orchestrator_token="$(read_env_value "$build_cache_env" "$build_cache_orchestrator_key")"
+identity_request_token="$(read_env_value "$identity_env" "$identity_request_key")"
+platform_request_token="$(read_env_value "$platform_env" "$platform_request_key")"
 
 if [ -n "$identity_token" ] && ! valid_token "$identity_token"; then
   echo "error: ${identity_key} must be a 64-character hex token" >&2
@@ -89,6 +93,18 @@ if [ -n "$build_cache_token" ] && ! valid_token "$build_cache_token"; then
 fi
 if [ -n "$build_cache_orchestrator_token" ] && ! valid_token "$build_cache_orchestrator_token"; then
   echo "error: ${build_cache_orchestrator_key} must be a 64-character hex token" >&2
+  exit 1
+fi
+if [ -n "$identity_request_token" ] && ! valid_token "$identity_request_token"; then
+  echo "error: ${identity_request_key} must be a 64-character hex token" >&2
+  exit 1
+fi
+if [ -n "$platform_request_token" ] && ! valid_token "$platform_request_token"; then
+  echo "error: ${platform_request_key} must be a 64-character hex token" >&2
+  exit 1
+fi
+if [ -n "$identity_request_token" ] && [ -n "$platform_request_token" ] && [ "$identity_request_token" != "$platform_request_token" ]; then
+  echo "error: Identity and Platform request-verification tokens differ; reconcile them manually" >&2
   exit 1
 fi
 if [ -n "$identity_token" ] && [ -n "$registry_token" ] && [ "$identity_token" != "$registry_token" ]; then
@@ -152,6 +168,15 @@ if [ "$build_cache_orchestrator_token" = "$service_token" ] || [ "$build_cache_o
   echo "error: Build Cache orchestrator token must differ from all service authorization tokens" >&2
   exit 1
 fi
+platform_request_service_token="$identity_request_token"
+if [ -z "$platform_request_service_token" ]; then platform_request_service_token="$platform_request_token"; fi
+if [ -z "$platform_request_service_token" ]; then platform_request_service_token="$(random_token)"; fi
+for existing_token in "$service_token" "$platform_service_token" "$artifact_service_token" "$build_cache_service_token" "$build_cache_orchestrator_token"; do
+  if [ "$platform_request_service_token" = "$existing_token" ]; then
+    echo "error: Platform request-verification token must be unique" >&2
+    exit 1
+  fi
+done
 
 write_env_value() {
   local file="$1"
@@ -179,6 +204,8 @@ write_env_value "$artifact_env" "$artifact_token_key" "$artifact_service_token"
 write_env_value "$identity_env" "$identity_build_cache_key" "$build_cache_service_token"
 write_env_value "$build_cache_env" "$build_cache_token_key" "$build_cache_service_token"
 write_env_value "$build_cache_env" "$build_cache_orchestrator_key" "$build_cache_orchestrator_token"
+write_env_value "$identity_env" "$identity_request_key" "$platform_request_service_token"
+write_env_value "$platform_env" "$platform_request_key" "$platform_request_service_token"
 
 if [ "$VAPOR_SERVER_MODE" = "services" ]; then
   authz_url="http://127.0.0.1:7113/v1/internal/authorization/check"
@@ -189,5 +216,11 @@ write_env_value "$registry_env" "VAPOR_REGISTRY_IDENTITY_AUTHZ_URL" "$authz_url"
 write_env_value "$platform_env" "VAPOR_PLATFORM_IDENTITY_AUTHZ_URL" "$authz_url"
 write_env_value "$artifact_env" "VAPOR_ARTIFACT_IDENTITY_AUTHZ_URL" "$authz_url"
 write_env_value "$build_cache_env" "VAPOR_BUILD_CACHE_IDENTITY_AUTHZ_URL" "$authz_url"
+if [ "$VAPOR_SERVER_MODE" = "services" ]; then
+  request_authz_url="http://127.0.0.1:7113/v1/internal/automation/verify"
+else
+  request_authz_url="http://127.0.0.1:7110/api/identity/v1/internal/automation/verify"
+fi
+write_env_value "$platform_env" "VAPOR_PLATFORM_IDENTITY_REQUEST_AUTHZ_URL" "$request_authz_url"
 
 echo "authorization: Registry, Platform, Artifact, and Build Cache use separate server-local Identity tokens; values hidden"
