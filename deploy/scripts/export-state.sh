@@ -16,6 +16,8 @@ STATEFUL_SERVICES=(
   vapor-docs.service
   vapor-identity.service
   vapor-diagnostics.service
+  vapor-platform-server.service
+  vapor-build-cache.service
 )
 ACTIVE_SERVICES=()
 

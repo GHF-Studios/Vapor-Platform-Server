@@ -7,6 +7,8 @@ source "${SCRIPT_DIR}/lib.sh"
 
 require_root
 
+CADDY_TEMPLATE="${VAPOR_CADDY_TEMPLATE:-${DEPLOY_DIR}/caddy/Caddyfile.template}"
+
 if ! command -v caddy >/dev/null 2>&1; then
   echo "error: caddy is not installed; run bootstrap-ubuntu.sh first" >&2
   exit 1
@@ -24,7 +26,7 @@ EOF
 fi
 
 sed "s/{{VAPOR_DOMAIN}}/${VAPOR_DOMAIN}/g" \
-  "${DEPLOY_DIR}/caddy/Caddyfile.template" \
+  "${CADDY_TEMPLATE}" \
   | sed \
     -e "/{{VAPOR_HTTP_FALLBACK_BLOCK}}/r ${fallback_block}" \
     -e "/{{VAPOR_HTTP_FALLBACK_BLOCK}}/d" \

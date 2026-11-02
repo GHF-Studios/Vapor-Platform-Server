@@ -7,18 +7,10 @@ source "${SCRIPT_DIR}/lib.sh"
 
 require_root
 
-install -m 0644 "${DEPLOY_DIR}/systemd/vapor-homepage.service" /etc/systemd/system/vapor-homepage.service
-install -m 0644 "${DEPLOY_DIR}/systemd/vapor-docs.service" /etc/systemd/system/vapor-docs.service
-install -m 0644 "${DEPLOY_DIR}/systemd/vapor-identity.service" /etc/systemd/system/vapor-identity.service
-install -m 0644 "${DEPLOY_DIR}/systemd/vapor-diagnostics.service" /etc/systemd/system/vapor-diagnostics.service
-install -m 0644 "${DEPLOY_DIR}/systemd/vapor-registry.service" /etc/systemd/system/vapor-registry.service
+install -m 0644 "${DEPLOY_DIR}/systemd/vapor-platform-server.service" /etc/systemd/system/vapor-platform-server.service
 
 systemctl daemon-reload
 
-systemctl enable vapor-homepage.service
-systemctl enable vapor-docs.service
-systemctl enable vapor-identity.service
-systemctl enable vapor-diagnostics.service
-systemctl enable vapor-registry.service
+systemctl enable vapor-platform-server.service
 
-echo "systemd: installed and enabled Vapor service units"
+echo "systemd: installed and enabled the composed Vapor Platform Server process"

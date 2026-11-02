@@ -3,6 +3,10 @@
 Last verified: 2026-07-25 Europe/Berlin via GitHub Actions deploy run
 `30139280612` and CI run `30139280620`.
 
+This records the last verified live VPS state, not the current source tree.
+Changes made after that deployment are not considered deployed until a later
+VPS check updates this record.
+
 ## Current VPS baseline
 
 - OS: Ubuntu 26.04 LTS.
@@ -95,7 +99,7 @@ Vapor-Diagnostics-Server 058c403
   route accepts either the server-local bootstrap token or a non-expired root
   dashboard session.
 - Identity has role-revoke routes and scripts:
-  `POST /v1/admin/roles/revoke`, `POST /admin/roles/revoke`, and
+  `POST /v1/admin/roles/revoke`, `POST /admin/identity/roles/revoke`, and
   `deploy/scripts/revoke-identity-role.sh`. Revocation uses the same linked
   SteamID64 plus GitHub-login target model as grants. The service refuses to
   revoke the last active `root` role and rejects attempts to revoke

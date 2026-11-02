@@ -26,6 +26,9 @@ existing service just to avoid naming a new boundary.
 - `Vapor-Diagnostics-Server` owns explicit opt-in diagnostics upload, redaction,
   diagnostics storage/indexes, retention direction, list/download/export, and
   diagnostics restore/import.
+- `Vapor-Build-Cache-Server` owns signed current Cargo target snapshots,
+  candidate validation/promotion, and target snapshot status. Platform owns
+  deployment and recovery composition; target VM orchestration remains pending.
 - One public origin with path routing remains the preferred shape.
 - MCP/ACP/capability work is future work and is not part of the initial server
   MVP.
@@ -44,10 +47,9 @@ Identity-issued authorization) when a catalog write requires a verified
 author or elevated role. Identity does not own catalog records, and Registry
 does not copy or redefine user roles.
 
-This is an accepted target boundary, not a claim that the Registry API or its
-persistent catalog is implemented today. Until then, client-side Workshop
-tags are discovery hints only and must not be presented as enforced Vapor
-semantics.
+The Registry API and persistent catalog are implemented. Its Workshop admin
+section currently provides a bounded, read-only inventory; client-side
+Workshop tags remain discovery hints and are not enforced Vapor semantics.
 
 ## Boundary map
 
@@ -58,12 +60,13 @@ semantics.
 | Identity | Implemented service and canonical auth owner | Steam profiles, GitHub links, roles, sessions, root/developer authorization, identity audit | Publishing execution, deployment, diagnostics/docs storage |
 | Diagnostics | Implemented scaffold, policy incomplete | Opt-in upload, redaction, storage, indexes, retention, root-dev list/download/export | Telemetry, Git transport, hostnames, persistent machine IDs, identity authority |
 | Publish/pipeline | Future real boundary | Protected publish requests, validation/promotion orchestration, publishing audit, controlled Steam/Workshop or server-publish authority | Identity source of truth, artifact blob semantics, public catalog reads |
-| Artifacts | Future real boundary | Immutable packages/build blobs, checksums, manifests, retention/download policy hooks | Catalog metadata, publish approval, docs bundles |
-| Registry/catalog | Future real boundary | Public metadata, listings, version/channel pointers, visibility/discovery | Blob storage, builds, identity roles, deploy orchestration |
+| Artifacts | Implemented release service | Immutable Vapor application archives, signed manifests, channel pointers, public downloads, root-gated read-only release inventory | Catalog metadata, publish approval, signing keys, docs bundles |
+| Build Cache | Implemented service; builder incomplete | Signed current target snapshots, candidate validation/promotion, read-only target inventory | Guest VM orchestration, Vapor Client restore/bootstrap, signing key custody |
+| Registry/catalog | Implemented service | Public ecosystem metadata, source topology, visibility policy, root-gated read-only Workshop inventory | Blob storage, builds, Identity roles, deploy orchestration |
 | Toolchain/API UX | Future integration boundary | Stable CLI/Shell/launcher workflows over existing APIs | Canonical state, role decisions, publish execution |
 | MCP/capability surface | Future capability boundary | Machine/action capabilities, least-privilege grants, capability audit | Business state, bypassing service APIs |
-| Operations/recovery | Implemented root-owned workflow plus service contracts | Backups, restore/import composition, deploy health, emergency operator paths | Normal product workflows, service business decisions |
-| Cross-domain admin UI | Future UI boundary | Aggregate operator views/actions once multiple services consume identity auth | Replacing domain services or storing canonical domain state |
+| Operations/recovery | Implemented root-owned workflow plus service contracts | Backups, restore/import composition, deploy health, latest deploy/restore status, emergency operator paths | Normal product workflows, service business decisions |
+| Cross-domain admin UI | Implemented shared shell | `/admin` navigation and read-only Platform overview/Operations; Identity, Registry, and Artifact own protected sections | Replacing domain services or storing canonical domain state |
 
 ## Route and API implications
 
@@ -74,9 +77,17 @@ Current route ownership remains:
 /docs/                    docs
 /login                    identity
 /logout                   identity
-/admin                    identity admin shell for now
+/admin                    shared Platform admin shell
+/admin/operations         Platform-owned read-only status and runbook links
+/admin/identity           Identity-owned admin section
+/admin/workshop           Registry-owned catalog inventory
+/admin/artifacts          Artifact-owned release inventory
+/admin/build-cache        Build Cache-owned target snapshot inventory
+/api/admin/overview       root-authorized service health summary
+/api/admin/operations     root-authorized latest deploy/restore status
 /api/identity/            identity API
 /api/diagnostics/         diagnostics API
+/api/build-cache/         current target snapshot API
 ```
 
 Future routes should follow domain ownership rather than convenience:
@@ -87,9 +98,9 @@ Future routes should follow domain ownership rather than convenience:
   locked yet;
 - MCP/capability: no route until the cross-service auth contract is mature.
 
-The current `/admin` route should not silently become the global admin console.
-If admin operations span multiple domains, introduce an explicit cross-domain
-admin boundary later.
+The `/admin` shared shell composes links and status only. Each protected data or
+action route still authorizes at its owning service; the root does not copy
+service state or policy.
 
 ## State implications
 
@@ -100,6 +111,9 @@ Current state ownership:
 /var/lib/vapor-server/docs           docs artifacts and pointers
 /var/lib/vapor-server/identity       identity SQLite DB and sessions
 /var/lib/vapor-server/diagnostics    diagnostics runs and indexes
+/var/lib/vapor-server/registry       Registry catalog metadata
+/var/lib/vapor-server/updates        immutable Artifact releases
+/var/lib/vapor-server/operations     latest root deploy/restore status pointer
 /etc/vapor-server                    server-local env/secrets, not exported
 ```
 
@@ -172,7 +186,7 @@ Initial authority targets:
 - Diagnostics drifts into telemetry or fingerprinting.
 - Publishing authority is treated as only a Vapor role and loses the separate
   Steamworks/pipeline authority requirement.
-- A global admin UI is built before the service auth contract exists.
+- Shared status views copy service policy or become a bypass around service-owned authorization.
 - MCP/capability work exposes broad remote authority before services have clear
   authorization boundaries.
 
@@ -183,15 +197,18 @@ Initial authority targets:
 - Public telemetry or Git-backed diagnostics transport.
 - Generic artifact blob storage before publish/catalog contracts exist.
 - A broad toolchain facade over unstable internal APIs.
-- A full global admin dashboard/launcher GUI.
+- A full global admin dashboard/launcher GUI. **Superseded by the accepted
+  shared Platform admin toolbench design dated 2026-11-02.** Implement only the
+  service-owned sections and routes in that design; do not restore a standalone
+  Identity `/admin` page or add a compatibility alias.
 - Service-to-service database reads.
 
 ## Next concrete step
 
-Define the cross-service auth contract as the next design artifact. Keep it
-abstract enough to avoid implementation internals, but precise enough that docs,
-diagnostics, publish/pipeline, artifacts, registry/catalog, toolchain, and
-future MCP/capability work can consume the same authority model.
+The shared authorization contract is documented in
+`docs/cross-service-authorization-contract.md`. New service-owned admin routes
+must use that contract; the Platform shell must remain an aggregator, and
+future Build Cache administration waits for the Build Cache service itself.
 
 ## Callback pointer
 

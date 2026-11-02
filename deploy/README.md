@@ -14,6 +14,8 @@ Current baseline:
 - state under `/var/lib/vapor-server`;
 - service env files under `/etc/vapor-server`;
 - source checkout under `/opt/vapor-platform-server`.
+- composed host process by default, with independent service processes retained
+  through the explicit `VAPOR_SERVER_MODE=services` option.
 
 No secrets belong in this repository. The bootstrap script creates server-local
 admin tokens in `/etc/vapor-server/*.env` when those files do not already exist.
@@ -41,8 +43,12 @@ for smoke testing only; the intended public endpoint remains
 
 - `scripts/bootstrap-ubuntu.sh`: install OS packages, create users/directories,
   and create server-local env files.
-- `scripts/deploy.sh`: clone/update the Platform Server repo, update submodules, build
-  services, publish Atlas, install units/proxy config, and restart services.
+- `scripts/deploy.sh`: clone/update the Platform Server repo, update submodules,
+  publish Atlas, and build/restart either the composed host (default) or the
+  independently runnable services (`VAPOR_SERVER_MODE=services`). The composed
+  mode refuses to deploy until the root `Cargo.lock` is committed. It writes a
+  safe latest-result record under `${VAPOR_STATE_ROOT}/operations/` for the
+  read-only Platform Operations page.
 - `scripts/deploy-atlas.sh`: fetch the configured Atlas ref and atomically publish
   its generated static site under `/srv/vapor-web/atlas`, separately from Docs.
 - `scripts/install-auto-deploy.sh`: install a systemd timer that periodically
@@ -56,6 +62,10 @@ for smoke testing only; the intended public endpoint remains
 - `scripts/configure-identity-auth.sh`: update server-local identity provider
   configuration in `/etc/vapor-server/identity.env` without committing secrets,
   including GitHub browser OAuth credentials and public redirect origin.
+- `scripts/configure-authorization.sh`: create or reconcile separate
+  server-local Identity authorization tokens for Platform, Registry, Artifact,
+  and Build Cache, plus a separate Build Cache orchestrator token. Values are
+  written only to protected env files and never printed.
 - `scripts/grant-identity-role.sh`: grant `root` or `content-developer` to an
   already linked Steam+GitHub developer/root profile by requiring both SteamID64
   and GitHub login, using the server-local identity admin token for bootstrap
@@ -67,9 +77,22 @@ for smoke testing only; the intended public endpoint remains
   named state bundles and defaults to 48.
 - `scripts/restore-state.sh`: restore a bundle created by `export-state.sh`
   onto an already bootstrapped server; requires `--yes` and moves prior state
-  aside before replacing it.
-- `scripts/install-systemd.sh`: install/enable the four service units.
+  aside before replacing it. The script writes a safe latest restore-result
+  record after restoring state and restarting services.
+- `scripts/install-systemd.sh`: install/enable the composed host unit.
+- `scripts/install-services-systemd.sh`: install/enable the individual service
+  units for `VAPOR_SERVER_MODE=services`.
+- In independent-services mode, the cross-service `/admin` toolbench returns
+  `503` instead of routing the removed Identity `/admin` page. The shared
+  toolbench is served by the composed Platform process in the default mode.
+- `systemd/vapor-artifact.service`: independently runnable immutable release
+  delivery service for `VAPOR_SERVER_MODE=services`.
+- `systemd/vapor-build-cache.service`: independently runnable target snapshot
+  service for `VAPOR_SERVER_MODE=services`; state lives under
+  `/var/lib/vapor-server/build-cache`.
 - `scripts/install-caddy.sh`: render/install the Caddy config.
+- `caddy/Caddyfile.services.template`: path routing for the independent
+  service-process mode; the default template routes through the composed host.
 - `scripts/health-check.sh`: check local service health endpoints.
 - `scripts/public-http-check.sh`: check public HTTP routes before DNS/HTTPS is
   ready.

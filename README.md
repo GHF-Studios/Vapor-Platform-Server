@@ -13,6 +13,8 @@ Vapor-Platform-Server/
   Vapor-Identity-Server/      -> Vapor-Identity-Server
   Vapor-Diagnostics-Server/   -> Vapor-Diagnostics-Server
   Vapor-Registry-Server/      -> Vapor-Registry-Server
+  Vapor-Artifact-Server/      -> Vapor-Artifact-Server
+  Vapor-Build-Cache-Server/   -> Vapor-Build-Cache-Server
   Atlas/                      -> Atlas
 
   deploy/
@@ -27,9 +29,11 @@ Vapor-Platform-Server/
     vapor_server_shared/   # optional later
 ```
 
-The five runtime services should remain independently rebuildable and
-deployable. This orchestration repo owns orchestration, not service business
-logic.
+The selected VPS runtime is one composed server process. Homepage, Docs,
+Identity, Diagnostics, Registry, Artifact, and Build Cache remain separate
+service repositories with their own state and router builders; the top-level host only composes those
+routers and owns deployment. The independent-process deployment mode remains
+available for service maintenance and rollback.
 
 ## Single-domain route map
 
@@ -38,9 +42,19 @@ logic.
 /atlas/                   -> Atlas static knowledge site
 /docs/                    -> docs
 /login                    -> identity browser login/register
-/admin                    -> identity admin dashboard shell
+/admin                    -> shared Platform admin toolbench
+/admin/operations         -> Platform-owned read-only deployment/recovery status
+/admin/workshop           -> Registry-owned read-only catalog inventory
+/admin/identity           -> Identity-owned admin section
+/admin/artifacts          -> Artifact-owned read-only release inventory
+/admin/build-cache        -> Build Cache-owned read-only target snapshot inventory
+/api/admin/overview       -> root-authorized service health summary
+/api/admin/operations     -> root-authorized latest deploy/restore status
 /api/identity/            -> identity
 /api/diagnostics/         -> diagnostics
+/api/registry/            -> registry
+/api/updates/v1/vapor/    -> Artifact service: signed Vapor application releases
+/api/build-cache/         -> Build Cache service: signed target snapshots
 ```
 
 ## State model
@@ -53,6 +67,16 @@ logic.
 - Identity: owns linked Steam/GitHub identities, roles, and auth/session state.
 - Diagnostics: owns opt-in diagnostics uploads, indexes, retention metadata,
   and export/import data.
+- Registry: owns the canonical Vapor content catalog and Workshop inventory.
+- Operations: Platform owns the latest deploy/restore status pointer; deployment
+  and recovery actions remain CLI-owned.
+- Artifact: serves immutable Vapor application release manifests, signatures,
+  and archive bytes from its own release store. The Platform host composes its
+  router; release build/sign/publish tooling remains an operator workflow.
+- Build Cache: owns one current signed Cargo snapshot per supported target and
+  candidate promotion state. VPS-hosted target VM orchestration and Vapor Client
+  installation are not yet implemented; an empty cache is not a usable build
+  distribution.
 
 ## Restore model
 
@@ -66,14 +90,17 @@ repo composes those into whole-conglomerate export/import.
 
 ## Current status
 
-The single-VPS vertical slice is deployed before DNS is ready. Caddy, systemd
-service units, automatic branch polling deployment, SQLite-backed identity
-state, pre-DNS HTTP fallback routing, health checks, smoke checks, and whole
-server file-state export/restore scripts exist and are tracked here.
+The repository contains the single-VPS deployment slice: Caddy, systemd service
+units, automatic branch polling deployment, SQLite-backed identity state,
+pre-DNS HTTP fallback routing, health checks, smoke checks, and whole-server
+file-state export/restore scripts. Current live deployment evidence is tracked
+separately in `docs/deployment-status.md`; source changes alone do not imply a
+VPS deployment.
 
 The service implementations are still early scaffolds and remain owned by their
-own repositories. Atlas is separately owned source built as static output. This
-orchestration repo owns deployment/orchestration, not service business logic.
+own repositories. Atlas is separately owned source built as static output. The
+composed host imports public router builders; it does not move service handlers
+or persistence code into this repository.
 
 See `docs/decisions-and-backlog.md` for the accepted boundaries, pending
 decisions, and future/backburner items that should not be lost.
@@ -103,3 +130,13 @@ configuration and auth-flow smoke testing.
 
 See `docs/steam-authority-model.md` for the distinction between Steam browser
 identity, Steamworks/WebAPI verification, Vapor roles, and publishing authority.
+
+See `docs/vapor-app-release-api.md` for the public signed application update
+feed, and `docs/vapor-standalone-install-and-source-home-contract.md` for the
+standalone installer, local game mounting, and Vapor-managed source checkout
+lifecycle.
+
+The Platform toolbench shell contains no operator data. Its overview API checks
+the Identity root session on loopback, then probes only service health routes;
+raw probe bodies and environment configuration are never returned. Feature
+readiness stays `not reported` until each service exposes a safe readiness DTO.

@@ -18,9 +18,13 @@ vapor-server-state/
   manifest.toml
   submodules.txt
   state/
+    diagnostics/
     docs/
     identity/
-    diagnostics/
+    operations/
+    registry/
+    updates/
+    build-cache/
 ```
 
 The bundle excludes `/etc/vapor-server` and records:
@@ -32,6 +36,34 @@ secrets_included = false
 
 Backups are recovery bundles, not artifact distribution, not audit storage, and
 not a replacement for service-owned export/import formats.
+
+Build Cache state is included because it owns the current target snapshots and
+candidate staging. Its service is stopped during export/restore so promotion
+cannot race a state copy. Builder credentials and signing keys remain in
+`/etc/vapor-server` and are never exported.
+
+## Admin deployment/recovery status
+
+The Platform Operations page reads a single root-owned deployment/recovery
+status record at `${VAPOR_STATE_ROOT}/operations/latest.json` (configured as
+`VAPOR_PLATFORM_OPERATIONS_FILE` for the Platform process). Deploy and restore
+scripts write it via a same-directory temporary file and atomic rename. The
+containing directory is `root:vapor` mode `0750`; the record is `root:vapor`
+mode `0640` so the read-only Platform process can inspect it.
+
+Schema version 1 contains only the operation (`deploy` or `restore`), result
+(`success` or `failed`), start and finish UTC timestamps, checked-out server
+revision (or `unknown`), and runtime mode (`monolith` or `services`). The
+reader bounds the file to 4 KiB, rejects unknown fields and invalid values, and
+returns no raw file content or filesystem location. The endpoint requires a
+root Identity session and is private/no-store. The record is a current status
+pointer, not an append-only audit log or proof that every service feature is
+ready; detailed operator evidence remains in the deployment logs and runbooks.
+
+Restore writes its result after restoring state and attempting to restart the
+previously active services, so the restore result replaces any pre-restore
+record that was included in the state bundle. It never reports the bundle path,
+error output, environment contents, or credentials.
 
 ## Restore validation
 

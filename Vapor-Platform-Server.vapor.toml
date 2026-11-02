@@ -48,3 +48,17 @@ repo = "https://github.com/GHF-Studios/Vapor-Registry-Server.git"
 path = "Vapor-Registry-Server"
 route = "/api/registry/"
 state = "registry"
+
+[[services]]
+id = "artifacts"
+repo = "https://github.com/GHF-Studios/Vapor-Artifact-Server.git"
+path = "Vapor-Artifact-Server"
+route = "/api/updates/"
+state = "release-artifacts"
+
+[[services]]
+id = "build-cache"
+repo = "https://github.com/GHF-Studios/Vapor-Build-Cache-Server.git"
+path = "Vapor-Build-Cache-Server"
+route = "/api/build-cache/"
+state = "target-snapshots"

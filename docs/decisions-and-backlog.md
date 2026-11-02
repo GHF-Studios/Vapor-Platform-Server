@@ -15,7 +15,8 @@ while the implementation is still moving quickly.
 - Homepage, docs, identity, and diagnostics remain separate repositories and
   separate service binaries.
 - A single public domain should be sufficient for now, with path routing:
-  `/`, `/docs/`, `/api/identity/`, and `/api/diagnostics/`.
+  `/`, `/docs/`, `/api/identity/`, `/api/diagnostics/`, `/api/registry/`, and
+  `/api/updates/v1/vapor/`; operator sections live under `/admin/*`.
 - Service dependencies are allowed when they reduce avoidable complexity.
   The initial scaffolds use Axum/Tokio instead of hand-rolled HTTP parsing.
 - Diagnostics upload is explicit opt-in only. There is no default/public
@@ -38,8 +39,10 @@ while the implementation is still moving quickly.
   identity, but developer/root publishing paths need stronger Steam/Vapor
   authority checks.
 - Identity/auth concerns belong on the identity side. Other services should use
-  identity-issued authorization later instead of inventing incompatible auth
-  systems.
+  identity-issued authorization instead of inventing incompatible auth
+  systems. Registry's first protected ecosystem lookup now uses the internal
+  Identity decision route; every future protected resource route must adopt the
+  same service-owned-policy boundary.
 - Registry owns the canonical Vapor Workshop catalog: typed content identity,
   content-to-Workshop bindings, discovery metadata, and version/channel records.
   Steam tags are discovery hints, not enforced Vapor types. Identity supplies
@@ -78,9 +81,11 @@ while the implementation is still moving quickly.
   backed by SQLite/SQLx schema bootstrap. It has fail-closed Steam Web API
   ticket verification, Steam OpenID browser login, GitHub OAuth token
   verification, GitHub Device Flow, GitHub browser OAuth linking, and a
-  short-lived dashboard session model. The admin dashboard is publicly reachable
-  as a shell but only renders privileged identity data/actions for a non-expired
-  root profile session with linked Steam and GitHub identities. The server-local
+  short-lived dashboard session model. The Platform-owned `/admin` route renders
+  the shared toolbench shell; Identity's service-owned `/admin/identity` section
+  renders privileged identity data/actions only for a non-expired root profile
+  session with linked Steam and GitHub identities. The former standalone
+  Identity `/admin` route is removed with no compatibility alias. The server-local
   admin token remains an operations bootstrap tool, not the normal dashboard
   login model. Role grants require both SteamID64 and GitHub login, reject
   internal profile ids as authority, and can be authorized by either the
@@ -103,13 +108,26 @@ while the implementation is still moving quickly.
   first-pass whole-server file-state export/restore scripts for
   `/var/lib/vapor-server`, excluding server-local env/token files under
   `/etc/vapor-server`. Restore now validates bundle structure before extraction
-  and before stopping services.
+  and before stopping services. Deploy and restore publish a root-owned latest
+  result pointer for the read-only Platform Operations page.
+- Platform owns the `/admin` shell, overview, and read-only Operations section;
+  Identity, Registry, and Artifact own their protected sections and data.
+  Build Cache now exists as a separate service and its state is composed into
+  deploy/recovery. VPS-hosted Linux/Windows guest builders and Vapor Client
+  snapshot bootstrap remain unimplemented; do not advertise usable snapshots
+  until those pieces and exact target lock identities are configured.
+  Deploy/recovery actions remain CLI-owned.
 - Domain-independent pre-DNS work is allowed through temporary HTTP fallback
   routing, SSH/UFW hardening, and local/IP smoke checks. The fallback is not the
   final public product URL.
 
 ## Near-term backlog
 
+- Finish the standalone Vapor release/client integration: publish a signed
+  Windows release, embed and rotate the production verification key, and connect
+  developer-package repository dependencies to lazy Superworkspace acquisition.
+  Keep source checkouts separate from the app install and preserve both the
+  Superworkspace and locally mounted game content on update/uninstall.
 - Review and run the VPS provisioning model around direct Caddy/systemd
   deployment.
 - Wire DNS for `vapor.ghf-studios.site` once the domain is active.
@@ -131,7 +149,12 @@ while the implementation is still moving quickly.
   bundle.
 - Move docs, diagnostics list/download/export, and other privileged service
   APIs from placeholder tokens/admin tokens toward identity-root authorization
-  once `docs/cross-service-authorization-contract.md` is implemented.
+  using the contract in `docs/cross-service-authorization-contract.md`.
+- Create the future content-upload service boundary. At creation time, assign
+  the authenticated Identity profile as canonical creator; treat client-sent
+  author labels as display metadata, and check stored ownership for update and
+  deletion. Upload, moderation, and owner-management routes are not implemented
+  by the current Registry slice.
 - Exercise the Steamworks/Vapor-client ticket path for end-to-end developer auth
   beyond browser OpenID login: client obtains a Steam Web API ticket, server
   verifies it, and developer workflows can rely on the stronger proof.
@@ -142,6 +165,8 @@ while the implementation is still moving quickly.
   certificate issuance are live.
 - Improve dashboard role-management UX beyond the first functional grant/revoke
   forms and audit table.
+- Implement the Build Cache service and VPS-hosted target VM builders before
+  exposing its planned admin section.
 - Decide how Vapor Shell should wrap server REST APIs without making raw HTTP
   details the normal user workflow.
 - Configure GitHub branch protection once the exact protected-branch policy is
@@ -151,7 +176,8 @@ while the implementation is still moving quickly.
 
 - Plesk setup.
 - Server-mediated Steam publishing credentials.
-- A dashboard or launcher GUI.
+- A launcher GUI. The shared read-only Platform admin toolbench is accepted;
+  do not fold service business logic into the Platform shell.
 - MCP/ACP capability integration.
 - Public telemetry.
 - Git-backed diagnostics transport.

@@ -1,0 +1,23 @@
+[Unit]
+Description=Vapor Artifact Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vapor
+Group=vapor
+WorkingDirectory=/opt/vapor-platform-server
+EnvironmentFile=/etc/vapor-server/artifact.env
+ExecStart=/opt/vapor-platform-server/target/release/vapor_artifact_server
+Restart=on-failure
+RestartSec=3
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vapor-server/updates
+
+[Install]
+WantedBy=multi-user.target

@@ -7,6 +7,8 @@ install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/docs"
 install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/identity"
 install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/diagnostics"
 install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/registry"
+install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/updates"
+install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}/build-cache"
 
 install_dir root "${VAPOR_GROUP}" 0750 "${VAPOR_CONFIG_DIR}"
 
@@ -16,11 +18,18 @@ find "${VAPOR_STATE_ROOT}" -type f -exec chmod 0640 {} +
 
 install_secret_env "${VAPOR_CONFIG_DIR}/platform.env" \
 "VAPOR_DOMAIN=${VAPOR_DOMAIN}
+VAPOR_PLATFORM_BIND=127.0.0.1:7110
+VAPOR_PLATFORM_PROBE_ORIGIN=http://127.0.0.1:7110
+VAPOR_PLATFORM_IDENTITY_AUTHZ_URL=http://127.0.0.1:7110/api/identity/v1/internal/authorization/check
 VAPOR_BRANCH=${VAPOR_BRANCH}
 # Atlas is source-owned by GHF-Studios/Atlas; change this ref to pin/roll back.
 VAPOR_ATLAS_REF=main
 # Optional pre-DNS HTTP test host, for example a server IP address:
 # VAPOR_HTTP_FALLBACK_HOST="
+ensure_env_assignment \
+  "${VAPOR_CONFIG_DIR}/platform.env" \
+  VAPOR_PLATFORM_OPERATIONS_FILE \
+  "${VAPOR_STATE_ROOT}/operations/latest.json"
 
 install_secret_env "${VAPOR_CONFIG_DIR}/homepage.env" \
 "VAPOR_HOMEPAGE_BIND=127.0.0.1:7111"
@@ -37,6 +46,7 @@ VAPOR_IDENTITY_DB=${VAPOR_STATE_ROOT}/identity/identity.sqlite3
 VAPOR_IDENTITY_ADMIN_TOKEN=$(random_token)
 VAPOR_IDENTITY_DASHBOARD_PASSWORD=$(random_token)
 VAPOR_IDENTITY_STEAM_APP_ID=2122620
+VAPOR_IDENTITY_LOOCAST_APP_ID=2122620
 VAPOR_IDENTITY_STEAM_AUTH_IDENTITY=vapor-identity
 VAPOR_IDENTITY_COOKIE_PATH=/
 VAPOR_IDENTITY_COOKIE_SECURE=true
@@ -59,3 +69,13 @@ install_secret_env "${VAPOR_CONFIG_DIR}/registry.env" \
 "VAPOR_REGISTRY_BIND=127.0.0.1:7115
 VAPOR_REGISTRY_STATE=${VAPOR_STATE_ROOT}/registry
 VAPOR_REGISTRY_DB=${VAPOR_STATE_ROOT}/registry/registry.sqlite3"
+
+install_secret_env "${VAPOR_CONFIG_DIR}/artifact.env" \
+"VAPOR_ARTIFACT_BIND=127.0.0.1:7116
+VAPOR_UPDATES_ROOT=${VAPOR_STATE_ROOT}/updates"
+
+install_secret_env "${VAPOR_CONFIG_DIR}/build-cache.env" \
+"VAPOR_BUILD_CACHE_BIND=127.0.0.1:7117
+VAPOR_BUILD_CACHE_ROOT=${VAPOR_STATE_ROOT}/build-cache"
+
+bash "${SCRIPT_DIR}/configure-authorization.sh"

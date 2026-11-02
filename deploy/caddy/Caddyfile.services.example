@@ -1,0 +1,39 @@
+vapor.ghf-studios.site {
+	encode zstd gzip
+
+	handle_path /docs/* {
+		reverse_proxy 127.0.0.1:7112
+	}
+
+	handle_path /api/identity/* {
+		reverse_proxy 127.0.0.1:7113
+	}
+
+	handle_path /api/diagnostics/* {
+		reverse_proxy 127.0.0.1:7114
+	}
+
+	handle_path /api/registry/* {
+		reverse_proxy 127.0.0.1:7115
+	}
+
+	handle /api/updates/* {
+		reverse_proxy 127.0.0.1:7116
+	}
+
+	handle /api/build-cache/v1/internal/* {
+		respond "not found" 404
+	}
+
+	handle_path /api/build-cache/* {
+		reverse_proxy 127.0.0.1:7117
+	}
+
+	handle /admin* {
+		respond "The shared admin toolbench is available in monolith mode." 503
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:7111
+	}
+}

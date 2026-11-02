@@ -1,0 +1,24 @@
+[package]
+name = "vapor_platform_server"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread"] }
+tokio-util = { version = "0.7", features = ["io"] }
+vapor_diagnostics_server = { path = "Vapor-Diagnostics-Server" }
+vapor_docs_server = { path = "Vapor-Docs-Server" }
+vapor_artifact_server = { path = "Vapor-Artifact-Server" }
+vapor_build_cache_server = { path = "Vapor-Build-Cache-Server" }
+vapor_homepage_server = { path = "Vapor-Homepage-Server" }
+vapor_identity_server = { path = "Vapor-Identity-Server" }
+vapor_registry_server = { path = "Vapor-Registry-Server" }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

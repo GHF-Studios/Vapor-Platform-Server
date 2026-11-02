@@ -14,6 +14,8 @@ STATEFUL_SERVICES=(
   vapor-docs.service
   vapor-identity.service
   vapor-diagnostics.service
+  vapor-platform-server.service
+  vapor-build-cache.service
 )
 ACTIVE_SERVICES=()
 TIMER_WAS_ACTIVE="false"
@@ -81,6 +83,8 @@ fi
 TMP_DIR="$(mktemp -d)"
 RESTORE_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 PRE_RESTORE_PATH="${BACKUP_ROOT}/pre-restore-${RESTORE_TIMESTAMP}"
+RESTORE_OPERATION_STARTED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RESTORE_OPERATION_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 
 cleanup() {
   rm -rf "${TMP_DIR}"
@@ -96,7 +100,26 @@ restart_services() {
   fi
 }
 
-trap 'status=$?; set +e; restart_services; cleanup; exit ${status}' EXIT
+record_restore_operation() {
+  local status="$?"
+  local result="failed"
+  local finished_at_utc
+  trap - EXIT
+  set +e
+  if [ "$status" -eq 0 ]; then
+    result="success"
+  fi
+  restart_services
+  cleanup
+  finished_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if ! write_operation_record \
+    restore "$result" "$RESTORE_OPERATION_STARTED_AT_UTC" "$finished_at_utc" \
+    "$RESTORE_OPERATION_REVISION" "$VAPOR_SERVER_MODE"; then
+    echo "warning: restore result could not be recorded" >&2
+  fi
+  exit "$status"
+}
+trap record_restore_operation EXIT
 
 if systemctl is-active --quiet vapor-deploy.timer; then
   TIMER_WAS_ACTIVE="true"

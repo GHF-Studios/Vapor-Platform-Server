@@ -35,6 +35,12 @@ path.
   and authorization decisions.
 - `Vapor-Diagnostics-Server` owns opt-in diagnostics uploads, redaction,
   indexes, retention, list/download/export, and diagnostics restore/import.
+- `Vapor-Artifact-Server` owns immutable public Vapor application release
+  manifests, signatures, archives, and the associated read routes. Release
+  signing remains offline; the service does not accept public uploads.
+- `Vapor-Build-Cache-Server` owns signed current Cargo target snapshots,
+  candidate validation/promotion, target availability, and its read-only admin
+  inventory. Platform composes its routes and deployment/recovery only.
 
 The root repo may provide shared deployment conventions. It must not absorb
 service business logic unless a shared library is deliberately introduced.
@@ -49,14 +55,34 @@ service business logic unless a shared library is deliberately introduced.
 /login/github             GitHub browser link flow after Steam login
 /logout                   identity session logout
 /admin                    public shell; privileged content requires root session
-/admin/roles/grant        browser role-grant form; root session only
-/admin/roles/revoke       browser role-revoke form; root session only
+/admin/operations         Platform-owned latest deployment/recovery status; root session only
+/admin/identity           Identity-owned dashboard; root session only
+/admin/identity/roles/grant browser role-grant form; root session only
+/admin/identity/roles/revoke browser role-revoke form; root session only
+/admin/workshop           Registry-owned read-only catalog; root session only
+/admin/artifacts          Artifact-owned read-only release inventory; root session only
+/admin/build-cache        Build Cache-owned read-only target inventory; root session only
+/api/admin/overview       root-authorized, secret-free service health summary
+/api/admin/operations     root-authorized latest deploy/restore status record
 /api/identity/            identity service API
 /api/diagnostics/         diagnostics service API
+/api/registry/            Registry catalog API
+/api/updates/v1/vapor/    immutable Artifact release API
+/api/build-cache/         current signed target snapshot API
 ```
 
 Every stateful service should expose a public, secret-free status probe
 that reports readiness and temporary auth model without leaking tokens.
+
+Protected admin sections authorize the Identity session at the owning service
+handler. The shared shell and navigation do not grant access. Registry and
+Artifact use distinct audience-bound server tokens; release inventory reports
+metadata and file presence but does not perform cryptographic verification or
+publication.
+
+Platform Operations displays only the latest validated deploy/restore status
+record and links to operator runbooks. It is read-only and is not an
+append-only audit log.
 
 Temporary pre-DNS HTTP-by-IP access exists only for the current setup phase. The
 intended long-lived public origin is `https://vapor.ghf-studios.site`.
@@ -132,6 +158,10 @@ They must not expose internal profile ids as operator-facing authority.
 /var/lib/vapor-server/docs           docs artifacts and current pointers
 /var/lib/vapor-server/identity       SQLite identity DB and session state
 /var/lib/vapor-server/diagnostics    uploaded diagnostics and indexes
+/var/lib/vapor-server/registry       Workshop/catalog metadata
+/var/lib/vapor-server/updates        immutable application releases
+/var/lib/vapor-server/build-cache   current target snapshots and candidate staging
+/var/lib/vapor-server/operations     latest deploy/restore status pointer
 /etc/vapor-server                    server-local env/secrets; not exported
 ```
 

@@ -13,6 +13,8 @@ SERVICES=(
   Vapor-Identity-Server
   Vapor-Diagnostics-Server
   Vapor-Registry-Server
+  Vapor-Artifact-Server
+  Vapor-Build-Cache-Server
 )
 
 for service in "${SERVICES[@]}"; do

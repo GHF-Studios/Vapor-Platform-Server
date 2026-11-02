@@ -13,6 +13,12 @@
 [submodule "Vapor-Registry-Server"]
 	path = Vapor-Registry-Server
 	url = https://github.com/GHF-Studios/Vapor-Registry-Server.git
+[submodule "Vapor-Artifact-Server"]
+	path = Vapor-Artifact-Server
+	url = https://github.com/GHF-Studios/Vapor-Artifact-Server.git
+[submodule "Vapor-Build-Cache-Server"]
+	path = Vapor-Build-Cache-Server
+	url = https://github.com/GHF-Studios/Vapor-Build-Cache-Server.git
 [submodule "Atlas"]
 	path = Atlas
 	url = https://github.com/GHF-Studios/Atlas.git
