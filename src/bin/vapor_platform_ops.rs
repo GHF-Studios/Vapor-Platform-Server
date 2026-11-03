@@ -1,3 +1,5 @@
+#[path = "../ssh_cli.rs"]
+mod ssh_cli;
 #[cfg(unix)]
 mod unix_impl {
     use base64::Engine;
@@ -66,6 +68,24 @@ mod unix_impl {
 
     pub async fn run_entry() {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
+        if args.first().is_some_and(|value| value == "ssh") {
+            match super::ssh_cli::parse_ssh_args(&args[1..]) {
+                Ok(super::ssh_cli::SshCommand::Help) => {
+                    println!("{}", super::ssh_cli::usage());
+                }
+                Ok(command) => {
+                    if let Err(detail) = run_ssh_command(command).await {
+                        eprintln!("error: {detail}");
+                        std::process::exit(1);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("error: {error}\n{}", super::ssh_cli::usage());
+                    std::process::exit(2);
+                }
+            }
+            return;
+        }
         if args.len() == 2 && args[0] == "--expire" {
             match expire(&args[1]).await {
                 Ok(()) => emit(true, &args[1], "expired", "temporary SSH grant expired"),
@@ -92,6 +112,251 @@ mod unix_impl {
                 emit(false, &id, "failed", detail);
                 std::process::exit(1);
             }
+        }
+    }
+
+    async fn run_ssh_command(command: super::ssh_cli::SshCommand) -> Result<(), String> {
+        if unsafe { libc::geteuid() } != 0 {
+            return Err(
+                "root privileges required; run this command through the approved operator path"
+                    .to_owned(),
+            );
+        }
+        let read_only = matches!(
+            &command,
+            super::ssh_cli::SshCommand::List
+                | super::ssh_cli::SshCommand::Show { .. }
+                | super::ssh_cli::SshCommand::Reconfigure { .. }
+        );
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(platform_database_path())
+                    .read_only(read_only)
+                    .create_if_missing(false)
+                    .foreign_keys(true)
+                    .busy_timeout(Duration::from_secs(5)),
+            )
+            .await
+            .map_err(|_| "Platform database is unavailable".to_owned())?;
+        match command {
+            super::ssh_cli::SshCommand::Help => println!("{}", super::ssh_cli::usage()),
+            super::ssh_cli::SshCommand::List => {
+                let rows = sqlx::query("SELECT id, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json, status, version, requested_duration_seconds, granted_duration_seconds, expires_at_unix FROM platform_ssh_access_requests ORDER BY created_at_unix DESC LIMIT 200")
+                    .fetch_all(&pool).await.map_err(|_| "could not list SSH requests".to_owned())?;
+                if rows.is_empty() {
+                    println!("No SSH access requests.");
+                }
+                for row in rows {
+                    println!(
+                        "{}  {}  v{}  {}  requested=[{}] {}s granted=[{}] {}s expires={}",
+                        row.get::<String, _>("id"),
+                        row.get::<String, _>("status"),
+                        row.get::<i64, _>("version"),
+                        row.get::<String, _>("fingerprint"),
+                        row.get::<String, _>("requested_capabilities_json"),
+                        row.get::<i64, _>("requested_duration_seconds"),
+                        row.get::<String, _>("granted_capabilities_json"),
+                        row.get::<Option<i64>, _>("granted_duration_seconds")
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".to_owned()),
+                        row.get::<Option<i64>, _>("expires_at_unix")
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".to_owned())
+                    );
+                    println!("  {}", terminal_safe(&row.get::<String, _>("purpose")));
+                }
+            }
+            super::ssh_cli::SshCommand::Show { request_id } => {
+                let row = ssh_request_row(&pool, &request_id).await?;
+                print_ssh_request(&row);
+            }
+            super::ssh_cli::SshCommand::Grant {
+                request_id,
+                capabilities,
+                duration_seconds,
+            } => {
+                let row = ssh_request_row(&pool, &request_id).await?;
+                print_ssh_request(&row);
+                if row.get::<String, _>("status") != "pending" {
+                    return Err("only a pending SSH request can be granted".to_owned());
+                }
+                println!(
+                    "\nRequested operation: grant {} for {} seconds with [{}].",
+                    request_id,
+                    duration_seconds,
+                    capabilities.join(", ")
+                );
+                let fingerprint: String = row.get("fingerprint");
+                println!("Type the displayed fingerprint exactly to create this temporary SSH account, key file, sudo policy, and expiry timer:");
+                confirm_stdin(&fingerprint)?;
+                let host_admin_confirmed = if capabilities
+                    .iter()
+                    .any(|capability| capability == "host_admin")
+                {
+                    eprintln!("WARNING: this grants unrestricted root access until expiry.");
+                    println!("Type UNRESTRICTED ROOT to confirm:");
+                    confirm_stdin("UNRESTRICTED ROOT")?;
+                    true
+                } else {
+                    false
+                };
+                let id = row.get::<String, _>("id");
+                let version = row.get::<i64, _>("version");
+                let expires = unix_now().saturating_add(duration_seconds);
+                let granted_json = serde_json::to_string(&capabilities)
+                    .map_err(|_| "could not encode grant scope".to_owned())?;
+                let transition = sqlx::query("UPDATE platform_ssh_access_requests SET status='provisioning', version=version+1, granted_capabilities_json=?, granted_duration_seconds=?, expires_at_unix=?, decided_by_profile_id=NULL, decided_by_actor_kind='local_operator', decided_by_actor_label='local-root', decided_at_unix=?, operation_detail='granting' WHERE id=? AND status='pending' AND version=?")
+                    .bind(&granted_json).bind(duration_seconds).bind(expires).bind(unix_now()).bind(&id).bind(version)
+                    .execute(&pool).await.map_err(|_| "could not begin SSH grant".to_owned())?;
+                if transition.rows_affected() != 1 {
+                    return Err("request changed before grant; no access was created".to_owned());
+                }
+                let input = Input {
+                    operation: Some("grant_ssh".to_owned()),
+                    request_id: id.clone(),
+                    expected_version: Some(version + 1),
+                    session_token: None,
+                    granted_capabilities: Some(capabilities),
+                    granted_duration_seconds: Some(duration_seconds),
+                    expires_at_unix: Some(expires),
+                    expected_fingerprint: Some(fingerprint),
+                    host_admin_confirmed: Some(host_admin_confirmed),
+                };
+                match grant_ssh(&pool, &id, &input).await {
+                    Ok(()) => {
+                        let result = sqlx::query("UPDATE platform_ssh_access_requests SET status='active', version=version+1, operation_detail=NULL WHERE id=? AND status='provisioning' AND version=?")
+                            .bind(&id).bind(version + 1).execute(&pool).await.map_err(|_| "account created but grant state update failed; inspect with ssh show".to_owned())?;
+                        if result.rows_affected() != 1 {
+                            return Err("account created but grant state changed unexpectedly; inspect with ssh show".to_owned());
+                        }
+                        println!("Temporary SSH access is active until {expires} (Unix time). Request {id}.");
+                    }
+                    Err((_, detail)) => {
+                        let _ = sqlx::query("UPDATE platform_ssh_access_requests SET status='failed', version=version+1, operation_detail=? WHERE id=? AND status='provisioning' AND version=?")
+                            .bind(detail).bind(&id).bind(version + 1).execute(&pool).await;
+                        return Err(format!("grant failed: {detail}; inspect with ssh show"));
+                    }
+                }
+            }
+            super::ssh_cli::SshCommand::Revoke { request_id } => {
+                let row = ssh_request_row(&pool, &request_id).await?;
+                print_ssh_request(&row);
+                let status: String = row.get("status");
+                if !matches!(status.as_str(), "active" | "failed") {
+                    return Err("only active or failed grants can be revoked".to_owned());
+                }
+                println!("\nType YES to revoke this grant and remove its managed account, key, sudo policy, and expiry timer:");
+                confirm_stdin("YES")?;
+                let id: String = row.get("id");
+                let version: i64 = row.get("version");
+                let transition = sqlx::query("UPDATE platform_ssh_access_requests SET status='provisioning', version=version+1, decided_by_profile_id=NULL, decided_by_actor_kind='local_operator', decided_by_actor_label='local-root', decided_at_unix=?, operation_detail='revoking' WHERE id=? AND status IN ('active','failed') AND version=?")
+                    .bind(unix_now()).bind(&id).bind(version).execute(&pool).await.map_err(|_| "could not begin SSH revocation".to_owned())?;
+                if transition.rows_affected() != 1 {
+                    return Err("grant changed before revocation".to_owned());
+                }
+                if let Err((_, detail)) = revoke_ssh(&pool, &id, version + 1).await {
+                    let _ = sqlx::query("UPDATE platform_ssh_access_requests SET status='failed', version=version+1, operation_detail='local revocation failed; access may remain active' WHERE id=? AND status='provisioning' AND version=?")
+                        .bind(&id).bind(version + 1).execute(&pool).await;
+                    return Err(format!("revocation failed: {detail}"));
+                }
+                let result = sqlx::query("UPDATE platform_ssh_access_requests SET status='revoked', version=version+1, public_key='', operation_detail=NULL WHERE id=? AND status='provisioning' AND version=?")
+                    .bind(&id).bind(version + 1).execute(&pool).await.map_err(|_| "account removed but revocation state update failed".to_owned())?;
+                if result.rows_affected() != 1 {
+                    return Err("account removed but grant state changed unexpectedly".to_owned());
+                }
+                println!("Temporary SSH grant {id} revoked.");
+            }
+            super::ssh_cli::SshCommand::Reconfigure { request_id } => {
+                let row = ssh_request_row(&pool, &request_id).await?;
+                print_ssh_request(&row);
+                println!("\nGrant scope and duration are immutable after approval. Revoke this grant, then submit a new request for the desired scope.");
+            }
+        }
+        Ok(())
+    }
+
+    async fn ssh_request_row(
+        pool: &SqlitePool,
+        id: &str,
+    ) -> Result<sqlx::sqlite::SqliteRow, String> {
+        sqlx::query("SELECT id, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json, requested_duration_seconds, granted_duration_seconds, status, version, created_at_unix, expires_at_unix, operation_detail FROM platform_ssh_access_requests WHERE id=?")
+            .bind(id).fetch_optional(pool).await.map_err(|_| "could not read SSH request".to_owned())?
+            .ok_or_else(|| "SSH request does not exist".to_owned())
+    }
+
+    fn print_ssh_request(row: &sqlx::sqlite::SqliteRow) {
+        println!("Request: {}", row.get::<String, _>("id"));
+        println!(
+            "Status: {} (version {})",
+            row.get::<String, _>("status"),
+            row.get::<i64, _>("version")
+        );
+        println!("Key fingerprint: {}", row.get::<String, _>("fingerprint"));
+        println!(
+            "Purpose: {}",
+            terminal_safe(&row.get::<String, _>("purpose"))
+        );
+        println!(
+            "Requested capabilities: {}",
+            row.get::<String, _>("requested_capabilities_json")
+        );
+        println!(
+            "Requested duration: {} seconds",
+            row.get::<i64, _>("requested_duration_seconds")
+        );
+        println!(
+            "Granted capabilities: {}",
+            row.get::<String, _>("granted_capabilities_json")
+        );
+        println!(
+            "Granted duration: {}",
+            row.get::<Option<i64>, _>("granted_duration_seconds")
+                .map(|v| format!("{v} seconds"))
+                .unwrap_or_else(|| "-".to_owned())
+        );
+        println!(
+            "Expires: {}",
+            row.get::<Option<i64>, _>("expires_at_unix")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_owned())
+        );
+        if let Some(detail) = row.get::<Option<String>, _>("operation_detail") {
+            println!("Detail: {}", terminal_safe(&detail));
+        }
+    }
+
+    fn terminal_safe(value: &str) -> String {
+        value
+            .chars()
+            .map(|character| {
+                if character.is_control() {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .collect()
+    }
+
+    fn confirm_stdin(expected: &str) -> Result<(), String> {
+        use std::io::{self, IsTerminal, Write};
+        if !io::stdin().is_terminal() {
+            return Err("interactive terminal required; no change made".to_owned());
+        }
+        print!("> ");
+        io::stdout()
+            .flush()
+            .map_err(|_| "could not prompt for confirmation".to_owned())?;
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .map_err(|_| "could not read confirmation".to_owned())?;
+        if answer.trim() == expected {
+            Ok(())
+        } else {
+            Err("confirmation did not match; no change made".to_owned())
         }
     }
 
@@ -971,7 +1236,8 @@ mod unix_impl {
             .map_err(|_| "temporary account cleanup failed")?;
         sqlx::query(
         "UPDATE platform_ssh_access_requests SET status = 'expired', version = version + 1,
-         public_key = '', decided_by_profile_id = NULL, operation_detail = NULL WHERE id = ? AND status IN ('active','provisioning','failed') AND expires_at_unix <= ?",
+         public_key = '', decided_by_profile_id = NULL, decided_by_actor_kind='system_expiry',
+         decided_by_actor_label='expiry-timer', operation_detail = NULL WHERE id = ? AND status IN ('active','provisioning','failed') AND expires_at_unix <= ?",
     )
     .bind(id)
     .bind(unix_now())
@@ -1009,5 +1275,20 @@ async fn main() {
 
 #[cfg(not(unix))]
 fn main() {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|value| value == "ssh") {
+        match ssh_cli::parse_ssh_args(&args[1..]) {
+            Ok(ssh_cli::SshCommand::Help) => println!("{}", ssh_cli::usage()),
+            Ok(_) => {
+                eprintln!("error: typed SSH operations require a Linux VPS");
+                std::process::exit(2);
+            }
+            Err(error) => {
+                eprintln!("error: {error}\n{}", ssh_cli::usage());
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     eprintln!("vapor_platform_ops is a Linux server helper and cannot run on this platform");
 }

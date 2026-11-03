@@ -76,6 +76,24 @@ const JS: &str = r#"
 (() => {
   const main = document.querySelector('main#admin-content');
   if (!main) return;
+  const responseFailure = async (response, fallback) => {
+    let detail = '';
+    try { detail = (await response.text()).trim(); } catch (_) {}
+    detail = detail.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 240);
+    if (response.status === 401) return 'Sign in with an Identity root account to review temporary SSH requests.';
+    if (response.status === 403) return 'Your signed-in account does not have the Platform root role.';
+    return `${fallback} (HTTP ${response.status})${detail ? `: ${detail}` : ''}`;
+  };
+  const showResponseFailure = async (container, response, fallback) => {
+    let message = container.querySelector(':scope > .ssh-operation-error');
+    if (!message) {
+      message = document.createElement('p');
+      message.className = 'error ssh-operation-error';
+      message.setAttribute('role', 'alert');
+      container.prepend(message);
+    }
+    message.textContent = await responseFailure(response, fallback);
+  };
   const modules = [
     ['Platform', '/admin', true],
     ['Operations', '/admin/operations', true],
@@ -300,11 +318,15 @@ const JS: &str = r#"
       let items;
       try {
         response = await fetch('/api/admin/ssh-access/requests', { credentials: 'same-origin', cache: 'no-store' });
-        items = await response.json().catch(() => null);
-      } catch (_) { sshAccess.textContent = 'Temporary SSH requests are unavailable.'; return; }
+      } catch (_) { sshAccess.textContent = 'Could not contact the temporary SSH service.'; return; }
       sshAccess.replaceChildren();
-      if (!response.ok) { sshAccess.textContent = 'Root access is required to review SSH requests.'; return; }
-      if (!Array.isArray(items) || !items.length) { sshAccess.textContent = 'No temporary SSH requests.'; return; }
+      if (!response.ok) {
+        await showResponseFailure(sshAccess, response, 'Could not load temporary SSH requests');
+        return;
+      }
+      items = await response.json().catch(() => null);
+      if (!Array.isArray(items)) { sshAccess.textContent = 'The temporary SSH service returned an invalid response.'; return; }
+      if (!items.length) { sshAccess.textContent = 'No temporary SSH requests.'; return; }
       for (const item of items) {
         const card = document.createElement('article'); card.className = 'card';
         const title = document.createElement('h3'); title.textContent = `${item.status} · ${item.fingerprint}`;
@@ -321,6 +343,37 @@ const JS: &str = r#"
           expiry.textContent = `${item.status === 'active' ? 'Expires' : 'Approved expiry'}: ${new Date(item.expires_at_unix * 1000).toLocaleString()}`;
           card.append(expiry);
         }
+        const history = document.createElement('details');
+        const historyLabel = document.createElement('summary'); historyLabel.textContent = 'Access history';
+        const historyBody = document.createElement('div'); historyBody.className = 'muted';
+        history.append(historyLabel, historyBody);
+        history.addEventListener('toggle', async () => {
+          if (!history.open || history.dataset.loaded === 'true') return;
+          historyBody.textContent = 'Loading request history…';
+          try {
+            const eventsResponse = await fetch(`/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/events`, {
+              credentials: 'same-origin', cache: 'no-store'
+            });
+            if (!eventsResponse.ok) {
+              await showResponseFailure(historyBody, eventsResponse, 'Could not load request history');
+              return;
+            }
+            const events = await eventsResponse.json().catch(() => null);
+            if (!Array.isArray(events)) { historyBody.textContent = 'The SSH service returned an invalid history response.'; return; }
+            historyBody.replaceChildren();
+            if (!events.length) { historyBody.textContent = 'No access history recorded.'; }
+            for (const event of events) {
+              const line = document.createElement('p');
+              const transition = event.from_status ? `${event.from_status} → ${event.to_status}` : event.to_status;
+              const actor = `${event.actor_kind || 'actor'} · ${event.actor_label || event.actor_profile_id || 'unknown'}`;
+              const timestamp = Number.isFinite(event.at_unix) ? new Date(event.at_unix * 1000).toLocaleString() : 'unknown time';
+              line.textContent = `${timestamp} · ${transition} · ${actor}`;
+              historyBody.append(line);
+            }
+            history.dataset.loaded = 'true';
+          } catch (_) { historyBody.textContent = 'Could not contact the temporary SSH service.'; }
+        });
+        card.append(history);
         if (item.status === 'active' && item.username) {
           const login = document.createElement('p');
           login.textContent = `SSH account: ${item.username}@${item.host} · port 22 · key ${item.fingerprint}`;
@@ -360,7 +413,7 @@ const JS: &str = r#"
               body: JSON.stringify({ expected_version: item.version, confirmed: true, host_admin_confirmed: adminConfirm.checked,
                 granted_capabilities: selected, granted_duration_seconds: Number(duration.value) })
             });
-            if (result.ok) await refresh(); else { button.disabled = false; button.textContent = `Failed (${result.status}); reload`; }
+            if (result.ok) await refresh(); else { button.disabled = false; await showResponseFailure(form, result, 'Grant failed'); }
           });
           card.append(form);
           const reject = document.createElement('button'); reject.type = 'button'; reject.textContent = 'Reject request';
@@ -370,7 +423,7 @@ const JS: &str = r#"
               method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ expected_version: item.version, confirmed: true })
             });
-            if (result.ok) await refresh(); else { reject.disabled = false; reject.textContent = `Failed (${result.status}); reload`; }
+            if (result.ok) await refresh(); else { reject.disabled = false; await showResponseFailure(card, result, 'Reject failed'); }
           });
           card.append(reject);
         } else if (item.status === 'active' || item.status === 'failed') {
@@ -386,7 +439,7 @@ const JS: &str = r#"
               method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ expected_version: item.version, confirmed: true })
             });
-            if (result.ok) await refresh(); else { button.disabled = false; button.textContent = `Failed (${result.status}); reload`; }
+            if (result.ok) await refresh(); else { button.disabled = false; await showResponseFailure(form, result, 'Revoke failed'); }
           });
           card.append(form);
         }
@@ -1034,6 +1087,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(post_response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn ssh_access_ui_distinguishes_authorization_failures_and_shows_safe_api_details() {
+        let response = super::router()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/assets/admin.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let script = std::str::from_utf8(&body).unwrap();
+        assert!(script
+            .contains("Sign in with an Identity root account to review temporary SSH requests."));
+        assert!(script.contains("Your signed-in account does not have the Platform root role."));
+        assert!(script.contains("const responseFailure = async (response, fallback) =>"));
+        assert!(script.contains("await showResponseFailure(form, result, 'Grant failed')"));
+        assert!(
+            script.contains("/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/events")
+        );
+        assert!(script.contains("Access history"));
     }
 
     #[tokio::test]

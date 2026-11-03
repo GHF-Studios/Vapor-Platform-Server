@@ -14,6 +14,7 @@ use std::time::Duration;
 
 const MAX_DURATION_SECONDS: i64 = 8 * 60 * 60;
 const MAX_REQUESTS: i64 = 200;
+const MAX_REQUEST_EVENTS: i64 = 100;
 const MAX_OPEN_REQUESTS_PER_PROFILE: i64 = 3;
 const PENDING_TTL_SECONDS: i64 = 3 * 24 * 60 * 60;
 const MAX_PURPOSE_BYTES: usize = 500;
@@ -81,6 +82,16 @@ struct SshRequestSummary {
 }
 
 #[derive(Serialize)]
+struct SshRequestEvent {
+    from_status: Option<String>,
+    to_status: String,
+    actor_profile_id: Option<String>,
+    actor_kind: String,
+    actor_label: Option<String>,
+    at_unix: i64,
+}
+
+#[derive(Serialize)]
 struct CreatedSshRequest {
     id: String,
     fingerprint: String,
@@ -105,6 +116,10 @@ pub(crate) fn router() -> Router {
     Router::new()
         .route("/api/ssh-access/requests", post(create_request))
         .route("/api/admin/ssh-access/requests", get(list_requests))
+        .route(
+            "/api/admin/ssh-access/requests/{id}/events",
+            get(list_request_events),
+        )
         .route(
             "/api/admin/ssh-access/requests/{id}/approve",
             post(approve_request),
@@ -142,6 +157,8 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
             created_at_unix INTEGER NOT NULL,
             expires_at_unix INTEGER,
             decided_by_profile_id TEXT,
+            decided_by_actor_kind TEXT NOT NULL DEFAULT 'identity_profile',
+            decided_by_actor_label TEXT,
             decided_at_unix INTEGER,
             operation_detail TEXT
         )",
@@ -158,6 +175,8 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
             from_status TEXT,
             to_status TEXT NOT NULL,
             actor_profile_id TEXT,
+            actor_kind TEXT NOT NULL DEFAULT 'identity_profile',
+            actor_label TEXT,
             at_unix INTEGER NOT NULL
         )",
     )
@@ -184,6 +203,7 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     )
     .execute(&pool)
     .await?;
+    crate::ssh_schema::ensure_audit_actor_columns(&pool).await?;
     Ok(())
 }
 
@@ -379,6 +399,45 @@ async fn list_requests(State(state): State<SshAccessState>, headers: HeaderMap) 
     Json(requests).into_response()
 }
 
+async fn list_request_events(
+    State(state): State<SshAccessState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !valid_id(&id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if let Err(response) = require_root(&state, &headers).await {
+        return response;
+    }
+    let rows = match sqlx::query(
+        "SELECT from_status, to_status, actor_profile_id, actor_kind, actor_label, at_unix
+         FROM platform_ssh_access_events WHERE request_id=? ORDER BY event_id DESC LIMIT ?",
+    )
+    .bind(&id)
+    .bind(MAX_REQUEST_EVENTS)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let events = rows
+        .into_iter()
+        .filter_map(|row| {
+            Some(SshRequestEvent {
+                from_status: row.try_get("from_status").ok()?,
+                to_status: row.try_get("to_status").ok()?,
+                actor_profile_id: row.try_get("actor_profile_id").ok()?,
+                actor_kind: row.try_get("actor_kind").ok()?,
+                actor_label: row.try_get("actor_label").ok()?,
+                at_unix: row.try_get("at_unix").ok()?,
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(events).into_response()
+}
+
 async fn approve_request(
     State(state): State<SshAccessState>,
     headers: HeaderMap,
@@ -436,12 +495,17 @@ async fn approve_request(
             .into_response();
     }
     let expires = unix_now().saturating_add(request.granted_duration_seconds);
+    let granted = serde_json::to_string(&request.granted_capabilities).unwrap_or_default();
     let transitioning = sqlx::query(
         "UPDATE platform_ssh_access_requests SET status = 'provisioning', version = version + 1,
-         decided_by_profile_id = ?, decided_at_unix = ?, expires_at_unix = ?, operation_detail='granting'
+         decided_by_profile_id = ?, decided_by_actor_kind='identity_profile', decided_by_actor_label=NULL,
+         granted_capabilities_json = ?, granted_duration_seconds = ?, decided_at_unix = ?,
+         expires_at_unix = ?, operation_detail='granting'
          WHERE id = ? AND status = 'pending' AND version = ?",
     )
     .bind(actor)
+    .bind(&granted)
+    .bind(request.granted_duration_seconds)
     .bind(unix_now())
     .bind(expires)
     .bind(&id)
@@ -476,14 +540,11 @@ async fn approve_request(
         )
             .into_response();
     }
-    let granted = serde_json::to_string(&request.granted_capabilities).unwrap_or_default();
     let active_result = sqlx::query(
         "UPDATE platform_ssh_access_requests SET status = 'active', version = version + 1,
-         granted_capabilities_json = ?, granted_duration_seconds = ?, expires_at_unix = ?,
+         expires_at_unix = ?,
          operation_detail = NULL WHERE id = ? AND status = 'provisioning' AND version = ?",
     )
-    .bind(granted)
-    .bind(request.granted_duration_seconds)
     .bind(expires)
     .bind(&id)
     .bind(request.expected_version + 1)
@@ -517,7 +578,8 @@ async fn reject_request(
     };
     let result = sqlx::query(
         "UPDATE platform_ssh_access_requests SET status='rejected', version=version+1,
-         public_key='', decided_by_profile_id=?, decided_at_unix=?, operation_detail='request rejected'
+         public_key='', decided_by_profile_id=?, decided_by_actor_kind='identity_profile', decided_by_actor_label=NULL,
+         decided_at_unix=?, operation_detail='request rejected'
          WHERE id=? AND status='pending' AND version=?",
     )
     .bind(actor)
@@ -557,7 +619,8 @@ async fn revoke_grant(
     };
     let transition = sqlx::query(
         "UPDATE platform_ssh_access_requests SET status = 'provisioning', version = version + 1,
-         decided_by_profile_id = ?, decided_at_unix = ?, operation_detail='revoking'
+         decided_by_profile_id = ?, decided_by_actor_kind='identity_profile', decided_by_actor_label=NULL,
+         decided_at_unix = ?, operation_detail='revoking'
          WHERE id = ? AND status IN ('active','failed') AND version = ?",
     )
     .bind(actor)
@@ -739,7 +802,8 @@ async fn expire_stale_requests(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let interrupted_cutoff = now.saturating_sub(120);
     sqlx::query(
         "UPDATE platform_ssh_access_requests SET status='expired', version=version+1,
-         public_key='', decided_by_profile_id=NULL, operation_detail=NULL
+         public_key='', decided_by_profile_id=NULL, decided_by_actor_kind='system_expiry',
+         decided_by_actor_label='expiry-timer', operation_detail=NULL
          WHERE status='pending' AND created_at_unix <= ?",
     )
     .bind(cutoff)
@@ -747,6 +811,7 @@ async fn expire_stale_requests(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
     sqlx::query(
         "UPDATE platform_ssh_access_requests SET status='failed', version=version+1,
+         decided_by_actor_kind='system_recovery', decided_by_actor_label='startup-recovery',
          operation_detail='interrupted privileged operation; cleanup may be required'
          WHERE status='provisioning' AND decided_at_unix <= ?",
     )
@@ -762,4 +827,31 @@ async fn no_store(request: Request<Body>, next: Next) -> Response {
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn request_history_requires_an_identity_root_session() {
+        let state = SshAccessState {
+            pool: SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_lazy("sqlite::memory:")
+                .unwrap(),
+            client: reqwest::Client::new(),
+            identity_root_authz_url: String::new(),
+            identity_root_authz_token: None,
+            public_origin: "https://example.invalid".to_owned(),
+            ssh_host: "example.invalid".to_owned(),
+        };
+        let response = list_request_events(
+            State(state),
+            HeaderMap::new(),
+            Path("fb9ef006-f6ad-420c-9ad7-31337b2b1e52".to_owned()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }

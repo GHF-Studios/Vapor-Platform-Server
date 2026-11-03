@@ -3,6 +3,7 @@ mod admin_auth;
 mod deploy_requests;
 mod ssh_access;
 mod ssh_key;
+mod ssh_schema;
 
 use axum::Router;
 use std::env;

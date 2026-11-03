@@ -1,0 +1,226 @@
+# Standalone Vapor Product and Platform Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Deliver Vapor as an independently installed platform that manages Loo Cast and user-owned Mad Max installs under clear source, publication, update, and operator-control boundaries.
+
+**Architecture:** This is a coordinating plan for the approved cross-repo design, not a replacement for the service-owned implementation plans listed below. Execute dependency lanes in order, preserve each repository’s ownership, and require a usable acceptance result at each phase before advancing. Vapor Client owns local install/source workflows; server submodules own their policy and business logic; Platform composes and operates those services.
+
+**Tech Stack:** Rust workspaces and Cargo, Steam depot/launch metadata, signed Vapor release artifacts, Rust/Axum/SQLite service modules, OpenSSH/systemd for VPS operations, and isolated VPS-managed Linux and Windows build guests.
+
+**Spec:** `docs/superpowers/specs/2026-11-03-vapor-standalone-product-platform-design.md`
+
+## Global Constraints
+
+- Vapor is installed, updated, repaired, and uninstalled independently of Steam.
+- Vapor servers never distribute Loo Cast or Mad Max game files.
+- Product/source rights are enforced by server-owned policy; client manifests and UI cannot grant publication rights.
+- Keep each service’s business logic and state in its root-level submodule; Platform owns composition and deployment orchestration.
+- Preserve independent service rebuild/deploy and composed whole-system export/import.
+- Preserve dirty work in Vapor Client, Vapor-Client-madmax, and MM-Building-System; reconcile ownership before combining overlapping changes.
+- Use the active Vapor Context/Subject/Selection and source-identity contracts; do not mint parallel product identity schemas.
+- Keep the VPS admin toolbench distinct from the Vapor Client’s local game workflows.
+- Keep secrets out of source, ordinary state exports, logs, and public artifact feeds.
+- Keep the existing exact-revision deploy approval contract and service-owned Identity permission approval contract.
+- Use one current signed build snapshot per supported target and rolling lock; build through VPS-managed isolated guests, not the owner’s workstation.
+
+## Review Focus
+
+- **Stale or conflicting product identity:** a local source must resolve to exactly one canonical product/source identity using Vapor core’s active contract.
+- **Manifest spoofing:** an untrusted package claiming “publishable” must still be denied by Identity/Registry policy.
+- **Missing or changed local game files:** discovery, cache generation, and repair must never fetch licensed game bytes from Vapor infrastructure.
+- **Interrupted update or profile switch:** local state and game installation must recover to a known prior state or a truthful repair-required state.
+- **Expired or partially applied VPS access:** the operator workflow must show actual grant state, expiry, audit actor, and cleanup outcome; a submitted or approved request alone must not be reported as active access.
+
+## Repository and Plan Map
+
+The root Platform repository coordinates deployment and owns this roadmap. Detailed implementation remains in its existing service/client plans:
+
+| Workstream | Owner/repository | Existing execution plan |
+| --- | --- | --- |
+| Canonical Context/Subject/Selection and source identity | `GHF-Studios/Vapor` | Vapor issues #1 and #2; consume their accepted contracts |
+| Standalone signed app release and update | `GHF-Studios/Vapor-Client` | `docs/superpowers/plans/2026-11-01-vapor-standalone-distribution-and-updates.md` in the client workspace |
+| Server-owned product authority and uploads | Registry, Identity, Artifact submodules | `docs/superpowers/plans/2026-11-02-vapor-server-product-authority-and-uploads.md` |
+| Admin shell and operator sections | Platform root + service submodules | `docs/superpowers/plans/2026-11-02-vapor-platform-admin-toolbench.md` |
+| Deployment and temporary SSH | Platform root + Identity submodule | `docs/superpowers/plans/2026-11-03-vps-operations-and-temporary-ssh.md` |
+| Typed local VPS SSH operation | Platform root | `docs/superpowers/specs/2026-11-03-typed-vps-ssh-operations-design.md` (owner-authorized bootstrap path; web approval remains supported) |
+| Target build snapshots and guests | Build Cache submodule + Platform | `docs/superpowers/plans/2026-11-02-vapor-target-build-snapshots-and-builders.md` |
+| Mad Max content discovery and mounting | `GHF-Studios/MM-Building-System` + Vapor Client adapter | `docs/superpowers/plans/2026-11-01-madmax-local-data-workbench.md` in the Mad Max workspace |
+| Loo Cast product/depot packaging | Loo Cast repository + Vapor Client adapter | Create a focused Loo Cast migration plan after depot/app identifiers and retirement sequence are verified |
+
+**Platform-owned coordination files:**
+
+- Modify: `docs/superpowers/specs/2026-11-03-vapor-standalone-product-platform-design.md` only when an owner-approved architectural decision changes.
+- Create: this coordinating plan.
+- Existing detailed Platform plans remain authoritative for Platform-owned implementation; do not duplicate their task lists here.
+
+## Task 1: Establish an accurate recovery and access baseline
+
+**Files:**
+- Read: `docs/superpowers/plans/2026-11-03-vps-operations-and-temporary-ssh.md`
+- Read: `docs/superpowers/specs/2026-11-03-typed-vps-ssh-operations-design.md`
+- Modify: Platform/Identity operation code only through the approved access plan.
+
+**Interfaces:**
+- Input: the existing requester-initiated SSH request and Identity/Platform authorization records.
+- Output: an auditable operator path that can inspect the request and report whether a grant is actually active, including exact scope, account, host, and expiry.
+- A root-only typed local operator operation is authorized by the owner as the bootstrap path. It must use the existing managed grant/account/expiry implementation, preserve audit attribution, require interactive confirmation after displaying all grant details, and never grant more than the selected allowed scope. Do not create a fallback static key allowlist or edit `authorized_keys` manually.
+
+- [ ] Inspect the live request state through the existing Identity/Platform APIs and identify why web Operations does not display a reliable result.
+- [x] Repair the SSH section's authorization/error display locally; make 401, 403, service errors, and bounded response details distinguishable. Remaining service-owned approval/status and deploy work stays in the existing temporary SSH plan.
+- [ ] Implement the typed `ssh show`, `ssh grant`, `ssh revoke`, and safe reconfigure guidance in the existing root helper, with local-operator audit identity; require typing the displayed fingerprint for grants and require root plus confirmation for every mutation.
+- [ ] Grant through either the browser root decision or typed local operator path only after it displays the exact key fingerprint, selected capabilities, and expiry.
+- [ ] Verify SSH authentication, server-side capability scope, audit actor, revoke, and natural expiry before treating access as recovered.
+- [ ] Run the SSH and deploy approval regression checks in the existing temporary SSH plan; expected result is an active grant only after the grant operation succeeds and an inactive grant after revoke/expiry.
+
+## Task 2: Reconcile repository ownership without losing work
+
+**Files:**
+- Read: Vapor Client main and Mad Max client workstream registries/manifests.
+- Read: all dirty files and submodule states in the Vapor Client, Vapor-Client-madmax, and MM-Building-System checkouts.
+- Modify: workstream ownership/registry documents only after each change has a named authoritative checkout.
+
+**Interfaces:**
+- Consumes: existing dirty trees as source material; no checkout is assumed disposable.
+- Produces: a per-change ownership ledger naming source checkout, destination owner, dependency, and merge method.
+
+- [x] Inventory uncommitted changes and submodule revisions; record hashes/status without cleaning or resetting. Snapshot: `.superpowers/sdd/2026-11-03-vapor-standalone-product-platform/repository-ownership.md`.
+- [x] Resolve overlapping claims for `Vapor/**`, `Vapor-Installer/**`, CLI SSH support, and Mad Max integration with a written ownership map. Ambiguous update code is preserved and assigned for one canonical integration path before merge.
+- [ ] Confirm each destination repository has a focused implementation plan before moving code across repository boundaries.
+- [ ] Verify all original dirty changes remain recoverable after any later integration; no broad merge or cleanup is permitted in this task.
+
+## Task 3: Complete Vapor’s canonical identity prerequisites
+
+**Files:**
+- Owner: `GHF-Studios/Vapor` core repository.
+- Reference: active issues #1 and #2 and their accepted design/implementation artifacts.
+
+**Interfaces:**
+- Produces: canonical Context/Subject/Selection and hierarchical source identity contracts for client and product adapters.
+- Consumers: Vapor Client, Loo Cast adapter, Mad Max adapter, Registry, Identity, and Artifact.
+
+- [ ] Complete Vapor issue #1 and publish its stable public types/serialization contract.
+- [ ] Complete Vapor issue #2 against issue #1 and publish source identity semantics.
+- [ ] Add compatibility fixtures proving product source identifiers remain stable across local path changes and distinct products cannot alias.
+- [ ] Run Vapor core’s unit, serialization, and dependent workspace checks; expected result is the same identity mapping through local client and server adapters.
+- [ ] Update dependent plans to reference the accepted API instead of duplicating assumptions.
+
+## Task 4: Enforce product/source policy on the server
+
+**Files:**
+- Modify: `Vapor-Registry-Server` product/source policy and catalog validation.
+- Modify: `Vapor-Identity-Server` authorization policy and audited permission path.
+- Modify: `Vapor-Artifact-Server` only for Vapor application release artifacts.
+- Reference: `docs/superpowers/plans/2026-11-02-vapor-server-product-authority-and-uploads.md`.
+
+**Interfaces:**
+- Input: canonical Vapor product/source identity and authenticated author/request identity.
+- Output: server-owned decision for local-only, externally licensed, or community-publishable content; signed Vapor executable release remains a separate artifact class.
+
+- [ ] Implement the detailed authority/upload plan after Task 3 supplies canonical identity.
+- [ ] Add policy cases for Loo Cast depot-only first-party products, Mad Max licensed local source files, user-created mod content, and Vapor app releases.
+- [ ] Verify a client-supplied publishability flag cannot override policy, and that game files are rejected before upload storage.
+- [ ] Run Registry/Identity/Artifact policy tests from the detailed plan; expected result is only explicitly authorized community data being publishable.
+
+## Task 5: Complete standalone Vapor installation and release lifecycle
+
+**Files:**
+- Owner: `GHF-Studios/Vapor-Client` and its Installer/Core submodules.
+- Reference: `docs/superpowers/plans/2026-11-01-vapor-standalone-distribution-and-updates.md` in the client workspace.
+
+**Interfaces:**
+- Input: signed Vapor release from Artifact and active platform/toolchain lock.
+- Output: independent install, update, repair, rollback, and uninstall under a coherent Vapor home, without Steam owning Vapor files or lifecycle.
+
+- [ ] Reconcile ownership from Task 2 before implementing overlapping updater/installer files.
+- [ ] Complete signed archive verification, staged extraction, transactional app-root replacement, rollback, GUI state, and production trust provisioning using the detailed plan.
+- [ ] Place managed sources/tools/cache/state under Vapor home according to existing path ownership; do not create a second competing home-layout authority.
+- [ ] Make the public download page acquire the signed standalone installer from Artifact and show the supported release/target.
+- [ ] Run release signature, interrupted install/update, rollback, uninstall, and clean-machine bootstrap checks; expected result is no Steam dependency for Vapor’s own lifecycle.
+
+## Task 6: Move Loo Cast and Mad Max into distinct managed product adapters
+
+**Files:**
+- Modify: Loo Cast product manifests and Steam depot/entrypoint metadata in the Loo Cast owner repository.
+- Modify: Vapor Client product source/adapters and launch selection.
+- Modify: `GHF-Studios/MM-Building-System` ecosystem manifest/adapter integration only in its own checkout.
+- Create: Loo Cast depot/product migration plan after identifiers are verified.
+
+**Interfaces:**
+- Loo Cast source: trusted local depot containing exactly Engine, Game, and Packagepack first-party products; Vapor handoff is optional and does not install Vapor.
+- Mad Max source: user-selected local game installation; source files are never uploaded; derived index/cache is stored separately and can be rebuilt.
+- Output: product/source records conforming to Task 3’s canonical identity contract.
+
+- [ ] Verify Loo Cast Steam AppID/depot IDs, launch choices, existing Workshop item IDs, and owner-controlled retirement sequence; do not infer replacement identifiers.
+- [ ] Move Loo Cast first-party content out of public Workshop semantics and mark it server-authoritatively local-only.
+- [ ] Keep the official Steam app’s Loo Cast launch path and add the Vapor tools-selector handoff; missing Vapor shows install guidance without Steam-managed Vapor installation.
+- [ ] Add Mad Max install discovery, local source validation, separate derived cache, and reversible mod receipts using the Mad Max detailed plan.
+- [ ] Verify missing/changed game files lead to actionable repair, never a download from Vapor; verify Loo Cast depot content cannot publish.
+- [ ] Test both adapters against canonical identity fixtures and test the Loo Cast launch handoff with Vapor present and absent.
+
+## Task 7: Make the admin toolbench reflect real service operations
+
+**Files:**
+- Modify: `src/admin.rs`, Platform routes/auth clients, and shared admin assets.
+- Modify: service-owned sections in Registry, Identity, Artifact, and Build Cache submodules.
+- Reference: `docs/superpowers/plans/2026-11-02-vapor-platform-admin-toolbench.md` plus its productization phase.
+
+**Interfaces:**
+- Platform owns shared navigation, truthful module readiness, cross-service composition, and Platform operations.
+- Each service owns its policy, data, actions, and audit result.
+- Dashboard actions return operation IDs and expose exact target, confirmation, progress, and final outcome.
+
+- [ ] Complete Task 1 before labeling SSH grants usable; display pending, approved, active, expired, revoked, and failed distinctly.
+- [ ] Replace duplicated Rust/JavaScript navigation and hardcoded availability with one route/module registry and service readiness inputs.
+- [ ] Split Operations into task-focused Deployments, Temporary Access, Hosting, and History sections while retaining exact-revision deploy approval.
+- [ ] Add service-owned catalog, identity, releases, and build snapshot sections through their APIs rather than duplicating business logic in Platform.
+- [ ] Preserve useful error bodies, request IDs, audit attribution, and truthful unavailable states in all mutation/list failures.
+- [ ] Run section authorization tests, state-transition tests, navigation/readiness rendering checks, and operation error display checks; expected result is each action is owned and audited by its responsible service.
+
+## Task 8: Produce signed rolling target snapshots on VPS-managed guests
+
+**Files:**
+- Owner: `Vapor-Build-Cache-Server` and Platform orchestration.
+- Reference: `docs/superpowers/plans/2026-11-02-vapor-target-build-snapshots-and-builders.md`.
+
+**Interfaces:**
+- Targets: `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-gnullvm`.
+- Output: one current signed snapshot per target and lock, fetched by Vapor Client after toolchain installation.
+- Build location: VPS-managed isolated guests; owner workstation is not a required builder.
+
+- [ ] Perform read-only VPS resource, hypervisor, storage, and Windows guest licensing preflight; record whether the selected VPS can host both guests.
+- [ ] If capacity/licensing is insufficient, stop builder deployment and report the exact blocker; do not silently use an external host or owner PC.
+- [ ] Implement guest lifecycle, operation ledger, pinned images, build, signing, promotion, and cleanup through the existing target snapshot plan.
+- [ ] Integrate client snapshot verification/install under the single rolling Vapor/toolchain lock.
+- [ ] Verify each target produces and restores a matching snapshot and that a stale or wrong-target snapshot is rejected.
+
+## Task 9: Prove clean reconstruction and operator recovery
+
+**Files:**
+- Modify: Platform composed export/import and recovery scripts.
+- Modify: service-owned export/import contracts only in their owning submodules.
+- Modify: Vapor Client bootstrap/recheckout behavior only in its owner repository.
+
+**Interfaces:**
+- Input: clean source checkouts, signed Vapor releases/snapshots, and explicitly backed-up service state/secrets.
+- Output: a rebuilt platform and client with operational service state restored, without relying on hidden working directories or game-file backups.
+
+- [ ] Run composed export and inspect that service state is included while secrets are separately protected and game bytes are excluded.
+- [ ] Reconstruct Platform from tracked root/submodule revisions and restore a test export into a clean instance.
+- [ ] Reconstruct the client/source checkout and rehydrate matching target snapshots from the Build Cache service.
+- [ ] Verify service health, admin readiness, product policy, and one non-destructive local-game discovery after restore.
+- [ ] Document the single supported pre-alpha recovery path and remove obsolete setup instructions only after successful reconstruction.
+
+## Program Exit Criteria
+
+- Vapor installs and updates independently; Steam owns only the intended Loo Cast depots and optional handoff.
+- Loo Cast’s first-party products remain local/depot-provided and cannot be published as community content.
+- Mad Max content is locally discovered and managed without Vapor distributing game bytes.
+- Identity/Registry enforce source and publication policy regardless of client claims.
+- Operations work through a truthful, audited shared toolbench; privileged access is temporary, bounded, and actually verified.
+- Both supported build targets have current VPS-produced signed snapshots, or a documented VPS-only resource/licensing blocker.
+- A clean reconstruction succeeds from tracked source plus owned state without hidden checkout state or licensed game files.
+
+## Execution Order and Handoff
+
+Execute Tasks 1–3 first. Tasks 4–7 follow their identity and ownership prerequisites; Task 8 may proceed after a successful resource preflight; Task 9 is the final release gate. Detailed plans remain the code-level source of truth for each task. Before a task spans repositories, create an isolated execution worktree for that repository and record its base revision; never stage this root repo’s unrelated dirty files as part of another lane.

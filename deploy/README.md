@@ -135,3 +135,24 @@ for smoke testing only; the intended public endpoint remains
   The docs admin token stays in the server's root-readable configuration.
 - `scripts/deploy-vapor-client-docs.sh`: build and deploy the curated docs bundle
   in one operator command.
+
+## Temporary SSH operator workflow
+
+The installed `/usr/local/libexec/vapor-platform-ops` helper exposes a closed, root-only local
+operator interface. It never prints the stored public key and requires a real
+terminal for every mutation:
+
+```text
+sudo /usr/local/libexec/vapor-platform-ops ssh list
+sudo /usr/local/libexec/vapor-platform-ops ssh show <request-id>
+sudo /usr/local/libexec/vapor-platform-ops ssh grant <request-id> --capability vapor_deploy --capability vapor_service_control --duration 8h
+sudo /usr/local/libexec/vapor-platform-ops ssh revoke <request-id>
+sudo /usr/local/libexec/vapor-platform-ops ssh reconfigure <request-id>
+```
+
+Grant prints the fingerprint, purpose, requested and selected scope, and expiry;
+the operator must type the fingerprint exactly. `host_admin` is exclusive and
+requires a second `UNRESTRICTED ROOT` confirmation. Revoke requires typing
+`YES`. Reconfigure explains the revoke-and-new-request process and makes no
+change. Local mutations appear as `local-root` in the SSH audit trail; web
+approvals remain attributed to the Identity profile.
