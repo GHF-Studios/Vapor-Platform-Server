@@ -18,7 +18,6 @@ STATEFUL_SERVICES=(
   vapor-build-cache.service
 )
 ACTIVE_SERVICES=()
-TIMER_WAS_ACTIVE="false"
 
 usage() {
   cat >&2 <<'USAGE'
@@ -95,9 +94,7 @@ restart_services() {
   for service in "${ACTIVE_SERVICES[@]}"; do
     systemctl start "${service}"
   done
-  if [ "${TIMER_WAS_ACTIVE}" = "true" ]; then
-    systemctl start vapor-deploy.timer
-  fi
+  # The old polling deploy timer is retired. A restore must never reactivate it.
 }
 
 record_restore_operation() {
@@ -122,9 +119,10 @@ record_restore_operation() {
 trap record_restore_operation EXIT
 
 if systemctl is-active --quiet vapor-deploy.timer; then
-  TIMER_WAS_ACTIVE="true"
+  echo "restore: stopping retired deploy timer; it will remain disabled"
   systemctl stop vapor-deploy.timer
 fi
+systemctl disable vapor-deploy.timer >/dev/null 2>&1 || true
 systemctl stop vapor-deploy.service 2>/dev/null || true
 
 for service in "${STATEFUL_SERVICES[@]}"; do
@@ -149,7 +147,6 @@ find "${VAPOR_STATE_ROOT}" -type f -exec chmod 0640 {} +
 
 restart_services
 ACTIVE_SERVICES=()
-TIMER_WAS_ACTIVE="false"
 
 "${SCRIPT_DIR}/health-check.sh"
 

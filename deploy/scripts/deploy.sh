@@ -178,7 +178,8 @@ else
   "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-services-caddy.sh"
 fi
 
-"${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-auto-deploy.sh"
+"${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-approved-operations.sh"
+"${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-platform-ops.sh"
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-state-backup.sh"
 
 if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then

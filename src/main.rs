@@ -1,6 +1,8 @@
 mod admin;
 mod admin_auth;
 mod deploy_requests;
+mod ssh_access;
+mod ssh_key;
 
 use axum::Router;
 use std::env;
@@ -12,6 +14,7 @@ const DEFAULT_BIND: &str = "127.0.0.1:7110";
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind = env::var("VAPOR_PLATFORM_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
     deploy_requests::initialize().await?;
+    ssh_access::initialize().await?;
     let identity = vapor_identity_server::routers_from_env().await?;
     let artifacts = vapor_artifact_server::routers_from_env().await?;
     let registry = vapor_registry_server::routers_from_env().await?;
@@ -21,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/docs", vapor_docs_server::app_router_from_env().await?)
         .nest("/api/identity", identity.api)
         .merge(admin::router())
+        .merge(ssh_access::router())
         .merge(identity.web)
         .nest(
             "/api/diagnostics",

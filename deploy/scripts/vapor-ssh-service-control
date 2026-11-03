@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$#" -ne 2 ] || [ "$1" != "restart" ]; then
+  echo "usage: vapor-ssh-service-control restart <allowed-service>" >&2
+  exit 2
+fi
+case "$2" in
+  vapor-platform-server.service|vapor-homepage.service|vapor-docs.service|vapor-identity.service|vapor-diagnostics.service|vapor-registry.service|vapor-artifact.service|vapor-build-cache.service|caddy.service)
+    exec /usr/bin/systemctl restart -- "$2"
+    ;;
+  *) echo "service is not in the temporary-access allowlist" >&2; exit 2 ;;
+esac

@@ -60,15 +60,22 @@ for smoke testing only; the intended public endpoint remains
 - `scripts/deploy-atlas.sh`: validate and atomically publish the Atlas commit
   pinned by the approved root revision under `/srv/vapor-web/atlas`, separately
   from Docs.
-- `scripts/install-auto-deploy.sh`: install a systemd timer that polls the
-  approved-request worker. An empty queue is a no-op; the timer never deploys
-  the latest branch by itself.
+- `scripts/install-approved-operations.sh`: install request-specific deploy
+  units and remove the retired periodic deploy timer.
+- `scripts/install-platform-ops.sh`: install the fixed root operation helper,
+  SSH wrappers, and the isolated temporary-account SSH policy.
+- `scripts/report-cutover-preflight.sh`: upload a short-lived, secret-free
+  report of the active VPS source revision, relevant service states, path
+  metadata, and expected route status codes. It does not change host state.
+- `scripts/remove-platform-ssh-access.sh`: disable new temporary SSH grants and
+  remove only this feature's SSH policy after every grant is revoked or expired;
+  the shared deploy-operation helper stays installed.
+- `scripts/install-auto-deploy.sh`: retained as a guard that rejects the
+  retired timer-based path.
 - `scripts/install-state-backup.sh`: install a systemd timer that periodically
   runs `export-state.sh`.
 - `scripts/harden-vps.sh`: make SSH key-only explicit and enable UFW for
   SSH/HTTP/HTTPS.
-- `scripts/install-github-actions-deploy-user.sh`: legacy/manual service helper;
-  GitHub Actions no longer receives SSH access or permission to start deploys.
 - `scripts/configure-identity-auth.sh`: update server-local identity provider
   configuration in `/etc/vapor-server/identity.env` without committing secrets,
   including GitHub browser OAuth credentials and public redirect origin.
@@ -103,6 +110,10 @@ for smoke testing only; the intended public endpoint remains
 - `systemd/vapor-build-cache.service`: independently runnable target snapshot
   service for `VAPOR_SERVER_MODE=services`; state lives under
   `/var/lib/vapor-server/build-cache`.
+- `docs/vapor-build-snapshot-contract.md`: contract for one signed current
+  compiler snapshot per locked target. VPS-hosted Linux and Windows VM
+  orchestration is a separate unfinished milestone; this server currently
+  composes and administers Build Cache but does not yet create those snapshots.
 - `scripts/install-caddy.sh`: render/install the Caddy config.
 - `caddy/Caddyfile.services.template`: path routing for the independent
   service-process mode; the default template routes through the composed host.

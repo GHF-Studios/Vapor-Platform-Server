@@ -7,7 +7,12 @@ source "${SCRIPT_DIR}/lib.sh"
 
 require_root
 QUEUE_DB="${VAPOR_PLATFORM_DB:-${VAPOR_PLATFORM_STATE:-${VAPOR_STATE_ROOT}/platform}/platform.sqlite3}"
-CLAIM="$(python3 "${SCRIPT_DIR}/deploy-request-queue.py" --database "${QUEUE_DB}" claim)"
+if [ "$#" -ne 1 ] || [[ ! "$1" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+  echo "deploy-worker: one approved request UUID is required" >&2
+  exit 2
+fi
+REQUEST_ID="$1"
+CLAIM="$(python3 "${SCRIPT_DIR}/deploy-request-queue.py" --database "${QUEUE_DB}" claim --id "${REQUEST_ID}")"
 if [ "${CLAIM}" = "null" ]; then
   echo "deploy-worker: no approved request is waiting"
   exit 0

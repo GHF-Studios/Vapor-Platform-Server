@@ -144,7 +144,7 @@ pub(crate) async fn authorize_root_profile_with_client(
     }
 }
 
-fn session_token(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn session_token(headers: &HeaderMap) -> Option<&str> {
     let cookie = headers.get(COOKIE)?.to_str().ok()?;
     cookie.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;

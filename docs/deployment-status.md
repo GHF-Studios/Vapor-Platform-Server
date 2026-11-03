@@ -7,7 +7,7 @@ This records the last verified live VPS state, not the current source tree.
 Changes made after that deployment are not considered deployed until a later
 VPS check updates this record.
 
-## Current VPS baseline
+## Historical VPS baseline (verified 2026-07-25)
 
 - OS: Ubuntu 26.04 LTS.
 - Panel: none; Plesk is not used.
@@ -23,6 +23,42 @@ VPS check updates this record.
 - Deploy root: `/opt/vapor-server-root`.
 - State root: `/var/lib/vapor-server`.
 - Server-local config: `/etc/vapor-server`.
+
+## Recovery and cutover status (reported 2026-11-03)
+
+This section supersedes the historical timer and deploy-root statements above
+for current planning. It is based on the recent uploaded VPS reports and the
+latest safe cutover attempt, not a fresh direct SSH inspection.
+
+- The public site returned HTTP 200 and Caddy was active after its config
+  permissions were repaired.
+- The old periodic deploy timer had been disabled. The latest cutover retry
+  stopped at preflight because the existing Platform checkout was not at the
+  revision hard-coded into that script; it made no changes.
+- `/opt/vapor-platform-server` is an existing Git checkout and must be treated
+  as preserved state, not as an empty legacy directory. Keep its current
+  source, state, service-local configuration, and Caddy configuration backed up
+  through the next cutover.
+- The request-triggered deployment flow and temporary SSH grant system are
+  source work only until a new approved revision is installed and verified.
+  No temporary SSH account or grant should be assumed to exist.
+- The Platform source already composes Build Cache and exposes its admin
+  inventory. The VPS-hosted Linux and Windows snapshot builder orchestration
+  remains an outstanding infrastructure phase; the present Build Cache
+  contract is not proof that either target snapshot is being produced.
+
+An additional public read-only probe on 2026-11-03 returned `200 ok` for
+`/healthz`, but `404` for `/admin/operations`, `/api/admin/operations`,
+`/api/build-cache/v1/status`, and `/docs`. This is consistent with the new
+composed Platform/admin routes not being live yet; the generic health route
+alone does not identify the running revision. This probe did not access the
+VPS directly and does not supersede the need for an authenticated host report.
+
+The one-time cutover should therefore be an explicit migration from the
+preserved Platform checkout to an exact approved root commit, retaining the
+existing path and rollback copy until the dashboard, request-triggered deploy,
+health checks, and Build Cache service all verify. It must not restore or enable
+the retired polling timer.
 
 Secrets are intentionally not recorded here. Admin tokens live only in
 server-local env files under `/etc/vapor-server`.

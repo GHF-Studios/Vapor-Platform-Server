@@ -1,5 +1,12 @@
 # Platform Deploy Approvals Implementation Plan
 
+> **Status: Superseded by the integrated 2026-11-03 VPS operations plan.**
+> This historical plan describes the five-minute approved-request poller. The
+> current design dispatches one systemd unit per approved request and includes
+> the temporary SSH grant lifecycle. Use
+> [`2026-11-03-vps-operations-and-temporary-ssh.md`](2026-11-03-vps-operations-and-temporary-ssh.md)
+> for current work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace implicit deploy-on-main behavior with an auditable exact-revision request that only runs after a root operator approves it.

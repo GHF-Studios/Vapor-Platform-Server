@@ -32,8 +32,6 @@ const SUBMODULES: &[&str] = &[
 struct DeployRequestState {
     pool: SqlitePool,
     client: reqwest::Client,
-    identity_request_authz_url: String,
-    identity_request_authz_token: Option<String>,
     identity_root_authz_url: String,
     identity_root_authz_token: Option<String>,
     public_origin: String,
@@ -94,10 +92,10 @@ struct CreatedRequest {
 }
 
 #[derive(Deserialize)]
-struct IdentityCredentialDecision {
-    credential_id: String,
-    actor_profile_id: String,
-    scope: String,
+pub(crate) struct IdentityCredentialDecision {
+    pub(crate) credential_id: String,
+    pub(crate) actor_profile_id: String,
+    pub(crate) scope: String,
 }
 
 pub(crate) fn router() -> Router {
@@ -114,6 +112,14 @@ pub(crate) fn router() -> Router {
         .route(
             "/api/admin/deploy-requests/{id}/reject",
             post(reject_request),
+        )
+        .route(
+            "/api/admin/deploy-requests/{id}/dispatch",
+            post(retry_dispatch),
+        )
+        .route(
+            "/api/admin/deploy-requests/{id}/reconcile",
+            post(reconcile_execution),
         )
         .with_state(state)
         .route_layer(from_fn(no_store))
@@ -187,12 +193,6 @@ fn state() -> DeployRequestState {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("valid Platform HTTP client configuration"),
-        identity_request_authz_url: std::env::var("VAPOR_PLATFORM_IDENTITY_REQUEST_AUTHZ_URL")
-            .unwrap_or_else(|_| {
-                "http://127.0.0.1:7110/api/identity/v1/internal/automation/verify".to_string()
-            }),
-        identity_request_authz_token: std::env::var("VAPOR_PLATFORM_IDENTITY_REQUEST_AUTHZ_TOKEN")
-            .ok(),
         identity_root_authz_url: std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL").unwrap_or_else(
             |_| "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check".to_string(),
         ),
@@ -210,7 +210,7 @@ async fn create_request(
     let Some(token) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "request credential required\n").into_response();
     };
-    let credential = match verify_request_credential(&state, token).await {
+    let credential = match verify_request_credential(token).await {
         Ok(credential) => credential,
         Err(response) => return response,
     };
@@ -285,7 +285,7 @@ async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderM
             let Some(token) = bearer_token(&headers) else {
                 return root_failure;
             };
-            match verify_request_credential(&state, token).await {
+            match verify_request_credential(token).await {
                 Ok(credential) => Some(credential.credential_id),
                 Err(_) => return root_failure,
             }
@@ -428,46 +428,259 @@ async fn decide_request(
     .execute(&state.pool)
     .await;
     match result {
+        Ok(result) if result.rows_affected() == 1 && approve => {
+            dispatch_approved(&state, &headers, &id, request.expected_version + 1).await
+        }
         Ok(result) if result.rows_affected() == 1 => (StatusCode::OK, Json(serde_json::json!({"id": id, "status": next, "version": request.expected_version + 1}))).into_response(),
         Ok(_) => (StatusCode::CONFLICT, "request is expired or no longer pending at that version\n").into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 
-async fn verify_request_credential(
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchRequest {
+    expected_version: i64,
+    confirmed: bool,
+}
+
+async fn retry_dispatch(
+    State(state): State<DeployRequestState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<DispatchRequest>,
+) -> Response {
+    if !request.confirmed || request.expected_version < 1 || !valid_uuid(&id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    dispatch_approved(&state, &headers, &id, request.expected_version).await
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReconcileOperation<'a> {
+    operation: &'static str,
+    request_id: &'a str,
+    expected_version: i64,
+    session_token: &'a str,
+}
+
+async fn reconcile_execution(
+    State(state): State<DeployRequestState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<DispatchRequest>,
+) -> Response {
+    if !request.confirmed || request.expected_version < 1 || !valid_uuid(&id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !same_origin(&state, &headers) {
+        return (StatusCode::FORBIDDEN, "same-origin request required\n").into_response();
+    }
+    if let Err(response) = require_root(&state, &headers).await {
+        return response;
+    }
+    let Some(session_token) = crate::admin_auth::session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let row = match sqlx::query("SELECT status, version FROM platform_deploy_requests WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if row.get::<String, _>("status") != "executing"
+        || row.get::<i64, _>("version") != request.expected_version
+    {
+        return StatusCode::CONFLICT.into_response();
+    }
+    let operation = ReconcileOperation {
+        operation: "reconcile_deploy",
+        request_id: &id,
+        expected_version: request.expected_version,
+        session_token,
+    };
+    match invoke_platform_ops(&operation).await {
+        Ok(output) => (StatusCode::OK, Json(output)).into_response(),
+        Err(_) => (
+            StatusCode::CONFLICT,
+            "worker is active, state changed, or reconciliation failed\n",
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchOperation<'a> {
+    operation: &'static str,
+    request_id: &'a str,
+    expected_version: i64,
+    session_token: &'a str,
+}
+
+async fn dispatch_approved(
     state: &DeployRequestState,
+    headers: &HeaderMap,
+    id: &str,
+    version: i64,
+) -> Response {
+    if !valid_uuid(id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !same_origin(state, headers) {
+        return (StatusCode::FORBIDDEN, "same-origin request required\n").into_response();
+    }
+    if let Err(response) = require_root(state, headers).await {
+        return response;
+    }
+    let Some(session_token) = crate::admin_auth::session_token(headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let row = match sqlx::query("SELECT status, version FROM platform_deploy_requests WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if row.get::<String, _>("status") != "approved" || row.get::<i64, _>("version") != version {
+        return StatusCode::CONFLICT.into_response();
+    }
+    let operation = DispatchOperation {
+        operation: "dispatch_deploy",
+        request_id: id,
+        expected_version: version,
+        session_token,
+    };
+    let output = match invoke_platform_ops(&operation).await {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "approval saved, but deploy dispatch failed; retry is available\n",
+            )
+                .into_response()
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"id":id,"status":"approved","dispatch":output})),
+    )
+        .into_response()
+}
+
+async fn invoke_platform_ops(operation: &impl Serialize) -> Result<serde_json::Value, ()> {
+    let operation_path = std::env::var_os("VAPOR_PLATFORM_OPS_PATH")
+        .unwrap_or_else(|| "/usr/local/libexec/vapor-platform-ops".into());
+    let mut child = tokio::process::Command::new("/usr/bin/sudo")
+        .arg("-n")
+        .arg(operation_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| ())?;
+    let bytes = serde_json::to_vec(operation).map_err(|_| ())?;
+    if bytes.len() > 4096 {
+        return Err(());
+    }
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(&bytes).await.map_err(|_| ())?;
+    } else {
+        return Err(());
+    }
+    let result = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())?;
+    if !result.status.success() || result.stdout.len() > 4096 {
+        return Err(());
+    }
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).map_err(|_| ())?;
+    (value.get("ok").and_then(serde_json::Value::as_bool) == Some(true))
+        .then_some(value)
+        .ok_or(())
+}
+
+fn valid_uuid(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok()
+}
+
+async fn verify_request_credential(token: &str) -> Result<IdentityCredentialDecision, Response> {
+    verify_platform_request_credential(token, "platform:deploy-request:create")
+        .await
+        .map_err(|status| {
+            if status == StatusCode::UNAUTHORIZED {
+                (
+                    status,
+                    "valid Platform deploy-request credential required\n",
+                )
+                    .into_response()
+            } else {
+                status.into_response()
+            }
+        })
+}
+
+pub(crate) async fn verify_platform_request_credential(
     token: &str,
-) -> Result<IdentityCredentialDecision, Response> {
-    let service_token = state
-        .identity_request_authz_token
-        .as_deref()
+    scope: &str,
+) -> Result<IdentityCredentialDecision, StatusCode> {
+    if !matches!(
+        scope,
+        "platform:deploy-request:create" | "platform:ssh-access:request"
+    ) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let service_token = std::env::var("VAPOR_PLATFORM_IDENTITY_REQUEST_AUTHZ_TOKEN")
+        .ok()
         .filter(|value| valid_service_token(value))
-        .ok_or_else(|| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
-    let response = state
-        .client
-        .post(&state.identity_request_authz_url)
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let endpoint =
+        std::env::var("VAPOR_PLATFORM_IDENTITY_REQUEST_AUTHZ_URL").unwrap_or_else(|_| {
+            "http://127.0.0.1:7110/api/identity/v1/internal/automation/verify".to_string()
+        });
+    if !crate::admin_auth::valid_loopback_endpoint(&endpoint) {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let response = client
+        .post(&endpoint)
         .bearer_auth(service_token)
         .json(&serde_json::json!({
             "audience": "vapor-platform-server",
-            "scope": "platform:deploy-request:create",
+            "scope": scope,
             "credential_token": token,
         }))
         .send()
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     if response.status() != StatusCode::OK {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "valid Platform deploy-request credential required\n",
-        )
-            .into_response());
+        return Err(if response.status() == StatusCode::UNAUTHORIZED {
+            StatusCode::UNAUTHORIZED
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        });
     }
     let verified: IdentityCredentialDecision = response
         .json()
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
-    if verified.scope != "platform:deploy-request:create" || verified.actor_profile_id.is_empty() {
-        return Err(StatusCode::FORBIDDEN.into_response());
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if verified.scope != scope || verified.actor_profile_id.is_empty() {
+        return Err(StatusCode::FORBIDDEN);
     }
     Ok(verified)
 }

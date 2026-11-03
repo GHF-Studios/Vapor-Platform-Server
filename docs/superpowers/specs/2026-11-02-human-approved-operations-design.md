@@ -117,8 +117,8 @@ IDs are not exposed in public responses.
 - CI may automatically create a pending request after required checks succeed.
   It cannot approve or start a deploy. Direct API callers can create the same
   request using a request-only credential.
-- The approval handler records approval only. A dedicated systemd worker polls
-  or is signaled to claim approved tickets with an atomic claim. The worker
+- The approval handler records approval and dispatches one request-specific
+  systemd unit to claim the ticket atomically. The worker
   runs the existing allowlisted deploy operation for the approved revision,
   reports progress/result, and writes the existing operations history.
 - Remove the current “every push/timer means deploy latest main” behavior.

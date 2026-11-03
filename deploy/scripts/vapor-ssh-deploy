@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$#" -ne 0 ]; then
+  echo "usage: vapor-ssh-deploy" >&2
+  exit 2
+fi
+database="${VAPOR_PLATFORM_DB:-${VAPOR_PLATFORM_STATE:-/var/lib/vapor-server/platform}/platform.sqlite3}"
+mapfile -t request_ids < <(python3 - "${database}" <<'PY'
+import sqlite3, sys, time, uuid
+with sqlite3.connect(sys.argv[1]) as db:
+    rows = db.execute("SELECT id FROM platform_deploy_requests WHERE status='approved' AND expires_at_unix>? ORDER BY decided_at_unix, created_at_unix", (int(time.time()),))
+    for (value,) in rows:
+        try:
+            print(uuid.UUID(value))
+        except (ValueError, TypeError):
+            continue
+PY
+)
+if [ "${#request_ids[@]}" -eq 0 ]; then
+  echo "No approved deployment is waiting."
+  exit 0
+fi
+for request_id in "${request_ids[@]}"; do
+  systemctl start --no-block "vapor-deploy@${request_id}.service"
+done
+echo "Queued ${#request_ids[@]} approved deployment request(s)."

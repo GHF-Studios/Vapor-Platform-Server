@@ -1,99 +1,64 @@
 # GitHub-controlled deployment
 
-`Vapor-Platform-Server` currently deploys from the VPS by polling `main` with
-`vapor-deploy.timer`. GitHub Actions can also trigger the same server-side
-deploy service immediately after `main` changes.
+GitHub Actions runs the composed CI workflow and, only after CI succeeds,
+submits an exact-revision deploy request. It never receives SSH access to the
+VPS and never approves or starts a deployment.
 
-The secure target shape is:
+## Flow
 
-1. protect `main`;
-2. require PR review/merge for updates;
-3. store a dedicated deploy SSH key in GitHub Actions secrets;
-4. allow the deploy SSH user to run only `systemctl start/status
-   vapor-deploy.service`;
-5. keep actual build/deploy authority on the VPS.
+1. CI validates the Platform repository and every pinned root-level service
+   submodule.
+2. The request workflow submits the full root commit, tree, pinned submodule
+   revisions, and CI run URL to Platform using an Identity credential scoped
+   only to `platform:deploy-request:create`.
+3. A root operator reviews the request in `/admin/operations` and approves or
+   rejects it.
+4. Approval immediately starts the systemd unit for that request ID. The
+   worker revalidates the immutable request and executes only the approved
+   revision.
+5. The Operations dashboard records the result. A dispatch failure before the
+   worker claims the request can be retried by a root operator. If a worker
+   stops after claiming the request, a root operator can reconcile it only
+   after the dashboard helper confirms that request-specific systemd unit is
+   inactive or failed. Reconciliation records terminal failure and never
+   replays a possibly partial deployment; a new CI request and approval are
+   required.
 
-This means GitHub Actions does not receive Steam, diagnostics, identity, docs,
-or database secrets. It only gets enough SSH authority to ask the VPS to run its
-already-installed deployment service.
+There is no deploy polling timer. The independent state-export timer remains.
+Temporary SSH access is a separate, explicitly approved capability managed in
+the same Operations dashboard; CI credentials cannot request or grant SSH.
 
-## Required repository secrets
+## GitHub configuration
 
-On `GHF-Studios/Vapor-Platform-Server`:
+On `GHF-Studios/Vapor-Platform-Server`, configure:
 
-```text
-VAPOR_DEPLOY_HOST
-VAPOR_DEPLOY_USER
-VAPOR_DEPLOY_SSH_KEY
-VAPOR_DEPLOY_KNOWN_HOSTS
-```
+- Secret `VAPOR_DEPLOY_REQUEST_TOKEN`: an Identity credential with only
+  **Create Platform deploy requests** selected.
+- Variable `VAPOR_DEPLOY_PUBLIC_BASE`: `https://vapor.ghf-studios.site`, with
+  no trailing slash.
 
-Use the VPS IP while DNS is pending. Replace it with the domain later if
-desired.
+If either value is absent, CI reports that it skipped request creation. It
+does not fall back to SSH, auto-deploy, or any unapproved deployment path.
 
-Optional public smoke-check secret:
+The request-verification service token and root-session introspection
+credentials remain in root-readable VPS env files. They are separate from the
+GitHub request credential and are never uploaded to Actions.
 
-```text
-VAPOR_DEPLOY_PUBLIC_BASE
-```
+## First install and migration
 
-For the pre-DNS phase this can be:
+The first Platform install or a migration from the preserved previous server
+layout is an explicit root operation, not an Actions job. Keep `/opt/vapor-platform-server`,
+service state, `/etc/vapor-server`, and the active Caddy configuration backed
+up until the new approval dashboard and health checks are verified. The
+polling deploy timer must remain disabled; migration and restore scripts must
+not reactivate it.
 
-```text
-http://82.165.77.104
-```
+## Verification
 
-After DNS/HTTPS cutover, use:
-
-```text
-https://vapor.ghf-studios.site
-```
-
-When this optional value is present, the workflow runs public health/status
-checks after the VPS deploy service completes. These checks intentionally verify
-that unauthenticated identity audit/revoke routes return `401`.
-
-## VPS setup
-
-Create an SSH keypair outside the repository. Install only the public key on the
-VPS:
-
-```bash
-sudo deploy/scripts/install-github-actions-deploy-user.sh \
-  --public-key-file /path/to/deploy-key.pub
-```
-
-Store the private key as the GitHub secret `VAPOR_DEPLOY_SSH_KEY`.
-
-The restricted deploy user can only start the server-owned deploy service and
-show that service's systemd status. GitHub Actions still cannot read
-`/etc/vapor-server` secrets, run arbitrary root commands, or directly build
-services.
-
-The workflow sequence is:
-
-1. confirm required secrets exist;
-2. configure the temporary Actions SSH key;
-3. request `vapor-deploy.service` on the VPS;
-4. print `vapor-deploy.service` status for diagnostics;
-5. optionally run public HTTP smoke checks when `VAPOR_DEPLOY_PUBLIC_BASE` is
-   configured.
-
-`systemctl status` can return a non-zero code for a completed oneshot service
-that is inactive after successful completion. The workflow therefore treats the
-trigger step and public smoke as the pass/fail authority, while the status step
-is diagnostic output.
-
-## Current verified state
-
-The deploy user and repository secrets are configured. A push-triggered workflow
-run has successfully:
-
-- connected to the VPS as the restricted deploy user;
-- started `vapor-deploy.service`;
-- printed deploy service status;
-- completed public pre-DNS HTTP smoke checks.
-
-The remaining GitHub-side hardening task is branch protection. The intended
-policy is to protect `main`, require PR review/merge for normal updates, and
-keep emergency direct-push authority narrow.
+For a new request, confirm that Actions records a pending request, the root
+dashboard shows the exact commit/tree/submodule pins, and no deployment starts
+before approval. After approval, the request-specific unit should run once and
+record success or failure. Public health checks and the Build Cache inventory
+are part of the post-deploy check. Build Cache snapshot availability must be
+reported per target; a healthy endpoint alone does not mean a signed target
+snapshot or the VPS-hosted target builders are ready.

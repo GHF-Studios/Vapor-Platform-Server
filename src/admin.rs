@@ -257,18 +257,18 @@ const JS: &str = r#"
         }
         details.append(summaryLabel, list);
         card.append(details);
-        for (const decision of (item.status === 'pending' ? ['approve', 'reject'] : [])) {
+        for (const decision of (item.status === 'pending' ? ['approve', 'reject'] : item.status === 'approved' ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
           const form = document.createElement('form');
           form.className = 'inline';
           const label = document.createElement('label');
           const confirmed = document.createElement('input');
           confirmed.type = 'checkbox';
           confirmed.required = true;
-          const wording = decision === 'approve' ? 'I reviewed this exact revision' : 'I intend to reject this request';
+          const wording = decision === 'approve' ? 'I reviewed this exact revision' : decision === 'dispatch' ? 'Queue this already-approved revision now' : decision === 'reconcile' ? 'I confirmed this worker is no longer running; mark this execution failed without retrying it' : 'I intend to reject this request';
           label.append(confirmed, document.createTextNode(` ${wording}`));
           const button = document.createElement('button');
           button.type = 'submit';
-          button.textContent = decision === 'approve' ? 'Approve deploy' : 'Reject';
+          button.textContent = decision === 'approve' ? 'Approve deploy' : decision === 'dispatch' ? 'Retry deploy dispatch' : decision === 'reconcile' ? 'Reconcile stopped worker' : 'Reject';
           form.append(label, button);
           form.addEventListener('submit', async event => {
             event.preventDefault();
@@ -277,8 +277,10 @@ const JS: &str = r#"
             const result = await fetch(`/api/admin/deploy-requests/${encodeURIComponent(item.id)}/${decision}`, {
               method: 'POST', credentials: 'same-origin', cache: 'no-store',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ expected_version: item.version, confirmed: true,
-                reason: decision === 'approve' ? 'approved in Platform Operations' : 'rejected in Platform Operations' })
+              body: JSON.stringify(['dispatch', 'reconcile'].includes(decision)
+                ? { expected_version: item.version, confirmed: true }
+                : { expected_version: item.version, confirmed: true,
+                    reason: decision === 'approve' ? 'approved in Platform Operations' : 'rejected in Platform Operations' })
             });
             if (result.ok) await refreshDeployRequests();
             else { button.disabled = false; button.textContent = `Failed (${result.status}); reload`; }
@@ -289,6 +291,106 @@ const JS: &str = r#"
       }
     };
     refreshDeployRequests();
+  }
+
+  const sshAccess = document.querySelector('#ssh-access');
+  if (sshAccess) {
+    const refresh = async () => {
+      let response;
+      let items;
+      try {
+        response = await fetch('/api/admin/ssh-access/requests', { credentials: 'same-origin', cache: 'no-store' });
+        items = await response.json().catch(() => null);
+      } catch (_) { sshAccess.textContent = 'Temporary SSH requests are unavailable.'; return; }
+      sshAccess.replaceChildren();
+      if (!response.ok) { sshAccess.textContent = 'Root access is required to review SSH requests.'; return; }
+      if (!Array.isArray(items) || !items.length) { sshAccess.textContent = 'No temporary SSH requests.'; return; }
+      for (const item of items) {
+        const card = document.createElement('article'); card.className = 'card';
+        const title = document.createElement('h3'); title.textContent = `${item.status} · ${item.fingerprint}`;
+        const purpose = document.createElement('p'); purpose.textContent = item.purpose;
+        const scope = document.createElement('p'); scope.className = 'muted';
+        scope.textContent = `Requested: ${item.requested_capabilities.join(', ') || 'shell only'} · ${item.requested_duration_seconds}s`;
+        card.append(title, purpose, scope);
+        if (item.detail) {
+          const detail = document.createElement('p'); detail.className = 'muted'; detail.textContent = item.detail;
+          card.append(detail);
+        }
+        if (item.expires_at_unix) {
+          const expiry = document.createElement('p'); expiry.className = 'muted';
+          expiry.textContent = `${item.status === 'active' ? 'Expires' : 'Approved expiry'}: ${new Date(item.expires_at_unix * 1000).toLocaleString()}`;
+          card.append(expiry);
+        }
+        if (item.status === 'active' && item.username) {
+          const login = document.createElement('p');
+          login.textContent = `SSH account: ${item.username}@${item.host} · port 22 · key ${item.fingerprint}`;
+          card.append(login);
+          const granted = document.createElement('p'); granted.className = 'muted';
+          granted.textContent = `Granted: ${item.granted_capabilities.join(', ') || 'shell only'} · ${item.granted_duration_seconds}s`;
+          card.append(granted);
+        }
+        if (item.status === 'pending') {
+          const form = document.createElement('form'); const fields = document.createElement('fieldset');
+          const legend = document.createElement('legend'); legend.textContent = 'Granted powers'; fields.append(legend);
+          const choices = [];
+          for (const value of item.requested_capabilities) {
+            const label = document.createElement('label'); const input = document.createElement('input');
+            input.type = 'checkbox'; input.value = value; input.checked = true; choices.push(input);
+            label.append(input, document.createTextNode(` ${value}${value === 'host_admin' ? ' (full temporary sudo)' : ''}`)); fields.append(label);
+          }
+          const durationLabel = document.createElement('label'); durationLabel.textContent = 'Duration in seconds';
+          const duration = document.createElement('input'); duration.type = 'number'; duration.min = '1';
+          duration.max = String(item.requested_duration_seconds); duration.value = String(item.requested_duration_seconds); durationLabel.append(duration);
+          const confirmLabel = document.createElement('label'); const confirm = document.createElement('input'); confirm.type = 'checkbox'; confirm.required = true;
+          confirmLabel.append(confirm, document.createTextNode(' I reviewed the key, purpose, scope, and duration'));
+          const adminLabel = document.createElement('label'); const adminConfirm = document.createElement('input'); adminConfirm.type = 'checkbox';
+          adminLabel.append(adminConfirm, document.createTextNode(' I approve unrestricted root access and understand it can disable its own expiry cleanup'));
+          const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'Approve temporary access';
+          form.append(fields, durationLabel, confirmLabel, adminLabel, button);
+          form.addEventListener('submit', async event => {
+            event.preventDefault(); if (!confirm.checked) return;
+            const selected = choices.filter(input => input.checked).map(input => input.value);
+            if (selected.includes('host_admin') && (selected.length !== 1 || !adminConfirm.checked)) return;
+            button.disabled = true;
+            const result = await fetch(`/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/approve`, {
+              method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ expected_version: item.version, confirmed: true, host_admin_confirmed: adminConfirm.checked,
+                granted_capabilities: selected, granted_duration_seconds: Number(duration.value) })
+            });
+            if (result.ok) await refresh(); else { button.disabled = false; button.textContent = `Failed (${result.status}); reload`; }
+          });
+          card.append(form);
+          const reject = document.createElement('button'); reject.type = 'button'; reject.textContent = 'Reject request';
+          reject.addEventListener('click', async () => {
+            reject.disabled = true;
+            const result = await fetch(`/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/reject`, {
+              method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ expected_version: item.version, confirmed: true })
+            });
+            if (result.ok) await refresh(); else { reject.disabled = false; reject.textContent = `Failed (${result.status}); reload`; }
+          });
+          card.append(reject);
+        } else if (item.status === 'active' || item.status === 'failed') {
+          const form = document.createElement('form'); const label = document.createElement('label');
+          const confirm = document.createElement('input'); confirm.type = 'checkbox'; confirm.required = true;
+          label.append(confirm, document.createTextNode(item.status === 'failed'
+            ? ' Clean up any partial account created by the failed grant'
+            : ' Revoke and terminate this account'));
+          const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'Revoke access'; form.append(label, button);
+          form.addEventListener('submit', async event => {
+            event.preventDefault(); if (!confirm.checked) return; button.disabled = true;
+            const result = await fetch(`/api/admin/ssh-access/grants/${encodeURIComponent(item.id)}/revoke`, {
+              method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ expected_version: item.version, confirmed: true })
+            });
+            if (result.ok) await refresh(); else { button.disabled = false; button.textContent = `Failed (${result.status}); reload`; }
+          });
+          card.append(form);
+        }
+        sshAccess.append(card);
+      }
+    };
+    refresh();
   }
 })();
 "#;
@@ -357,7 +459,7 @@ async fn operations(headers: axum::http::HeaderMap) -> Response {
     html_response(
         StatusCode::OK,
         "text/html; charset=utf-8",
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"muted\">Review the exact tested revision before approving a production deploy.</p><section id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><h2>Pending deploy approvals</h2><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading pending requests…</p></div></section><section class=\"card\"><h2>Deployment and recovery history</h2><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading protected operation history…</p></div><a href=\"/docs\">Open server runbooks and recovery docs</a></section></main></body></html>".to_owned(),
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"muted\">Review the exact tested revision before approving a production deploy.</p><section id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><h2>Pending deploy approvals</h2><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading pending requests…</p></div></section><section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Every grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\">Loading SSH requests…</div></section><section class=\"card\"><h2>Deployment and recovery history</h2><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading protected operation history…</p></div><a href=\"/docs\">Open server runbooks and recovery docs</a></section></main></body></html>".to_owned(),
     )
 }
 

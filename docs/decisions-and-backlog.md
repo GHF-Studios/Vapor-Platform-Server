@@ -67,9 +67,10 @@ while the implementation is still moving quickly.
   that justify the extra service.
 - Automatic deployment should follow a real branch-based path. The initial
   target branch is `main` unless a dedicated deployment branch is introduced.
-- GitHub-triggered deployment should trigger the VPS-owned deploy service rather
-  than moving server secrets into GitHub Actions. A dedicated restricted deploy
-  SSH user is preferred over using the root SSH key.
+- GitHub-triggered deployment may submit an exact tested revision using a
+  request-only Identity credential; it cannot approve or execute deployment.
+  A root operator approves through the same-origin Platform dashboard, which
+  dispatches a request-specific VPS-owned unit. GitHub Actions has no SSH key.
 
 ## Current scaffold behavior
 
@@ -100,23 +101,25 @@ while the implementation is still moving quickly.
 - `Vapor-Platform-Server` tracks the services as root-level submodules named after
   their repositories. Normal local development should use those submodule
   worktrees, not separate sibling checkouts.
-- `Vapor-Platform-Server` now contains first-pass direct VPS deployment automation:
-  Ubuntu bootstrap, root-repo deploy, Caddy config installation, systemd unit
-  installation, automatic branch polling via systemd timer, GitHub Actions
-  deploy triggering through a restricted VPS user, automatic state-export
-  backups, public HTTP smoke checks, and local health checks. It also contains
-  first-pass whole-server file-state export/restore scripts for
-  `/var/lib/vapor-server`, excluding server-local env/token files under
-  `/etc/vapor-server`. Restore now validates bundle structure before extraction
-  and before stopping services. Deploy and restore publish a root-owned latest
-  result pointer for the read-only Platform Operations page.
-- Platform owns the `/admin` shell, overview, and read-only Operations section;
+- `Vapor-Platform-Server` now contains a source-level, human-approved operations
+  path: CI submits an exact root and submodule revision, root approval dispatches
+  only that request's systemd unit, and temporary SSH access uses a separate
+  account, reviewed key fingerprint, bounded capability set, and expiry cleanup.
+  The older five-minute deploy poller and GitHub Actions SSH handoff are retired.
+  These operations are not considered live until the guarded VPS cutover and
+  dashboard checks are completed. Existing state export/import, Caddy/systemd
+  deployment, health checks, and operation result reporting remain part of the
+  same Platform-owned operational spine.
+- Platform owns the `/admin` shell, overview, and human-approved Operations
+  section for deployment and temporary SSH requests;
   Identity, Registry, and Artifact own their protected sections and data.
   Build Cache now exists as a separate service and its state is composed into
   deploy/recovery. VPS-hosted Linux/Windows guest builders and Vapor Client
   snapshot bootstrap remain unimplemented; do not advertise usable snapshots
-  until those pieces and exact target lock identities are configured.
-  Deploy/recovery actions remain CLI-owned.
+  until those pieces and exact target lock identities are configured. The next
+  sequence is: recover and verify the approval dashboard, confirm per-target
+  snapshot availability, then probe whether the single VPS can host both pinned
+  build guests before implementing that builder lane.
 - Domain-independent pre-DNS work is allowed through temporary HTTP fallback
   routing, SSH/UFW hardening, and local/IP smoke checks. The fallback is not the
   final public product URL.

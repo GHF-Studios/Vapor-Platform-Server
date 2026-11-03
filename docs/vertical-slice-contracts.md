@@ -221,18 +221,20 @@ The current deployment path is:
 
 ```text
 GitHub main branch
-  -> VPS /opt/vapor-server-root checkout
-  -> submodule update
-  -> cargo release build per service
-  -> systemd unit install/restart
-  -> Caddy config install/restart
-  -> auto-deploy and state-export timer install
-  -> local health check
+  -> CI verifies root plus every pinned service submodule
+  -> Identity-scoped request for the exact tested revision
+  -> root operator reviews and approves that ticket in Platform Operations
+  -> one request-specific systemd deploy unit
+  -> exact checkout, release build, independent service restarts, Caddy update
+  -> local health checks and operation result
 ```
 
-The systemd deploy timer polls `main`. GitHub Actions also triggers the same
-VPS-owned deploy service after `main` changes. Server secrets remain on the VPS,
-not in GitHub Actions.
+GitHub Actions creates a pending request after CI. Root approval dispatches the
+request-specific systemd unit immediately; no deploy timer polls `main`. The
+independent state-export timer remains. Server secrets remain on the VPS, not in
+GitHub Actions. This describes the target source contract; the current VPS
+cutover and dashboard state is tracked separately in
+`docs/deployment-status.md`.
 
 ## Smoke-check contract
 

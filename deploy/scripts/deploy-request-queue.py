@@ -35,7 +35,7 @@ def decode_request(row):
     return request
 
 
-def claim(db):
+def claim(db, request_id):
     now = int(time.time())
     db.execute("BEGIN IMMEDIATE")
     try:
@@ -45,9 +45,8 @@ def claim(db):
             (now, now),
         )
         row = db.execute(
-            "SELECT * FROM platform_deploy_requests WHERE status = 'approved' AND expires_at_unix > ? "
-            "ORDER BY decided_at_unix, created_at_unix LIMIT 1",
-            (now,),
+            "SELECT * FROM platform_deploy_requests WHERE id = ? AND status = 'approved' AND expires_at_unix > ?",
+            (request_id, now),
         ).fetchone()
         if row is None:
             db.execute("COMMIT")
@@ -105,7 +104,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", required=True)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("claim")
+    claim_parser = subparsers.add_parser("claim")
+    claim_parser.add_argument("--id", required=True)
     finish = subparsers.add_parser("complete")
     finish.add_argument("--id", required=True)
     finish.add_argument("--version", required=True, type=int)
@@ -120,7 +120,7 @@ def main():
     try:
         with connect(args.database) as db:
             if args.command == "claim":
-                return claim(db)
+                return claim(db, args.id)
             if args.command == "verify":
                 verify_claim(db, args.id, args.version, args.commit)
             else:
