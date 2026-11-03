@@ -72,7 +72,7 @@
 - Both commands require root and open the configured Platform DB read-only.
 
 - [ ] Add tests for status rendering, missing IDs, and redaction of the stored public key.
-- [ ] Implement list/show queries and deterministic concise output.
+- [x] Implement list/show queries and deterministic concise output.
 - [ ] Run the read-only CLI checks against a temporary SQLite fixture; confirm no DB rows or host files are modified.
 
 ## Task 4: Implement grant, revoke, and reconfigure guidance
@@ -88,14 +88,15 @@
 - [ ] Add tests proving unsupported scope, absent confirmation, non-TTY use, and stale version fail before privileged side effects.
 - [x] Implement local grant/revoke orchestration and set local actor fields in each transition.
 - [x] Ensure output never prints raw public keys, secrets, or unrestricted helper detail.
+- [x] Enforce the shared three-day pending-request expiry before grant confirmation and again in the atomic transition, so an old request cannot be provisioned through the local path.
 - [ ] Run Linux helper state-transition tests; verify one active grant is created only after fingerprint confirmation and failures never produce `active`.
 
 ## Task 5: Document and package the typed operator surface
 
 **Files:** `README.md`, `deploy/scripts/install-platform-ops.sh`, the existing helper unit/sudoers setup.
 
-- [ ] Document the exact short `ssh list/show/grant/revoke` syntax, duration suffixes, allowed capabilities, root requirement, and reconfigure-by-replacement behavior.
-- [ ] Verify the helper stays root-owned and only the existing explicit installation/operator path can invoke it; do not broaden the `vapor` service account’s sudo rule.
+- [x] Document the exact short `ssh list/show/grant/revoke` syntax, duration suffixes, allowed capabilities, root requirement, and reconfigure-by-replacement behavior in `deploy/README.md`.
+- [x] Inspect the installer’s root ownership/modes and its no-argument-only `vapor` sudo rule; the typed operator command remains root-invoked and does not broaden the service account rule.
 - [ ] Build the Linux release helper and verify it rejects arguments on the legacy JSON path while accepting only the typed `ssh` subcommands.
 - [ ] Confirm installation instructions do not edit `authorized_keys` manually or expose a private key.
 

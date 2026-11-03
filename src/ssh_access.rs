@@ -11,12 +11,12 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::path::PathBuf;
 use std::time::Duration;
+use crate::ssh_policy::PENDING_TTL_SECONDS;
 
 const MAX_DURATION_SECONDS: i64 = 8 * 60 * 60;
 const MAX_REQUESTS: i64 = 200;
 const MAX_REQUEST_EVENTS: i64 = 100;
 const MAX_OPEN_REQUESTS_PER_PROFILE: i64 = 3;
-const PENDING_TTL_SECONDS: i64 = 3 * 24 * 60 * 60;
 const MAX_PURPOSE_BYTES: usize = 500;
 const CAPABILITIES: &[&str] = &["vapor_deploy", "vapor_service_control", "host_admin"];
 

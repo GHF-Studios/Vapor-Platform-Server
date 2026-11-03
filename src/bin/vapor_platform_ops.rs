@@ -1,5 +1,7 @@
 #[path = "../ssh_cli.rs"]
 mod ssh_cli;
+#[path = "../ssh_policy.rs"]
+mod ssh_policy;
 #[cfg(unix)]
 mod unix_impl {
     use base64::Engine;
@@ -14,6 +16,8 @@ mod unix_impl {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
     use std::path::PathBuf;
     use std::time::Duration;
+
+    use super::ssh_policy::PENDING_TTL_SECONDS;
 
     const MAX_INPUT: usize = 8192;
     const MAX_DURATION: i64 = 8 * 60 * 60;
@@ -184,6 +188,14 @@ mod unix_impl {
                 }
                 let id = row.get::<String, _>("id");
                 let version = row.get::<i64, _>("version");
+                let created_at: i64 = row.get("created_at_unix");
+                let request_cutoff = unix_now().saturating_sub(PENDING_TTL_SECONDS);
+                if created_at <= request_cutoff {
+                    if expire_pending_request(&pool, &id, version, request_cutoff).await? {
+                        return Err("SSH request has expired; submit a new request".to_owned());
+                    }
+                    return Err("request changed while checking its expiry".to_owned());
+                }
                 let expires = unix_now().saturating_add(duration_seconds);
                 let expires_display =
                     chrono_free_iso(expires).unwrap_or_else(|| format!("Unix time {expires}"));
@@ -209,10 +221,14 @@ mod unix_impl {
                 };
                 let granted_json = serde_json::to_string(&capabilities)
                     .map_err(|_| "could not encode grant scope".to_owned())?;
-                let transition = sqlx::query("UPDATE platform_ssh_access_requests SET status='provisioning', version=version+1, granted_capabilities_json=?, granted_duration_seconds=?, expires_at_unix=?, decided_by_profile_id=NULL, decided_by_actor_kind='local_operator', decided_by_actor_label='local-root', decided_at_unix=?, operation_detail='granting' WHERE id=? AND status='pending' AND version=?")
-                    .bind(&granted_json).bind(duration_seconds).bind(expires).bind(unix_now()).bind(&id).bind(version)
+                let transition_cutoff = unix_now().saturating_sub(PENDING_TTL_SECONDS);
+                let transition = sqlx::query("UPDATE platform_ssh_access_requests SET status='provisioning', version=version+1, granted_capabilities_json=?, granted_duration_seconds=?, expires_at_unix=?, decided_by_profile_id=NULL, decided_by_actor_kind='local_operator', decided_by_actor_label='local-root', decided_at_unix=?, operation_detail='granting' WHERE id=? AND status='pending' AND version=? AND created_at_unix > ?")
+                    .bind(&granted_json).bind(duration_seconds).bind(expires).bind(unix_now()).bind(&id).bind(version).bind(transition_cutoff)
                     .execute(&pool).await.map_err(|_| "could not begin SSH grant".to_owned())?;
                 if transition.rows_affected() != 1 {
+                    if expire_pending_request(&pool, &id, version, transition_cutoff).await? {
+                        return Err("SSH request expired before the grant could be recorded; submit a new request".to_owned());
+                    }
                     return Err("request changed before grant; no access was created".to_owned());
                 }
                 let input = Input {
@@ -286,6 +302,22 @@ mod unix_impl {
         sqlx::query("SELECT id, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json, requested_duration_seconds, granted_duration_seconds, status, version, created_at_unix, expires_at_unix, operation_detail FROM platform_ssh_access_requests WHERE id=?")
             .bind(id).fetch_optional(pool).await.map_err(|_| "could not read SSH request".to_owned())?
             .ok_or_else(|| "SSH request does not exist".to_owned())
+    }
+
+    async fn expire_pending_request(
+        pool: &SqlitePool,
+        id: &str,
+        version: i64,
+        cutoff: i64,
+    ) -> Result<bool, String> {
+        let result = sqlx::query("UPDATE platform_ssh_access_requests SET status='expired', version=version+1, public_key='', decided_by_profile_id=NULL, decided_by_actor_kind='system_expiry', decided_by_actor_label='expiry-timer', operation_detail=NULL WHERE id=? AND status='pending' AND version=? AND created_at_unix <= ?")
+            .bind(id)
+            .bind(version)
+            .bind(cutoff)
+            .execute(pool)
+            .await
+            .map_err(|_| "could not expire stale SSH request".to_owned())?;
+        Ok(result.rows_affected() == 1)
     }
 
     fn print_ssh_request(row: &sqlx::sqlite::SqliteRow) {

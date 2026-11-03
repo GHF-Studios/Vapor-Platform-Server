@@ -68,7 +68,7 @@ The root Platform repository coordinates deployment and owns this roadmap. Detai
 
 - [ ] Inspect the live request state through the existing Identity/Platform APIs and identify why web Operations does not display a reliable result.
 - [x] Repair the SSH section's authorization/error display locally; make 401, 403, service errors, and bounded response details distinguishable. Remaining service-owned approval/status and deploy work stays in the existing temporary SSH plan.
-- [ ] Implement the typed `ssh show`, `ssh grant`, `ssh revoke`, and safe reconfigure guidance in the existing root helper, with local-operator audit identity; require typing the displayed fingerprint for grants and require root plus confirmation for every mutation.
+- [x] Implement the typed `ssh show`, `ssh grant`, `ssh revoke`, and read-only reconfigure guidance in the existing root helper, with local-operator audit identity; require typing the displayed fingerprint for grants and require root plus confirmation for every mutation. Pending-request TTL is enforced before prompting and during the grant transition.
 - [ ] Grant through either the browser root decision or typed local operator path only after it displays the exact key fingerprint, selected capabilities, and expiry.
 - [ ] Verify SSH authentication, server-side capability scope, audit actor, revoke, and natural expiry before treating access as recovered.
 - [ ] Run the SSH and deploy approval regression checks in the existing temporary SSH plan; expected result is an active grant only after the grant operation succeeds and an inactive grant after revoke/expiry.

@@ -38,15 +38,17 @@ session token.
   status, fingerprint, purpose, requested/granted capabilities, duration,
   expiry, and computed account name without exposing private material.
 - `... ssh grant <request-id> --capability ... --duration ...` accepts only a
-  pending request, displays the exact key fingerprint and grant scope, and
-  requires an explicit confirmation before provisioning.
+  pending, unexpired request, displays the exact key fingerprint and grant
+  scope, and requires an explicit confirmation before provisioning. Pending
+  requests expire after three days; the local command enforces the deadline
+  both before prompting and in the atomic status transition.
 - `... ssh revoke <request-id>` removes the managed account and terminates its
   sessions through the existing cleanup path.
-- `... ssh reconfigure <request-id> --capability ... --duration ...` updates
-  only an active managed grant, with explicit confirmation and rollback/failed
-  state if provisioning cannot be reconciled. It may not add `host_admin`
-  alongside other capabilities; unrestricted root remains a separate explicit
-  choice.
+- `... ssh reconfigure <request-id>` is read-only guidance. Grant scope and
+  duration are immutable after approval; changing them requires revoking the
+  current grant and submitting a new requester-authenticated request. This
+  avoids mutating an authorization after its requester confirmed its key and
+  requested scope.
 - Every mutation is root-only, validates the request ID and stored key
   fingerprint, obeys the existing capability allowlist and eight-hour maximum,
   uses compare-and-update status/version transitions, and records whether the

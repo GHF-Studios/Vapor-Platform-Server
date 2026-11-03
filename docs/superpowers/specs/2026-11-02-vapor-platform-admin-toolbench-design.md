@@ -214,3 +214,67 @@ The “Do not build yet” entry in `docs/server-domain-boundaries.md` that
 prohibits a full global admin dashboard is superseded by this accepted
 direction. It is not permission to centralize business logic: the shared shell
 and service-owned sections described here are the required boundary.
+
+## Productization pass after the first deployed shell
+
+The first deployed shell is a routing and authorization proof, not the finished
+operator toolbench. The next pass must make routine server work understandable
+and usable without pretending that a list of links and health cards is a
+complete admin product.
+
+### Shared frame
+
+- Render the shared frame as part of the server response. Navigation and page
+  framing must not depend on client JavaScript finding and wrapping a `<main>`
+  element after load.
+- Use a stable left navigation grouped by responsibility: Overview;
+  Catalog (Workshop/Registry); Accounts (Identity); Distribution (Releases,
+  Build Cache); Operations (Hosting, Deployments, Access, History). Unavailable
+  sections remain visible with a clear planned/unavailable state.
+- Use a compact header for current section, signed-in operator, and platform
+  status. Do not show secrets, internal paths, or raw environment values.
+- Establish reusable page primitives: section heading/actions, status and
+  readiness badges, filter/search row, paginated table/list, selected-item
+  detail panel, confirmation panel, operation progress/result, and consistent
+  loading/empty/error/unauthorized states.
+- Keep the design responsive, keyboard-operable, screen-reader labelled, and
+  usable without JavaScript for navigation and read-only content. JavaScript
+  may enhance filtering or polling but cannot be required to reveal the page.
+
+### Overview and service workbenches
+
+- Overview answers, at a glance: which services are healthy, which features are
+  actually ready, what operation is pending/running/failed, and what requires
+  the operator next. Health and feature readiness remain distinct.
+- Operations has separate Deployments, Hosting, Temporary Access, and History
+  views. Every operation shows requester, exact revision/target, approval
+  state, start/end time, result, and a bounded explanation; long-running work
+  is tracked by operation ID and polled rather than blocking a request.
+- Workshop/Catalog supports searchable records and a detail view for canonical
+  identity, source/product type, local-source requirements, Workshop binding,
+  visibility, and release/channel state. Publish/update remains unavailable
+  until the owning publication authority exists.
+- Identity supports searchable profiles, linked providers, role grants and
+  revocations, permission requests, active/revoked sessions where available,
+  and audit history. Mutations are previewed, confirmed, capability checked,
+  and audited by Identity.
+- Releases shows immutable bundle/manifest/target/signature/channel state with
+  explicit validation failures and no secret material.
+- Build Cache shows one current snapshot per target, freshness against the
+  single supported Vapor/toolchain lock, builder status and last outcome. Only
+  the builder workflow can replace a snapshot.
+
+### Acceptance bar
+
+- Every navigation entry lands on an implemented, useful screen or a clearly
+  described unavailable state; there are no placeholder links disguised as
+  working tools.
+- Every implemented section has a task-oriented primary view, usable search or
+  filtering when its data is a collection, and useful no-data/error states.
+- A new operator can understand what a state means and what action is available
+  without reading server runbooks first.
+- A state-changing action always has an owning service, exact target, explicit
+  consequence/confirmation, durable result, and owner-side audit record.
+- A separate review pass checks the whole operator journey, service ownership,
+  authentication boundaries, responsive behavior, and keyboard/accessibility
+  behavior before the next deployment is treated as the dashboard release.

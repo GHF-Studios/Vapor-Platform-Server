@@ -212,3 +212,67 @@ installation belongs to that successor and must not be patched in parallel.
 - Every protected route checks authorization server-side and every mutation is audited.
 - A single service outage degrades only its own panel.
 - No browser-accessible arbitrary command execution or secret display exists.
+
+---
+
+## Productization megapass: turn the first shell into the operator toolbench
+
+The initial shell and section links are a deployed proof of composition and
+authorization. They do not satisfy the approved operator-toolbench goal. Use
+the productization requirements in the design document above as the source of
+truth for this pass.
+
+### Phase A: establish the page contract and fix the shell
+
+- Replace JavaScript-only wrapping of service `<main>` elements with a
+  server-rendered shell contract. Keep section body and business logic in its
+  owning service.
+- Centralize fixed navigation descriptors and route metadata so the shell does
+  not maintain separate divergent Rust and JavaScript module lists.
+- Group navigation by operator responsibility and distinguish implemented,
+  unavailable, and planned features.
+- Add shared HTML/CSS components for page headings, badges, filters, tables,
+  details, confirmations, async operation status, and empty/error/loading states.
+- Review keyboard navigation, accessible names, focus order, narrow viewport
+  layout, safe output encoding, and private/no-store behavior.
+
+### Phase B: make Overview and Operations useful
+
+- Overview: service health and feature readiness, active deployment/build
+  status, pending approvals, recent completed/failed operations, and clear
+  next-action links.
+- Operations: separate Deployments, Hosting, Temporary Access, and History
+  views with searchable/filterable bounded records.
+- Deploy/SSH request cards show immutable request details, capability/target,
+  expiry, consequence, status, and outcome. Keep approval decisions in the
+  owning authorization/operation handlers.
+- Replace opaque failures with bounded operator-facing explanations and a
+  correlation ID; never return arbitrary command output or secrets.
+
+### Phase C: finish service-owned workbenches
+
+- Identity: profiles, linked providers, roles, permission requests, sessions,
+  audit, preview/confirm mutations.
+- Registry/Workshop: catalog search, identity/source details, Workshop binding,
+  visibility, and explicit publish readiness. No Steam credentials or invented
+  publishing control.
+- Artifact: release inventory, manifests, signatures, targets, channels and
+  validation detail; mutations only where Artifact already owns an audited
+  operation.
+- Build Cache: per-target current snapshot, lock/freshness and native-builder
+  state, connected to service-owned APIs and builder reports.
+- Each section keeps independent build/deploy ownership and renders inside the
+  shared shell contract.
+
+### Phase D: whole-journey review and rollout
+
+- Review a logged-out → root-login → overview → inspect service → request/approve
+  operation → inspect result journey, including service outage and stale state.
+- Independently review service ownership, authz, CSRF, output handling, cache
+  headers, accessibility, and failure behavior across the complete toolbench.
+- Validate the composed local server, deploy the approved revision through the
+  human-approved path, then inspect the actual public dashboard before calling
+  this pass complete.
+
+The deployment/cutover incident is a separate operational blocker and must not
+be treated as completion of this productization pass.
