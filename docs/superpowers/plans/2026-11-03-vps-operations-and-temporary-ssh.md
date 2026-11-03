@@ -23,7 +23,7 @@ Linux/Windows VM builder remains a separate follow-on phase below.
 - Only server-defined capabilities may be requested or granted; never accept shell strings, executable paths, or sudoers text.
 - A grant requires a fresh Identity root authorization check; a Platform SQLite `approved` value alone is not root authorization.
 - The default SSH login is a distinct temporary account; leave root SSH and existing administrator access unchanged.
-- Hard maximum SSH grant duration is eight hours; approval may only grant a subset of requested capabilities and no longer than requested.
+- Hard maximum SSH grant duration is eight hours; the request describes intent, while the root operator selects the actual grant from the server allowlist and may reduce or expand scope and duration.
 - Keep the state-export backup timer. Remove the five-minute deploy poller.
 - Preserve and report the existing VPS state before cutover; abort on any source or service state that is not explicitly recognized.
 
@@ -39,21 +39,24 @@ Linux/Windows VM builder remains a separate follow-on phase below.
 
 ---
 
-### Task 1: Add the SSH request credential scope
+### Task 1: Add requester-initiated browser authorization
 
 **Files:**
 - Modify: `Vapor-Identity-Server/src/automation_credentials.rs`
-- Modify: `Vapor-Identity-Server/src/browser_handlers.rs`
+- Modify: `Vapor-Identity-Server/src/db.rs`
+- Modify: `Vapor-Identity-Server/src/lib.rs`
 - Modify: `Vapor-Identity-Server/README.md`
-- Modify: `Vapor-Identity-Server/src/lib.rs` only if the verifier route needs an explicit change
+- Create: `Vapor-Identity-Server/src/cli_authorizations.rs`
 
 **Interfaces:**
-- Add the exact scope `platform:ssh-access:request`.
-- Extend Platform credential verification for audience `vapor-platform-server` to return this scope distinctly from `platform:deploy-request:create`.
-- Keep this credential request-only; it cannot approve or activate an SSH grant.
+- CLI starts an Identity device authorization containing its local SSH key fingerprint, purpose, requested capabilities, and duration.
+- A signed-in browser profile confirms or denies request submission after reviewing those exact values.
+- After confirmation, Identity issues a three-minute, single-use credential bound to the fingerprint and digest of the canonical request fields. Platform's existing verifier carries these bindings and refuses any changed request.
+- The generic automation-credential UI must reject `platform:ssh-access:request`; only this browser-confirmed flow can mint it. This credential submits a request only and cannot approve or activate a grant.
 
-- [x] Add the new scope to the Identity allowlist, verifier, and admin credential-creation UI.
-- [x] Document that credentials with this scope may submit SSH access requests only.
+- [x] Add requester start, browser confirm/deny, and CLI poll endpoints with short-lived hashed codes and audit records.
+- [x] Add one-time credential issuance and consume-once verification with key and request bindings.
+- [x] Exclude the SSH scope from generic credential creation and document that it can submit requests only.
 - [x] Commit and push the Identity submodule update; record its commit for the Platform pin.
 
 ### Task 2: Add SSH request and grant records
@@ -64,16 +67,16 @@ Linux/Windows VM builder remains a separate follow-on phase below.
 - Modify: `src/deploy_requests.rs` only to share existing root-authorization/session extraction helpers
 
 **Interfaces:**
-- `POST /api/ssh-access/requests` accepts `{ public_key, purpose, requested_capabilities, requested_duration_seconds }` and an Identity automation credential with the new scope.
+- `POST /api/ssh-access/requests` accepts `{ public_key, purpose, requested_capabilities, requested_duration_seconds }` and a one-time Identity credential bound to the exact public-key fingerprint and request tuple.
 - `GET /api/admin/ssh-access/requests` lists root-visible requests with computed OpenSSH fingerprints.
-- `POST /api/admin/ssh-access/requests/{id}/approve` accepts expected version, confirmation, granted capability subset, and granted duration.
+- `POST /api/admin/ssh-access/requests/{id}/approve` accepts expected version, confirmation, any server-allowed granted capability set, and a duration up to eight hours.
 - `POST /api/admin/ssh-access/grants/{id}/revoke` revokes an active grant immediately.
 - Allowed capabilities: `vapor_deploy`, `vapor_service_control`, and `host_admin`; shell is implicit and `host_admin` is exclusive. Restore is deferred until it has a request-bound safe interface.
 - Allowed key type for v1: `ssh-ed25519`; maximum request duration: 28,800 seconds.
 
 - [x] Add SQLite tables for requests, grant state, and audit transitions. Store no private key or session token.
 - [x] Validate input size, key syntax, supported key type, fingerprint, purpose length, duration, and capability set before insert.
-- [x] Authenticate request creation using Identity's credential verifier and scope; authenticate listing/approval/revocation with the existing root session check.
+- [x] Authenticate request creation using Identity's one-time verifier and compare both bindings; authenticate listing/approval/revocation with the existing root session check.
 - [x] Use compare-and-update request versions and no-store JSON responses.
 
 ### Task 3: Implement the fixed root operation helper
@@ -188,6 +191,6 @@ snapshot pointer.
 
 - The VPS runs the approved Platform revision and Caddy still serves the public site.
 - Deploy requests execute only after root approval and start immediately through a per-request unit; the deploy polling timer is absent/disabled.
-- SSH requests display the exact key fingerprint and requested powers; root approval can grant only the requested subset and duration.
+- SSH requests display the exact key fingerprint and requested powers; root approval independently selects the actual grant within server policy and the eight-hour limit.
 - The temporary account has only its granted capabilities, and explicit revoke plus natural expiry remove access and terminate sessions.
 - Every operation reports an auditable outcome through the shared Operations dashboard/API; VNC is needed only for first bootstrap/recovery, not routine approvals.

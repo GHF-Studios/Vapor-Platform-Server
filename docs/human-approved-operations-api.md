@@ -72,24 +72,32 @@ that ticket instead of creating duplicates.
 
 ## Temporary SSH access
 
-Temporary SSH is a separate request scope, not a side effect of deploy
-credentials. Request creation uses an Identity credential scoped to
-`platform:ssh-access:request`; it cannot approve or activate access. The
-Operations dashboard displays the submitted key's OpenSSH fingerprint, purpose,
-requested capability set, host, and requested duration. The root operator may
-grant only a subset of those capabilities and no longer than the requested
-duration (maximum eight hours).
+Temporary SSH is a separate request flow, not a side effect of deploy
+credentials. The requester starts in Vapor CLI; Identity displays the exact
+key fingerprint, purpose, requested capabilities, and duration in a signed-in
+browser session. Identity issues a three-minute, single-use
+`platform:ssh-access:request` credential bound to the key and a digest of those
+request fields. The generic automation-credential UI cannot issue this scope.
+Platform verifies the bindings before creating a request. Browser confirmation
+only permits request submission; it does not grant access. A root operator
+chooses the actual grant from the server allowlist, which may be broader or
+narrower than requested, up to the server-wide eight-hour maximum.
 
 | Route | Authority | Purpose |
 | --- | --- | --- |
-| `POST /api/ssh-access/requests` | Identity credential scoped to `platform:ssh-access:request` | Submit an Ed25519 key and bounded access request |
+| `POST /api/identity/v1/cli/ssh-authorization/start` | Public, quota-limited request start | Create a short-lived browser-confirmation request; returns the authorization URL and polling code |
+| `GET /cli/ssh/authorize?user_code=…` | Public view; sign-in required to confirm | Inspect the exact request before authorizing submission |
+| `POST /cli/ssh/authorize` | Signed-in Identity profile, same-origin | Confirm or deny submission of this exact request |
+| `POST /api/identity/v1/cli/ssh-authorization/poll` | Device code held by the initiating CLI | Poll status; after confirmation, redeem one single-use credential bound to the exact request |
+| `POST /api/ssh-access/requests` | Single-use Identity credential scoped to `platform:ssh-access:request`, bound to key and request digest | Submit the Ed25519 key and the exact authorized request |
 | `GET /api/admin/ssh-access/requests` | Root browser session | Review request and grant state |
-| `POST /api/admin/ssh-access/requests/{id}/approve` | Root browser session, same-origin, explicit confirmation, expected version | Provision a separate temporary account and requested capability subset |
+| `POST /api/admin/ssh-access/requests/{id}/approve` | Root browser session, same-origin, explicit confirmation, expected version | Provision a separate temporary account with the operator-selected policy-allowed grant |
 | `POST /api/admin/ssh-access/requests/{id}/reject` | Root browser session, same-origin, explicit confirmation, expected version | Reject a pending request and discard its stored public key |
 | `POST /api/admin/ssh-access/grants/{id}/revoke` | Root browser session, same-origin, explicit confirmation, expected version | Remove a grant and terminate its sessions |
 
 Grant capabilities are `vapor_deploy`, `vapor_service_control`, and
-`host_admin`; a shell with no sudo is implicit. The host-admin grant is
+`host_admin`; a shell with no sudo is implicit. The operator can reduce or
+expand the request within this allowlist and the eight-hour hard limit. The host-admin grant is
 exclusive, requires a separate acknowledgement, and gives unrestricted sudo,
 so it can disable its own expiry. Lesser grants use fixed wrappers and cannot
 choose arbitrary commands or unit names. A per-grant persistent systemd timer
