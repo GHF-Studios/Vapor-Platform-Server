@@ -182,11 +182,16 @@ mod unix_impl {
                 if row.get::<String, _>("status") != "pending" {
                     return Err("only a pending SSH request can be granted".to_owned());
                 }
+                let id = row.get::<String, _>("id");
+                let version = row.get::<i64, _>("version");
+                let expires = unix_now().saturating_add(duration_seconds);
+                let expires_display =
+                    chrono_free_iso(expires).unwrap_or_else(|| format!("Unix time {expires}"));
+                let username = ssh_username(&id);
+                let host = ssh_access_host();
+                let capabilities_display = capabilities.join(", ");
                 println!(
-                    "\nRequested operation: grant {} for {} seconds with [{}].",
-                    request_id,
-                    duration_seconds,
-                    capabilities.join(", ")
+                    "\nGrant preview: account {username}@{host}; scope [{capabilities_display}]; duration {duration_seconds} seconds; expires {expires_display}."
                 );
                 let fingerprint: String = row.get("fingerprint");
                 println!("Type the displayed fingerprint exactly to create this temporary SSH account, key file, sudo policy, and expiry timer:");
@@ -202,9 +207,6 @@ mod unix_impl {
                 } else {
                     false
                 };
-                let id = row.get::<String, _>("id");
-                let version = row.get::<i64, _>("version");
-                let expires = unix_now().saturating_add(duration_seconds);
                 let granted_json = serde_json::to_string(&capabilities)
                     .map_err(|_| "could not encode grant scope".to_owned())?;
                 let transition = sqlx::query("UPDATE platform_ssh_access_requests SET status='provisioning', version=version+1, granted_capabilities_json=?, granted_duration_seconds=?, expires_at_unix=?, decided_by_profile_id=NULL, decided_by_actor_kind='local_operator', decided_by_actor_label='local-root', decided_at_unix=?, operation_detail='granting' WHERE id=? AND status='pending' AND version=?")
@@ -231,7 +233,7 @@ mod unix_impl {
                         if result.rows_affected() != 1 {
                             return Err("account created but grant state changed unexpectedly; inspect with ssh show".to_owned());
                         }
-                        println!("Temporary SSH access is active until {expires} (Unix time). Request {id}.");
+                        println!("Temporary SSH access active: {username}@{host}; scope [{capabilities_display}]; expires {expires_display}; request {id}.");
                     }
                     Err((_, detail)) => {
                         let _ = sqlx::query("UPDATE platform_ssh_access_requests SET status='failed', version=version+1, operation_detail=? WHERE id=? AND status='provisioning' AND version=?")
@@ -995,6 +997,12 @@ mod unix_impl {
 
     fn ssh_username(id: &str) -> String {
         format!("vpssh_{}", id.split('-').next().unwrap_or("invalid"))
+    }
+
+    fn ssh_access_host() -> String {
+        configured_value("VAPOR_SSH_ACCESS_HOST")
+            .or_else(|| configured_value("VAPOR_DOMAIN"))
+            .unwrap_or_else(|| "vapor.ghf-studios.site".to_owned())
     }
 
     fn account_exists(username: &str) -> bool {
