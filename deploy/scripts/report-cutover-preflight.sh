@@ -67,11 +67,36 @@ fi
       *) origin_state=unexpected ;;
     esac
     printf 'origin_state=%s\n' "$origin_state"
+    origin_host=unavailable
+    origin_repository=unavailable
+    case "$origin" in
+      https://*|http://*|ssh://*)
+        origin_rest="${origin#*://}"
+        origin_authority="${origin_rest%%/*}"
+        origin_host="${origin_authority##*@}"
+        origin_host="${origin_host%%:*}"
+        origin_repository="${origin_rest#*/}"
+        origin_repository="${origin_repository%%\?*}"
+        origin_repository="${origin_repository%%\#*}"
+        origin_repository="${origin_repository%.git}"
+        ;;
+      *@*:*)
+        origin_host="${origin%%:*}"
+        origin_host="${origin_host#*@}"
+        origin_repository="${origin#*:}"
+        origin_repository="${origin_repository%.git}"
+        ;;
+    esac
+    if [[ ! "$origin_host" =~ ^[A-Za-z0-9.-]+$ ]]; then origin_host=unavailable; fi
+    if [[ ! "$origin_repository" =~ ^[A-Za-z0-9._/-]+$ ]]; then origin_repository=unavailable; fi
+    printf 'origin_host=%s\n' "$origin_host"
+    printf 'origin_repository=%s\n' "$origin_repository"
     printf 'branch=%s\n' "$(git -C "$root" branch --show-current 2>/dev/null || printf 'detached-or-unavailable')"
     printf 'revision=%s\n' "$(git -C "$root" rev-parse HEAD 2>/dev/null || printf 'unavailable')"
     if status="$(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null)"; then
       count="$(printf '%s\n' "$status" | awk 'NF { n++ } END { print n+0 }')"
       printf 'working_tree_entries=%s\n' "$count"
+      printf '%s\n' "$status" | awk 'NF { if (++n <= 50) print "dirty_entry=" $0 } END { if (n > 50) print "dirty_entries_truncated=" n-50 }'
     else
       printf 'working_tree_entries=unavailable\n'
     fi
