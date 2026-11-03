@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 require_root
+umask 022
 
 if [ "$#" -eq 1 ] && [ "$1" = "--bootstrap" ]; then
   if [ -e "${VAPOR_DEPLOY_ROOT}/.git" ] || [ -n "$(find "${VAPOR_DEPLOY_ROOT}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
@@ -85,6 +86,30 @@ if [ "${DEPLOY_OPERATION_REVISION}" != "${APPROVED_REVISION}" ]; then
   exit 1
 fi
 
+ensure_runtime_access() {
+  local path
+  for path in \
+    "${VAPOR_DEPLOY_ROOT}" \
+    "${VAPOR_DEPLOY_ROOT}/target" \
+    "${VAPOR_DEPLOY_ROOT}/target/release"; do
+    if [ ! -d "${path}" ] || [ -L "${path}" ]; then
+      echo "error: expected a regular runtime directory at ${path}" >&2
+      return 1
+    fi
+    chown "root:${VAPOR_GROUP}" "${path}"
+    chmod 0750 "${path}"
+  done
+
+  for path in "$@"; do
+    if [ ! -f "${path}" ] || [ -L "${path}" ]; then
+      echo "error: expected a regular server executable at ${path}" >&2
+      return 1
+    fi
+    chown "root:${VAPOR_GROUP}" "${path}"
+    chmod 0750 "${path}"
+  done
+}
+
 # Atlas is a separately owned static site. Build it to its own public tree;
 # never send its bundle through the Docs service's replacement endpoint.
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/deploy-atlas.sh"
@@ -162,6 +187,7 @@ if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
   cargo build --release --locked \
     --manifest-path "${VAPOR_DEPLOY_ROOT}/Cargo.toml" \
     --target-dir "${VAPOR_DEPLOY_ROOT}/target"
+  ensure_runtime_access "${VAPOR_DEPLOY_ROOT}/target/release/vapor_platform_server"
   "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-systemd.sh"
   "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-caddy.sh"
 else
@@ -174,6 +200,14 @@ else
       --manifest-path "${VAPOR_DEPLOY_ROOT}/${service_package}/Cargo.toml" \
       --target-dir "${VAPOR_DEPLOY_ROOT}/target"
   done
+  ensure_runtime_access \
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_homepage_server" \
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_docs_server" \
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_identity_server" \
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_diagnostics_server" \
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_registry_server" \
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_artifact_server" \
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_build_cache_server"
   "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-services-systemd.sh"
   "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-services-caddy.sh"
 fi
