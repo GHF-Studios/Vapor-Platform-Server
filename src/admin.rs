@@ -1,5 +1,8 @@
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::body::{to_bytes, Body};
+use axum::extract::Request;
+use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderValue, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Json;
@@ -13,28 +16,82 @@ const DEFAULT_PROBE_ORIGIN: &str = "http://127.0.0.1:7110";
 const DEFAULT_IDENTITY_AUTHZ_URL: &str =
     "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check";
 
-const MODULES: &[(&str, &str, &str, bool)] = &[
-    ("Platform", "/admin", "Read-only host overview", true),
-    (
-        "Operations",
-        "/admin/operations",
-        "Live status and runbooks",
-        true,
-    ),
-    (
-        "Workshop",
-        "/admin/workshop",
-        "Registry-owned catalog",
-        true,
-    ),
-    ("Identity", "/admin/identity", "Accounts and access", true),
-    ("Artifacts", "/admin/artifacts", "Vapor releases", true),
-    (
-        "Build Cache",
-        "/admin/build-cache",
-        "Target snapshots",
-        true,
-    ),
+const MAX_ADMIN_PAGE_BYTES: usize = 8 * 1024 * 1024;
+
+struct AdminSection {
+    group: &'static str,
+    name: &'static str,
+    path: Option<&'static str>,
+    description: &'static str,
+    service_id: Option<&'static str>,
+    state: SectionState,
+}
+
+#[derive(Clone, Copy)]
+enum SectionState {
+    Implemented,
+    Planned,
+}
+
+// This is the only section inventory. Service health is reported separately by
+// the overview endpoint; a mounted route must not imply that its service is up.
+const MODULES: &[AdminSection] = &[
+    AdminSection {
+        group: "Overview",
+        name: "Overview",
+        path: Some("/admin"),
+        description: "Service health and readiness",
+        service_id: Some("platform"),
+        state: SectionState::Implemented,
+    },
+    AdminSection {
+        group: "Catalog",
+        name: "Workshop / Registry",
+        path: Some("/admin/workshop"),
+        description: "Registry-owned catalog inventory",
+        service_id: Some("registry"),
+        state: SectionState::Implemented,
+    },
+    AdminSection {
+        group: "Accounts",
+        name: "Identity",
+        path: Some("/admin/identity"),
+        description: "Accounts and access administration",
+        service_id: Some("identity"),
+        state: SectionState::Implemented,
+    },
+    AdminSection {
+        group: "Distribution",
+        name: "Artifacts",
+        path: Some("/admin/artifacts"),
+        description: "Signed Vapor releases",
+        service_id: Some("artifacts"),
+        state: SectionState::Implemented,
+    },
+    AdminSection {
+        name: "Build Cache",
+        group: "Distribution",
+        path: Some("/admin/build-cache"),
+        description: "Per-target compiler snapshots",
+        service_id: Some("build-cache"),
+        state: SectionState::Implemented,
+    },
+    AdminSection {
+        group: "Distribution",
+        name: "Native builders",
+        path: None,
+        description: "VPS-managed Linux and Windows build orchestration is not available yet",
+        service_id: None,
+        state: SectionState::Planned,
+    },
+    AdminSection {
+        group: "Operations",
+        name: "Operations",
+        path: Some("/admin/operations"),
+        description: "Deployments, temporary access, and history",
+        service_id: Some("platform"),
+        state: SectionState::Implemented,
+    },
 ];
 
 const CSS: &str = r#"
@@ -44,10 +101,14 @@ body { margin:0; min-height:100vh; }
 .shell { min-height:100vh; display:grid; grid-template-columns:220px 1fr; }
 nav { padding:22px 14px; background:#182330; border-right:1px solid #2b3a4b; }
 .brand { margin:0 0 18px; font-size:16px; letter-spacing:.03em; }
-nav a { display:block; padding:9px 10px; margin:3px 0; border-radius:5px; color:#c7d2de; text-decoration:none; }
+.nav-group { margin:19px 10px 6px; color:#8092a5; font-size:10px; letter-spacing:.11em; text-transform:uppercase; }
+nav a { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; margin:3px 0; border-radius:5px; color:#c7d2de; text-decoration:none; }
 nav a:hover, nav a[aria-current="page"] { background:#26394e; color:#fff; }
 .nav-disabled { display:flex; justify-content:space-between; gap:8px; padding:9px 10px; margin:3px 0; color:#788797; }
-.nav-status { color:#b7a564; font-size:11px; white-space:nowrap; }
+.nav-status { color:#9eacba; font-size:10px; white-space:nowrap; }
+.nav-status.status-unavailable { color:#ed7a80; }
+.nav-status.status-implemented { color:#6fc58a; }
+.nav-status.status-planned { color:#d4bd69; }
 .service-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
 .service-card { background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
 .service-card h2 { font-size:15px; margin:0 0 8px; }
@@ -56,6 +117,18 @@ nav a:hover, nav a[aria-current="page"] { background:#26394e; color:#fff; }
 .state-unavailable { color:#ed7a80; }
 .state-planned { color:#d4bd69; }
 main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
+.admin-workspace { min-width:0; }
+.admin-header { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:14px clamp(20px,4vw,56px); border-bottom:1px solid #2b3a4b; background:#151f2a; }
+.admin-section-name { margin:2px 0 0; font-size:16px; font-weight:650; }
+.admin-statuses { display:flex; align-items:center; justify-content:flex-end; gap:8px 18px; flex-wrap:wrap; }
+.admin-status-item { margin:0; color:#9eacba; font-size:12px; }
+.status-pill { display:inline-block; margin-left:5px; padding:2px 7px; border:1px solid #40536a; border-radius:10px; color:#c7d2de; font-size:11px; }
+.status-pill.status-healthy { border-color:#316947; color:#8bd59f; }
+.status-pill.status-unavailable { border-color:#7a3e45; color:#f08b92; }
+.status-pill.status-protected { border-color:#53677e; color:#b4c2d1; }
+.skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; background:#fff; color:#111; }
+.skip-link:focus { left:8px; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
 .eyebrow { color:#80a8cd; text-transform:uppercase; letter-spacing:.12em; font-size:11px; }
 h1 { margin:.35rem 0 1.25rem; font-size:26px; }
 .card { background:#182330; border:1px solid #2b3a4b; border-radius:7px; padding:16px; }
@@ -69,7 +142,7 @@ label { display:block; margin:8px 0; }
 form.inline { display:inline; }
 .notice { background:#163222; border-left:3px solid #42a56b; padding:8px 10px; }
 .error { background:#3a2024; border-left:3px solid #da626c; padding:8px 10px; }
-@media(max-width:720px) { .shell { grid-template-columns:1fr; } nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } nav a { display:inline-block; } main { padding:20px 14px; } }
+@media(max-width:720px) { .shell { grid-template-columns:1fr; } nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } .nav-group { display:inline-block; margin:8px 8px 4px; } nav a { display:inline-flex; } .admin-header { align-items:flex-start; flex-direction:column; padding:12px 14px; } .admin-statuses { justify-content:flex-start; } main { padding:20px 14px; } }
 "#;
 
 const JS: &str = r#"
@@ -94,50 +167,48 @@ const JS: &str = r#"
     }
     message.textContent = await responseFailure(response, fallback);
   };
-  const modules = [
-    ['Platform', '/admin', true],
-    ['Operations', '/admin/operations', true],
-    ['Workshop', '/admin/workshop', true],
-    ['Identity', '/admin/identity', true],
-    ['Artifacts', '/admin/artifacts', true],
-    ['Build Cache', '/admin/build-cache', true],
-  ];
-  const shell = document.createElement('div');
-  shell.className = 'shell';
-  const nav = document.createElement('nav');
-  nav.setAttribute('aria-label', 'Admin modules');
-  const brand = document.createElement('p');
-  brand.className = 'brand';
-  brand.textContent = 'Vapor Platform';
-  nav.append(brand);
-  for (const [label, href, available] of modules) {
-    if (available) {
-      const link = document.createElement('a');
-      link.href = href;
-      link.textContent = label;
-      if (location.pathname === href) link.setAttribute('aria-current', 'page');
-      nav.append(link);
-    } else {
-      const item = document.createElement('span');
-      item.className = 'nav-disabled';
-      item.setAttribute('aria-disabled', 'true');
-      const name = document.createElement('span');
-      name.textContent = label;
-      const status = document.createElement('small');
-      status.className = 'nav-status';
-      status.textContent = 'Planned';
-      item.append(name, status);
-      nav.append(item);
+  const updateShellStatus = (response, body) => {
+    const operator = document.querySelector('[data-operator-session]');
+    const platform = document.querySelector('[data-platform-status]');
+    const setPill = (element, label, state) => {
+      if (!element) return;
+      element.textContent = label;
+      element.className = `status-pill status-${state}`;
+    };
+    if (!response) {
+      setPill(operator, 'Unavailable', 'unavailable');
+      setPill(platform, 'Unavailable', 'unavailable');
+      return;
     }
-  }
-  main.parentNode.insertBefore(shell, main);
-  shell.append(nav, main);
+    if (!response.ok) {
+      const label = response.status === 401 ? 'Sign in required' :
+        response.status === 403 ? 'Root access required' : 'Unavailable';
+      const state = response.status === 401 || response.status === 403 ? 'protected' : 'unavailable';
+      setPill(operator, label, state);
+      setPill(platform, response.status === 401 || response.status === 403 ? 'Protected' : 'Unavailable', state);
+      return;
+    }
 
+    setPill(operator, 'Root session verified', 'healthy');
+    const services = Array.isArray(body && body.services) ? body.services : [];
+    const platformService = services.find(service => service.id === 'platform');
+    const platformHealthy = platformService && platformService.health === 'healthy';
+    setPill(platform, platformHealthy ? 'Healthy' : 'Unavailable', platformHealthy ? 'healthy' : 'unavailable');
+    for (const link of document.querySelectorAll('[data-admin-service]')) {
+      const service = services.find(item => item.id === link.dataset.adminService);
+      const status = link.querySelector('[data-nav-status]');
+      if (!service || !status) continue;
+      const healthy = service.health === 'healthy';
+      status.textContent = healthy ? 'Implemented' : 'Unavailable';
+      status.className = `nav-status ${healthy ? 'status-implemented' : 'status-unavailable'}`;
+    }
+  };
   const overview = document.querySelector('#platform-overview, #operations-status');
   if (overview) {
     fetch('/api/admin/overview', { credentials: 'same-origin', cache: 'no-store' })
       .then(async response => ({ response, body: await response.json().catch(() => null) }))
       .then(({ response, body }) => {
+        updateShellStatus(response, body);
         overview.replaceChildren();
         if (!response.ok) {
           const message = document.createElement('p');
@@ -183,8 +254,14 @@ const JS: &str = r#"
         overview.append(grid);
       })
       .catch(() => {
+        updateShellStatus(null, null);
         overview.textContent = 'Service status is temporarily unavailable.';
       });
+  } else {
+    fetch('/api/admin/overview', { credentials: 'same-origin', cache: 'no-store' })
+      .then(async response => ({ response, body: await response.json().catch(() => null) }))
+      .then(({ response, body }) => updateShellStatus(response, body))
+      .catch(() => updateShellStatus(null, null));
   }
 
   const history = document.querySelector('#operations-history');
@@ -465,28 +542,151 @@ pub fn router() -> Router {
         .merge(crate::deploy_requests::router())
 }
 
-async fn landing() -> Response {
-    let links = MODULES
+/// Apply the shared, Platform-owned HTML frame to service-owned admin pages.
+/// Services keep rendering their `<main id="admin-content">`; the platform
+/// contributes navigation without taking ownership of their page contents.
+pub async fn shell_middleware(request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_owned();
+    let is_admin_document = request.method() == axum::http::Method::GET
+        && (path == "/admin" || path.starts_with("/admin/"))
+        && !path.starts_with("/admin/assets/");
+    let response = next.run(request).await;
+    if !is_admin_document
+        || !response.status().is_success()
+        || !response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/html"))
+    {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    let bytes = match to_bytes(body, MAX_ADMIN_PAGE_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return html_response(
+                StatusCode::BAD_GATEWAY,
+                "text/html; charset=utf-8",
+                "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Admin page unavailable</title><body><main><h1>Admin page unavailable</h1><p>The service page exceeded the Platform shell size limit.</p></main></body></html>".to_owned(),
+            );
+        }
+    };
+    let Ok(html) = String::from_utf8(bytes.to_vec()) else {
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    let Some(wrapped) = wrap_admin_document(&html, &path) else {
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+
+    parts.headers.remove(CONTENT_LENGTH);
+    parts
+        .headers
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    Response::from_parts(parts, Body::from(wrapped))
+}
+
+fn wrap_admin_document(html: &str, current_path: &str) -> Option<String> {
+    let lowered = html.to_ascii_lowercase();
+    let body_start = lowered.find("<body")?;
+    let body_open_end = lowered[body_start..].find('>')? + body_start + 1;
+    let body_end = lowered.rfind("</body>")?;
+    if !lowered.contains("<main id=\"admin-content\"") {
+        return None;
+    }
+    if body_end < body_open_end
+        || lowered[body_open_end..body_end].contains("<div class=\"shell\">")
+    {
+        return None;
+    }
+
+    let mut wrapped = String::with_capacity(html.len() + 1200);
+    wrapped.push_str(&html[..body_open_end]);
+    wrapped.push_str("<a class=\"skip-link\" href=\"#admin-content\">Skip to content</a>");
+    wrapped.push_str("<div class=\"shell\">");
+    wrapped.push_str(&render_admin_navigation(current_path));
+    wrapped.push_str("<div class=\"admin-workspace\">");
+    wrapped.push_str(&render_admin_header(current_path));
+    wrapped.push_str(&html[body_open_end..body_end]);
+    wrapped.push_str("</div></div>");
+    wrapped.push_str(&html[body_end..]);
+    Some(wrapped)
+}
+
+fn render_admin_header(current_path: &str) -> String {
+    let normalized_path = if current_path == "/admin/" {
+        "/admin"
+    } else {
+        current_path
+    };
+    let current = MODULES
         .iter()
-        .map(|(name, path, description, available)| {
-            if *available {
-                format!(
-                    "<a href=\"{}\" title=\"{}\">{}</a>",
-                    escape_html(path),
-                    escape_html(description),
-                    escape_html(name)
-                )
-            } else {
-                format!(
-                    "<span class=\"nav-disabled\" aria-disabled=\"true\"><span title=\"{}\">{}</span><small class=\"nav-status\">Planned</small></span>",
-                    escape_html(description),
-                    escape_html(name)
-                )
-            }
+        .filter(|section| {
+            section
+                .path
+                .is_some_and(|path| section_path_matches(path, normalized_path))
         })
-        .collect::<String>();
+        .max_by_key(|section| section.path.map_or(0, str::len));
+    let section_name = current.map_or("Administration", |section| section.name);
+    format!(
+        "<header class=\"admin-header\"><div><p class=\"eyebrow\">Current section</p><p class=\"admin-section-name\">{}</p></div><div class=\"admin-statuses\"><p class=\"admin-status-item\">Operator session <span class=\"status-pill status-protected\" data-operator-session role=\"status\" aria-live=\"polite\">Checking</span></p><p class=\"admin-status-item\">Platform <span class=\"status-pill\" data-platform-status role=\"status\" aria-live=\"polite\">Checking</span></p></div></header>",
+        escape_html(section_name)
+    )
+}
+
+fn render_admin_navigation(current_path: &str) -> String {
+    let mut html = String::from(
+        "<nav aria-label=\"Platform administration\"><p class=\"brand\">Vapor Platform</p>",
+    );
+    let mut current_group = "";
+    for section in MODULES {
+        if section.group != current_group {
+            current_group = section.group;
+            html.push_str(&format!(
+                "<p class=\"nav-group\">{}</p>",
+                escape_html(section.group)
+            ));
+        }
+        match (section.state, section.path) {
+            (SectionState::Implemented, Some(path)) => {
+                let current = if section_path_matches(path, current_path) {
+                    " aria-current=\"page\""
+                } else {
+                    ""
+                };
+                let service = section.service_id.unwrap_or("");
+                html.push_str(&format!(
+                    "<a href=\"{}\" title=\"{}\" data-admin-service=\"{}\"{}><span>{}</span><small class=\"nav-status status-implemented\" data-nav-status>Implemented</small></a>",
+                    escape_html(path),
+                    escape_html(section.description),
+                    escape_html(service),
+                    current,
+                    escape_html(section.name)
+                ));
+            }
+            (SectionState::Planned, _) => html.push_str(&format!(
+                "<span class=\"nav-disabled\" aria-disabled=\"true\"><span title=\"{}\">{}</span><small class=\"nav-status status-planned\">Planned</small></span>",
+                escape_html(section.description),
+                escape_html(section.name)
+            )),
+            (SectionState::Implemented, None) => {}
+        }
+    }
+    html.push_str("</nav>");
+    html
+}
+
+fn section_path_matches(section_path: &str, current_path: &str) -> bool {
+    current_path == section_path
+        || (section_path != "/admin"
+            && current_path.starts_with(&format!("{}/", section_path.trim_end_matches('/'))))
+        || (section_path == "/admin" && current_path == "/admin/")
+}
+
+async fn landing() -> Response {
     let html = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><div class=\"shell\"><nav aria-label=\"Admin modules\"><p class=\"brand\">Vapor Platform</p>{links}</nav><main><p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section></main></div></body></html>"
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section></main></body></html>"
     );
     html_response(StatusCode::OK, "text/html; charset=utf-8", html)
 }

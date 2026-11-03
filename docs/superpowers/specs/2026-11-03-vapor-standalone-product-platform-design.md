@@ -19,13 +19,24 @@ checkout cleanup.
 
 - Vapor is installed, updated, and uninstalled independently through its own
   installer and release feed; Steam is not Vapor's distribution authority.
-- The official Loo Cast Steam app owns three local first-party products:
-  Spacetime Engine, Loo Cast Game, and Loo Cast Packagepack. Those products are
-  depot-provided and non-publishable as community content.
-- Loo Cast may keep its Steam launch choices. One starts Loo Cast; another
-  opens Vapor's tools selector when Vapor is installed. If Vapor is absent, the
-  entrypoint gives clear install guidance rather than installing Vapor through
-  Steam.
+- Vapor's local install root is the user's Vapor home (`%USERPROFILE%\Vapor`
+  on Windows and `$HOME/Vapor` on Linux). Vapor owns its application, tools,
+  sources, caches, configuration, and state there; Steam does not own those
+  files or their lifecycle.
+- The official Loo Cast Steam app mounts one Loo Cast content artifact made up
+  of `App.vapor.toml`, Spacetime Engine, Loo Cast Game, and Loo Cast
+  Packagepack. These first-party products are depot-provided and
+  non-publishable as community content.
+- The Steam app may include a tiny locator/forwarder for its Vapor tools
+  selector launch choice. It only finds the independently installed Vapor and
+  asks it to open the selector; it never bundles, installs, updates, or owns
+  Vapor. If Vapor is absent, it gives clear install guidance. The other launch
+  choice starts Loo Cast.
+- The only local Vapor setup roles are **Player** and **Developer**. Developer
+  always installs the development toolset, including both supported targets
+  and managed cross-compilers; there is no skip option. Server-side ecosystem
+  developer authorization remains a separate permission, not a third local
+  role.
 - Mad Max is a user-owned external game installation. Vapor detects the local
   installation, indexes/mounts supported source data into a separate cache,
   and manages mods against that installation. Vapor servers never distribute
@@ -44,6 +55,9 @@ checkout cleanup.
   Vapor/toolchain lock. VPS-managed isolated Linux and Windows guest builds
   produce those snapshots; the exact guest images and virtualization mechanism
   remain implementation decisions.
+- The first delivery sprint runs two independent lanes in parallel: the public
+  Vapor download/getting-started journey, and the VPS operator admin toolbench.
+  Their data/authority responsibilities stay separate.
 
 ## Product and interface map
 
@@ -69,27 +83,28 @@ The public download page, local Vapor Client, and VPS admin toolbench are
 separate surfaces with different authority. They share product identities and
 release policy; they do not become one giant dashboard or one service owner.
 
-## Current truth and material drift
+## Repository baseline and material drift
+
+The following checkout and service observations were recorded on 2026-11-03.
+They are a recovery snapshot, not assertions about live state; re-check each
+repository and the VPS before acting on it.
 
 - Platform root `45e875acd4c825c30dfe2ab8423a2527dbcc3eb0` pins Identity
   `c92ea9e0206dface4a18563d9feb428a0c66c74d`; the same-origin authorization
-  fix is published. Platform CI passed for the pin update. The new CLI request
-  was submitted, but the SSH grant has not been confirmed and the Operations
-  page did not provide a reliable way to inspect/approve it. A local typed-root
-  grant path remains a separate unapproved proposal.
-- The approved admin-toolbench design already calls for a server-rendered
-  shared shell, real unavailable states, task-oriented service workbenches,
-  and useful operation errors. Current `src/admin.rs` duplicates navigation
-  between Rust and injected JavaScript, marks every module available, stacks
-  unrelated Operations tasks together, and hides mutation response details.
-- Current `Vapor-Client` source still treats AppID `2122620` as the Vapor Steam
-  app and treats Loo Cast products as public Workshop content. The Steam
-  entrypoint derives Vapor's root from its location under that app. That
-  directly contradicts the approved standalone-Vapor direction.
-- The current Loo Cast manifests name Steam AppID `2122620`, public visibility,
-  and existing Workshop IDs for Engine, Game, and Packagepack. The target must
-  move those products to the Loo Cast Steam depot and mark them non-publishable;
-  no replacement AppID or migration mechanics are assumed here.
+  fix was published at that snapshot. The SSH requester flow and local typed
+  operator path have since been worked on and the typed path was owner-approved;
+  this design does not assert that an SSH grant is currently active. Verify the
+  actual request, grant, expiry, and audit record through the owning services.
+- At the recorded baseline, the admin-toolbench design already called for a
+  server-rendered shared shell, real unavailable states, task-oriented service
+  workbenches, and useful operation errors. At that baseline, `src/admin.rs`
+  duplicated navigation between Rust and injected JavaScript, marked every
+  module available, stacked unrelated Operations tasks together, and hid
+  mutation response details.
+- At the recorded snapshot, Vapor Client and Loo Cast metadata still reflected
+  the previous Steam/Workshop model. The accepted target is the standalone
+  Vapor lifecycle and the depot-mounted Loo Cast artifact described above;
+  current source and Steam metadata must be rechecked before migration.
 - Vapor Client's main checkout (`a5c302a`) contains distinct uncommitted
   standalone app updater work. `Vapor-Client-madmax` (`f8f91df`) contains a
   separate feature branch and dirty Vapor/CLI changes, with overlapping
@@ -139,15 +154,13 @@ release policy; they do not become one giant dashboard or one service owner.
 
 ## Delivery sequence
 
-### 0. Access bootstrap
+### 0. Access and repository recovery
 
-Recover a working, explicitly authorized Platform operator path for the current
-machine. The submitted CLI request still needs an actual Platform grant. The
-candidate paths are to fix and use the existing root-session Operations flow,
-or to approve and separately implement the narrow local typed-root grant
-proposal. Until one is completed, the grant is not active. A local root command
-is not a permanent key allowlist and is not the dashboard architecture. Confirm
-key, capabilities, account, host, and expiry before treating access as active.
+Reconcile the current Platform access request and grant state through the
+service-owned approval/audit record. The typed root-only operator path is an
+approved bootstrap interface, while the normal browser flow remains supported.
+Neither a submitted request nor an approval screen alone proves that access is
+active. Confirm key, capabilities, account, host, expiry, and audit outcome.
 
 ### 1. Reconcile authorship and active blockers
 
@@ -161,14 +174,18 @@ identity dependency; update Client and Mad Max plans to consume them.
 
 Finish signed release extraction, staging, root swap, rollback, GUI update
 state, trust-key provisioning, and independent uninstall. Store source
-checkouts, managed tools, cache, and state under a coherent Vapor home. Make
-Steam entrypoint discovery optional and external to Vapor's update authority.
+checkouts, managed tools, cache, configuration, and state under the agreed
+user-owned Vapor home. Make Steam entrypoint discovery optional and external to
+Vapor's update authority. Developer setup installs all required development
+tools by default; Player setup does not install them.
 
 ### 3. Establish trusted product topology
 
 Move the Loo Cast app/depot identity to the Loo Cast product while retaining
-its three depot-local artifacts and Vapor tools-selector launch option. Change
-their product source/visibility so they cannot be community-published. Add a
+the one depot-mounted product artifact and a tiny Vapor locator/forwarder for
+the tools-selector launch option. The locator only finds and invokes the
+separate Vapor install. Change the products' source/visibility so they cannot
+be community-published. Add a
 Mad Max external-game source adapter that detects the user-owned install,
 maintains a separate derived asset cache, and uses reversible mod receipts.
 Do not put game archives, textures, executables, or other licensed bytes in
@@ -226,18 +243,22 @@ Vapor distribution.
   and a clean export/reinstall/import/recheckout flow restores the platform
   without distributing licensed game content.
 
-## Decisions left to implementation planning
+## Decisions left open
 
 - Exact canonical source/product identities and versioned serialization follow
   active Vapor #1/#2; this design intentionally does not mint a second schema.
-- Exact Steam AppID/depot IDs, Workshop retirement steps, and migration order
-  require owner-controlled release metadata and are not inferred here.
+- Exact Steam AppID/depot IDs, locator packaging details, Workshop retirement
+  steps, and migration order require owner-controlled release metadata and are
+  not inferred here.
 - The client-owned location/layout for Vapor home subdirectories should reuse
   the current app updater and source migration contracts rather than invent a
   second path authority.
 - The VPS virtualization provider/images, Windows license/source, and resource
   budget need a read-only capability preflight before builder implementation.
-- The owner authorized a typed local-operator SSH path before approving this
-  cross-product design. Its exact scope, confirmation, audit, and lifecycle
-  contract is in `2026-11-03-typed-vps-ssh-operations-design.md`; it remains a
-  bootstrap interface and does not replace the web approval path.
+- The exact server-side identity representation for ecosystem-developer access
+  follows Vapor Identity's service-owned contract; it must not introduce a
+  third local install role.
+- The SSH request/grant path's current live status must be verified from the
+  owning service records; the approved typed operator interface does not replace
+  the web approval path. Its contract is in
+  `2026-11-03-typed-vps-ssh-operations-design.md`.

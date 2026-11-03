@@ -23,6 +23,9 @@
 - Keep secrets out of source, ordinary state exports, logs, and public artifact feeds.
 - Keep the existing exact-revision deploy approval contract and service-owned Identity permission approval contract.
 - Use one current signed build snapshot per supported target and rolling lock; build through VPS-managed isolated guests, not the owner’s workstation.
+- Install Vapor independently under the user's Vapor home (`%USERPROFILE%\Vapor` or `$HOME/Vapor`); Steam must not own Vapor application files, tools, caches, configuration, or state.
+- The only local setup roles are `Player` and `Developer`. Developer setup always includes the development toolset, both supported targets, and managed cross-compilers; it cannot be skipped. Server-side ecosystem authorization is separate from these local roles.
+- The Loo Cast Steam mount is one depot-provided content artifact (`App.vapor.toml`, Engine, Game, Packagepack) plus only the small Steam launch locator/forwarder needed to find the separate Vapor installation and open its tools selector. The locator never bundles or installs Vapor.
 
 ## Review Focus
 
@@ -53,6 +56,54 @@ The root Platform repository coordinates deployment and owns this roadmap. Detai
 - Modify: `docs/superpowers/specs/2026-11-03-vapor-standalone-product-platform-design.md` only when an owner-approved architectural decision changes.
 - Create: this coordinating plan.
 - Existing detailed Platform plans remain authoritative for Platform-owned implementation; do not duplicate their task lists here.
+
+## Immediate First Sprint: Two Parallel Lanes
+
+These two lanes are approved to proceed in parallel because they have different
+owners and different users. The website serves players and developers; the VPS
+admin toolbench serves platform operators. Do not merge their navigation,
+permissions, or operational data into one UI.
+
+### Public Vapor download and first-run journey
+
+- Owner: Vapor Homepage Server for public pages; Artifact Server for signed
+  application releases; Vapor Client for local install/update behavior.
+- Deliver a polished `/downloads` and getting-started flow for the standalone
+  Vapor installer. Explain Player versus Developer setup and what Developer
+  installs. Show only real signed releases and supported targets; if a target
+  does not yet have a release, state that clearly rather than showing a fake
+  download.
+- Explain that Loo Cast and Mad Max game files are acquired locally through
+  their respective sources and are not distributed by Vapor. Explain the
+  Loo Cast Steam locator's role without implying Steam installs Vapor.
+- Keep registration, identity, and local install actions at their actual
+  owning surfaces; the public page must not pretend to install or authorize a
+  product itself.
+- Acceptance: a new user can identify the supported OS/release, download only a
+  real signed Vapor artifact, verify what to do next, and understand when a
+  product source must be installed locally.
+
+### VPS operator admin toolbench
+
+- Owner: Platform for the shared shell and cross-service operations; each
+  service submodule for its own policy, data, state-changing actions, and audit.
+- Continue the approved server-rendered shell and service-owned workbenches.
+  Show truthful readiness/unavailable states, make the current deployment and
+  approval state understandable, and keep operations task-oriented.
+- This lane may not turn into a browser terminal, generic filesystem/SQL editor,
+  or a second implementation of Identity/Registry/Artifact/Build Cache policy.
+- Acceptance: an operator can understand service health and perform only
+  implemented, authorized, auditable workflows, with exact target and outcome.
+
+### Parallel-lane boundary
+
+- Each lane works in its owning repository/worktree and prepares its own review
+  and commit. Platform pins a service revision only after that service change
+  is reviewed and merged/published according to its repository workflow.
+- Existing dirty Vapor Client, Mad Max, and Loo Cast work remains preserved;
+  neither lane may sweep those changes into its commit.
+- No production deployment occurs as part of local implementation. Deployment
+  remains a separate exact-revision, owner-approved operation.
 
 ## Task 1: Establish an accurate recovery and access baseline
 
@@ -135,6 +186,7 @@ The root Platform repository coordinates deployment and owns this roadmap. Detai
 - [ ] Reconcile ownership from Task 2 before implementing overlapping updater/installer files.
 - [ ] Complete signed archive verification, staged extraction, transactional app-root replacement, rollback, GUI state, and production trust provisioning using the detailed plan.
 - [ ] Place managed sources/tools/cache/state under Vapor home according to existing path ownership; do not create a second competing home-layout authority.
+- [ ] Ensure Developer setup installs the complete mandatory toolset and Player setup does not expose a skip/partial-Developer route.
 - [ ] Make the public download page acquire the signed standalone installer from Artifact and show the supported release/target.
 - [ ] Run release signature, interrupted install/update, rollback, uninstall, and clean-machine bootstrap checks; expected result is no Steam dependency for Vapor’s own lifecycle.
 
@@ -147,13 +199,13 @@ The root Platform repository coordinates deployment and owns this roadmap. Detai
 - Create: Loo Cast depot/product migration plan after identifiers are verified.
 
 **Interfaces:**
-- Loo Cast source: trusted local depot containing exactly Engine, Game, and Packagepack first-party products; Vapor handoff is optional and does not install Vapor.
+- Loo Cast source: trusted local depot mounting one artifact (`App.vapor.toml`, Engine, Game, and Packagepack); the small Steam locator only finds the separate Vapor installation and opens its tools selector.
 - Mad Max source: user-selected local game installation; source files are never uploaded; derived index/cache is stored separately and can be rebuilt.
 - Output: product/source records conforming to Task 3’s canonical identity contract.
 
 - [ ] Verify Loo Cast Steam AppID/depot IDs, launch choices, existing Workshop item IDs, and owner-controlled retirement sequence; do not infer replacement identifiers.
 - [ ] Move Loo Cast first-party content out of public Workshop semantics and mark it server-authoritatively local-only.
-- [ ] Keep the official Steam app’s Loo Cast launch path and add the Vapor tools-selector handoff; missing Vapor shows install guidance without Steam-managed Vapor installation.
+- [ ] Keep the official Steam app's Loo Cast launch path and add the locator-only Vapor tools-selector handoff; it must never bundle, install, update, or own Vapor. Missing Vapor shows install guidance.
 - [ ] Add Mad Max install discovery, local source validation, separate derived cache, and reversible mod receipts using the Mad Max detailed plan.
 - [ ] Verify missing/changed game files lead to actionable repair, never a download from Vapor; verify Loo Cast depot content cannot publish.
 - [ ] Test both adapters against canonical identity fixtures and test the Loo Cast launch handoff with Vapor present and absent.
@@ -223,4 +275,13 @@ The root Platform repository coordinates deployment and owns this roadmap. Detai
 
 ## Execution Order and Handoff
 
-Execute Tasks 1–3 first. Tasks 4–7 follow their identity and ownership prerequisites; Task 8 may proceed after a successful resource preflight; Task 9 is the final release gate. Detailed plans remain the code-level source of truth for each task. Before a task spans repositories, create an isolated execution worktree for that repository and record its base revision; never stage this root repo’s unrelated dirty files as part of another lane.
+The **Immediate First Sprint** starts the public download/getting-started lane and
+admin toolbench lane in parallel. In the same period, recover the client
+ownership map without merging its dirty checkouts. After the first sprint,
+continue the dependency sequence: Tasks 1–3 establish verified operator access,
+ownership, and canonical Vapor identity; Tasks 4–7 advance policy, install,
+product, and admin work subject to those contracts; Task 8 follows a successful
+VPS resource/licensing preflight; Task 9 is the reconstruction/release gate.
+Detailed plans remain the code-level source of truth for each task. Before a
+task spans repositories, use an isolated execution worktree and record its base
+revision; never stage unrelated dirty files as part of another lane.

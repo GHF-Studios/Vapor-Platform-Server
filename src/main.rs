@@ -37,7 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(artifacts.admin)
         .merge(artifacts.api)
         .nest("/api/build-cache", build_cache.api)
-        .merge(build_cache.admin);
+        .merge(build_cache.admin)
+        .layer(axum::middleware::from_fn(admin::shell_middleware));
 
     let listener = TcpListener::bind(&bind).await?;
     eprintln!("vapor-platform-server listening on {bind}");
