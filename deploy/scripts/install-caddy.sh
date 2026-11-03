@@ -15,7 +15,8 @@ if ! command -v caddy >/dev/null 2>&1; then
 fi
 
 fallback_block="$(mktemp)"
-trap 'rm -f "${fallback_block}"' EXIT
+candidate_caddyfile="$(mktemp /etc/caddy/Caddyfile.XXXXXX)"
+trap 'rm -f "${fallback_block}" "${candidate_caddyfile}"' EXIT
 
 if [ -n "${VAPOR_HTTP_FALLBACK_HOST}" ]; then
   cat > "${fallback_block}" <<EOF
@@ -30,10 +31,16 @@ sed "s/{{VAPOR_DOMAIN}}/${VAPOR_DOMAIN}/g" \
   | sed \
     -e "/{{VAPOR_HTTP_FALLBACK_BLOCK}}/r ${fallback_block}" \
     -e "/{{VAPOR_HTTP_FALLBACK_BLOCK}}/d" \
-  > /etc/caddy/Caddyfile
+  > "${candidate_caddyfile}"
 
-caddy fmt --overwrite /etc/caddy/Caddyfile
-caddy validate --config /etc/caddy/Caddyfile
+caddy fmt --overwrite "${candidate_caddyfile}"
+caddy validate --config "${candidate_caddyfile}"
+
+# Redirection into an existing Caddyfile preserves its previous mode. Ensure
+# the unprivileged Caddy service can read the replacement configuration.
+chown root:caddy "${candidate_caddyfile}"
+chmod 0640 "${candidate_caddyfile}"
+mv -f -- "${candidate_caddyfile}" /etc/caddy/Caddyfile
 systemctl enable caddy.service
 
 echo "caddy: installed config for ${VAPOR_DOMAIN}"
