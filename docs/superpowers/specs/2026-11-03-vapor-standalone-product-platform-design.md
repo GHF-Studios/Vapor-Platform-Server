@@ -41,6 +41,20 @@ checkout cleanup.
   installation, indexes/mounts supported source data into a separate cache,
   and manages mods against that installation. Vapor servers never distribute
   Mad Max game files.
+- The Mad Max adapter uses Vapor's content layers deliberately: the locally
+  acquired `MadMax.exe` and required original runtime files form the **Engine**
+  source; game scripts and content form the **Game** layer; and
+  `MadMaxModding` is the integration **Packagepack** that makes the installation
+  receptive to Vapor-managed content. It owns the setup/repair lifecycle for
+  the ASI loader and the Mad Max bridge that connects the running game to Vapor.
+  The Packagepack must not contain Mad Max game files. If a third-party loader
+  binary cannot be redistributed, its installer must acquire it from its
+  authorized source rather than bundling it.
+- Mad Max mods may target the Engine, Game, or another mod/Packagepack, with
+  dependency, conflict, and override relationships represented through Vapor's
+  canonical content semantics. This design establishes the layer mapping; it
+  does not create a parallel manifest or identity schema before Vapor issues
+  #1/#2 define those contracts.
 - A content manifest cannot grant itself publish rights. Trusted product and
   source policy, enforced by Vapor Identity/Registry authority, decides whether
   content is local-only, publishable, or gated.
@@ -69,7 +83,10 @@ Vapor public site / release feed
             ├─ Loo Cast product adapter
             │    └─ local Steam depot source: Engine + Game + Packagepack
             └─ Mad Max product adapter
-                 └─ local user-owned game source + separate derived cache
+                 ├─ local Engine source: MadMax.exe + required original files
+                 ├─ Game layer: scripts/content and installed mod composition
+                 ├─ MadMaxModding Packagepack: ASI loader + Vapor bridge setup
+                 └─ separate derived cache; no game bytes uploaded
 
 Vapor VPS control plane
   ├─ Platform: composition, deployment, recovery, shared admin shell

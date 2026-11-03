@@ -1,5 +1,5 @@
 use axum::body::{to_bytes, Body};
-use axum::extract::Request;
+use axum::extract::{Query, Request};
 use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
@@ -99,11 +99,14 @@ const CSS: &str = r#"
 * { box-sizing:border-box; }
 body { margin:0; min-height:100vh; }
 .shell { min-height:100vh; display:grid; grid-template-columns:220px 1fr; }
-nav { padding:22px 14px; background:#182330; border-right:1px solid #2b3a4b; }
+.shell > nav { padding:22px 14px; background:#182330; border-right:1px solid #2b3a4b; }
 .brand { margin:0 0 18px; font-size:16px; letter-spacing:.03em; }
 .nav-group { margin:19px 10px 6px; color:#8092a5; font-size:10px; letter-spacing:.11em; text-transform:uppercase; }
-nav a { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; margin:3px 0; border-radius:5px; color:#c7d2de; text-decoration:none; }
-nav a:hover, nav a[aria-current="page"] { background:#26394e; color:#fff; }
+.shell > nav a { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; margin:3px 0; border-radius:5px; color:#c7d2de; text-decoration:none; }
+.shell > nav a:hover, .shell > nav a[aria-current="page"] { background:#26394e; color:#fff; }
+.operation-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 22px; padding:0 0 6px; border-bottom:1px solid #2b3a4b; }
+.operation-tabs a { display:inline-block; padding:8px 10px; border-radius:5px 5px 0 0; color:#c7d2de; text-decoration:none; }
+.operation-tabs a:hover, .operation-tabs a[aria-current="page"] { background:#26394e; color:#fff; }
 .nav-disabled { display:flex; justify-content:space-between; gap:8px; padding:9px 10px; margin:3px 0; color:#788797; }
 .nav-status { color:#9eacba; font-size:10px; white-space:nowrap; }
 .nav-status.status-unavailable { color:#ed7a80; }
@@ -122,6 +125,10 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .admin-section-name { margin:2px 0 0; font-size:16px; font-weight:650; }
 .admin-statuses { display:flex; align-items:center; justify-content:flex-end; gap:8px 18px; flex-wrap:wrap; }
 .admin-status-item { margin:0; color:#9eacba; font-size:12px; }
+.operator-actions { margin-top:18px; }
+.action-links { display:flex; flex-wrap:wrap; gap:8px; }
+.action-links a { padding:7px 10px; border:1px solid #40536a; border-radius:5px; color:#c7d2de; text-decoration:none; }
+.action-links a:hover { background:#26394e; color:#fff; }
 .status-pill { display:inline-block; margin-left:5px; padding:2px 7px; border:1px solid #40536a; border-radius:10px; color:#c7d2de; font-size:11px; }
 .status-pill.status-healthy { border-color:#316947; color:#8bd59f; }
 .status-pill.status-unavailable { border-color:#7a3e45; color:#f08b92; }
@@ -142,7 +149,7 @@ label { display:block; margin:8px 0; }
 form.inline { display:inline; }
 .notice { background:#163222; border-left:3px solid #42a56b; padding:8px 10px; }
 .error { background:#3a2024; border-left:3px solid #da626c; padding:8px 10px; }
-@media(max-width:720px) { .shell { grid-template-columns:1fr; } nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } .nav-group { display:inline-block; margin:8px 8px 4px; } nav a { display:inline-flex; } .admin-header { align-items:flex-start; flex-direction:column; padding:12px 14px; } .admin-statuses { justify-content:flex-start; } main { padding:20px 14px; } }
+@media(max-width:720px) { .shell { grid-template-columns:1fr; } .shell > nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } .nav-group { display:inline-block; margin:8px 8px 4px; } .shell > nav a { display:inline-flex; } .admin-header { align-items:flex-start; flex-direction:column; padding:12px 14px; } .admin-statuses { justify-content:flex-start; } main { padding:20px 14px; } }
 "#;
 
 const JS: &str = r#"
@@ -552,7 +559,6 @@ pub async fn shell_middleware(request: Request, next: Next) -> Response {
         && !path.starts_with("/admin/assets/");
     let response = next.run(request).await;
     if !is_admin_document
-        || !response.status().is_success()
         || !response
             .headers()
             .get(CONTENT_TYPE)
@@ -685,13 +691,24 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let html = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section></main></body></html>"
-    );
-    html_response(StatusCode::OK, "text/html; charset=utf-8", html)
+    let html = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card operator-actions\"><h2>Operator work areas</h2><p class=\"muted\">Choose a workflow. The overview does not report pending request counts or infer feature readiness.</p><div class=\"action-links\"><a href=\"/admin/operations?view=deployments\">Review deployment requests</a><a href=\"/admin/operations?view=hosting\">Inspect service health</a><a href=\"/admin/operations?view=temporary-access\">Review temporary access</a><a href=\"/admin/operations?view=history\">View latest operation result</a></div></section></main></body></html>";
+    html_response(StatusCode::OK, "text/html; charset=utf-8", html.to_owned())
 }
 
-async fn operations(headers: axum::http::HeaderMap) -> Response {
+async fn operations(
+    headers: axum::http::HeaderMap,
+    Query(query): Query<OperationsQuery>,
+) -> Response {
+    let Some(view) = OperationsView::parse(query.view.as_deref()) else {
+        return html_response(
+            StatusCode::BAD_REQUEST,
+            "text/html; charset=utf-8",
+            operations_error_page(
+                "Unknown Operations view",
+                "Choose Deployments, Hosting, Temporary Access, or History.",
+            ),
+        );
+    };
     let endpoint = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL")
         .unwrap_or_else(|_| DEFAULT_IDENTITY_AUTHZ_URL.to_owned());
     let service_token = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok();
@@ -717,7 +734,53 @@ async fn operations(headers: axum::http::HeaderMap) -> Response {
     html_response(
         StatusCode::OK,
         "text/html; charset=utf-8",
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"muted\">Review the exact tested revision before approving a production deploy.</p><section id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><h2>Pending deploy approvals</h2><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading pending requests…</p></div></section><section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests begin with the requester and their key. Set the actual grant within server policy; each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\">Loading SSH requests…</div></section><section class=\"card\"><h2>Deployment and recovery history</h2><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading protected operation history…</p></div><a href=\"/docs\">Open server runbooks and recovery docs</a></section></main></body></html>".to_owned(),
+        operations_page(view),
+    )
+}
+
+fn operations_page(view: OperationsView) -> String {
+    let tabs = [
+        OperationsView::Deployments,
+        OperationsView::Hosting,
+        OperationsView::TemporaryAccess,
+        OperationsView::History,
+    ]
+    .into_iter()
+    .map(|tab| {
+        let current = if std::mem::discriminant(&view) == std::mem::discriminant(&tab) {
+            " aria-current=\"page\""
+        } else {
+            ""
+        };
+        format!(
+            "<a href=\"/admin/operations?view={}\"{}>{}</a>",
+            tab.query_value(),
+            current,
+            tab.name()
+        )
+    })
+    .collect::<String>();
+
+    let content = match view {
+        OperationsView::Deployments => "<section class=\"card\"><h2>Deployment requests</h2><p class=\"muted\">Review the exact tested revision, CI result, and pinned service revisions before deciding. A decision is recorded by the existing Platform approval handler.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment requests…</p></div></section>".to_owned(),
+        OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
+        OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
+        OperationsView::History => "<section class=\"card\"><h2>Latest operation result</h2><p class=\"muted\">The current Platform API exposes a latest-status pointer, not a complete event history. This view reports only that record.</p><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
+    };
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><nav class=\"operation-tabs\" aria-label=\"Operations views\">{tabs}</nav><section aria-labelledby=\"operations-view-title\"><h2 id=\"operations-view-title\">{}</h2>{content}</section></main></body></html>",
+        view.name(),
+        view.name(),
+        content = content,
+        tabs = tabs
+    )
+}
+
+fn operations_error_page(title: &str, message: &str) -> String {
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"error\">{}</p><a href=\"/admin/operations\">Return to Deployments</a></main></body></html>",
+        escape_html(title),
+        escape_html(message)
     )
 }
 
@@ -753,6 +816,49 @@ struct OperationRecord {
 struct OperationStatus {
     record_status: &'static str,
     record: Option<OperationRecord>,
+}
+
+#[derive(Deserialize)]
+struct OperationsQuery {
+    view: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OperationsView {
+    Deployments,
+    Hosting,
+    TemporaryAccess,
+    History,
+}
+
+impl OperationsView {
+    fn parse(value: Option<&str>) -> Option<Self> {
+        match value.unwrap_or("deployments") {
+            "deployments" => Some(Self::Deployments),
+            "hosting" => Some(Self::Hosting),
+            "temporary-access" => Some(Self::TemporaryAccess),
+            "history" => Some(Self::History),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Deployments => "Deployments",
+            Self::Hosting => "Hosting",
+            Self::TemporaryAccess => "Temporary Access",
+            Self::History => "History",
+        }
+    }
+
+    fn query_value(self) -> &'static str {
+        match self {
+            Self::Deployments => "deployments",
+            Self::Hosting => "hosting",
+            Self::TemporaryAccess => "temporary-access",
+            Self::History => "history",
+        }
+    }
 }
 
 async fn overview(headers: axum::http::HeaderMap) -> Response {
