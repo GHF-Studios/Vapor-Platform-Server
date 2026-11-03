@@ -199,14 +199,31 @@ else
 fi
 systemctl restart caddy.service
 
+"${VAPOR_DEPLOY_ROOT}/deploy/scripts/health-check.sh"
+
+retire_service_unit() {
+  local unit="$1"
+  local load_state
+  load_state="$(systemctl show --property=LoadState --value "${unit}" 2>/dev/null || printf 'unavailable')"
+  case "${load_state}" in
+    loaded)
+      systemctl disable --now "${unit}"
+      ;;
+    not-found)
+      ;;
+    *)
+      echo "error: could not verify optional service unit ${unit} before retiring the previous server mode" >&2
+      return 1
+      ;;
+  esac
+}
+
 if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
   for service in homepage docs identity diagnostics registry artifact build-cache; do
-    systemctl disable --now "vapor-${service}.service" >/dev/null 2>&1 || true
+    retire_service_unit "vapor-${service}.service"
   done
 else
-  systemctl disable --now vapor-platform-server.service >/dev/null 2>&1 || true
+  retire_service_unit vapor-platform-server.service
 fi
-
-"${VAPOR_DEPLOY_ROOT}/deploy/scripts/health-check.sh"
 
 echo "deploy: completed ${VAPOR_REPO_URL}@${VAPOR_BRANCH}"
