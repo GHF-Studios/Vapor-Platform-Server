@@ -2,12 +2,12 @@
 set -euo pipefail
 umask 077
 
-report_nonce="$(openssl rand -hex 16)"
-if [[ ! "$report_nonce" =~ ^[a-f0-9]{32}$ ]]; then
-  echo 'Could not create a private report link.' >&2
+report_id="${1:-}"
+if [ "$#" -ne 1 ] || [[ ! "$report_id" =~ ^[a-f0-9]{16}$ ]]; then
+  echo 'Provide a one-time 16-character hexadecimal report code.' >&2
   exit 1
 fi
-filename="vpf-$(date -u +%Y%m%dT%H%M%SZ)-${report_nonce}.txt"
+filename="vpf-${report_id}.txt"
 report="/tmp/${filename}"
 if [ -e "$report" ]; then
   echo 'A preflight report already exists for this second; retry in one second.' >&2
