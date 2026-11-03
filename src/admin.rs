@@ -378,6 +378,8 @@ const JS: &str = r#"
           const login = document.createElement('p');
           login.textContent = `SSH account: ${item.username}@${item.host} · port 22 · key ${item.fingerprint}`;
           card.append(login);
+        }
+        if (item.granted_duration_seconds != null) {
           const granted = document.createElement('p'); granted.className = 'muted';
           granted.textContent = `Granted: ${item.granted_capabilities.join(', ') || 'shell only'} · ${item.granted_duration_seconds}s`;
           card.append(granted);
@@ -1113,6 +1115,7 @@ mod tests {
             script.contains("/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/events")
         );
         assert!(script.contains("Access history"));
+        assert!(script.contains("if (item.granted_duration_seconds != null)"));
     }
 
     #[tokio::test]
