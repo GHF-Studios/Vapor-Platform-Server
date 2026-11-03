@@ -331,18 +331,21 @@ const JS: &str = r#"
         }
         if (item.status === 'pending') {
           const form = document.createElement('form'); const fields = document.createElement('fieldset');
-          const legend = document.createElement('legend'); legend.textContent = 'Granted powers'; fields.append(legend);
+          const legend = document.createElement('legend'); legend.textContent = 'Actual grant'; fields.append(legend);
           const choices = [];
-          for (const value of item.requested_capabilities) {
+          for (const value of ['vapor_deploy', 'vapor_service_control', 'host_admin']) {
             const label = document.createElement('label'); const input = document.createElement('input');
-            input.type = 'checkbox'; input.value = value; input.checked = true; choices.push(input);
+            input.type = 'checkbox'; input.value = value; input.checked = item.requested_capabilities.includes(value); choices.push(input);
             label.append(input, document.createTextNode(` ${value}${value === 'host_admin' ? ' (full temporary sudo)' : ''}`)); fields.append(label);
           }
           const durationLabel = document.createElement('label'); durationLabel.textContent = 'Duration in seconds';
           const duration = document.createElement('input'); duration.type = 'number'; duration.min = '1';
-          duration.max = String(item.requested_duration_seconds); duration.value = String(item.requested_duration_seconds); durationLabel.append(duration);
+          duration.max = String(8 * 60 * 60); duration.value = String(item.requested_duration_seconds); durationLabel.append(duration);
+          const adjustment = document.createElement('p'); adjustment.className = 'muted';
+          adjustment.textContent = 'Set the actual grant here. You may expand or reduce the requested scope and duration within server policy.';
+          fields.append(adjustment);
           const confirmLabel = document.createElement('label'); const confirm = document.createElement('input'); confirm.type = 'checkbox'; confirm.required = true;
-          confirmLabel.append(confirm, document.createTextNode(' I reviewed the key, purpose, scope, and duration'));
+          confirmLabel.append(confirm, document.createTextNode(' I reviewed the key, purpose, and actual grant'));
           const adminLabel = document.createElement('label'); const adminConfirm = document.createElement('input'); adminConfirm.type = 'checkbox';
           adminLabel.append(adminConfirm, document.createTextNode(' I approve unrestricted root access and understand it can disable its own expiry cleanup'));
           const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'Approve temporary access';
@@ -459,7 +462,7 @@ async fn operations(headers: axum::http::HeaderMap) -> Response {
     html_response(
         StatusCode::OK,
         "text/html; charset=utf-8",
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"muted\">Review the exact tested revision before approving a production deploy.</p><section id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><h2>Pending deploy approvals</h2><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading pending requests…</p></div></section><section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Every grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\">Loading SSH requests…</div></section><section class=\"card\"><h2>Deployment and recovery history</h2><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading protected operation history…</p></div><a href=\"/docs\">Open server runbooks and recovery docs</a></section></main></body></html>".to_owned(),
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"muted\">Review the exact tested revision before approving a production deploy.</p><section id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><h2>Pending deploy approvals</h2><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading pending requests…</p></div></section><section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests begin with the requester and their key. Set the actual grant within server policy; each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\">Loading SSH requests…</div></section><section class=\"card\"><h2>Deployment and recovery history</h2><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading protected operation history…</p></div><a href=\"/docs\">Open server runbooks and recovery docs</a></section></main></body></html>".to_owned(),
     )
 }
 

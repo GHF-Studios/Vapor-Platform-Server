@@ -39,14 +39,22 @@ remain visible and can be retried by a root operator.
 
 ## Operator flow
 
-1. A requester submits an OpenSSH **public** key, a purpose, requested access
-   capabilities, and requested duration. Private key material is never sent to
-   the server.
+1. The requester starts in Vapor CLI, which creates an OpenSSH key locally and
+   submits only its public-key fingerprint, purpose, requested capabilities,
+   and requested duration to a one-time Identity authorization. The signed-in
+   browser confirms the exact request. Identity then issues a single-use,
+   three-minute request credential bound to the fingerprint and a digest of
+   the canonical purpose, sorted capability set, and requested duration.
+   Platform checks both bindings before accepting the public key. The CLI uses
+   the credential immediately; private key material is never sent to the
+   server, and no long-lived CLI credential is created.
 2. The Platform dashboard displays the requester, key type and fingerprint,
    purpose, requested capabilities, and requested duration.
-3. A root operator can reject the request or approve a subset of its requested
-   capabilities and a shorter or equal duration. The final grant is shown
-   explicitly before confirmation; approval cannot add unrequested powers.
+3. A root operator can reject the request or define the actual grant from the
+   server's capability allowlist, adjusting scope and duration above or below
+   what was requested, up to the server-wide eight-hour limit. The exact grant
+   is shown before confirmation. `host_admin` remains exclusive and requires a
+   separate explicit confirmation.
 4. The operator receives the ephemeral SSH username, host, port, fingerprint,
    grant time, and expiration time. The user authenticates using their own
    private key.
@@ -72,8 +80,9 @@ The approver can grant a combination of `vapor_deploy` and
 `vapor_service_control`; shell is implicit for every grant. `host_admin` is
 exclusive. Restore is intentionally excluded until it has its own safe,
 request-bound interface. The initial policy has a configurable hard maximum of
-eight hours; the UI offers common durations up to that maximum. The requester's
-requested duration is never trusted as the final authorization.
+eight hours; the UI offers common durations up to that maximum. Requested
+capabilities and duration are context for the operator, not authorization
+ceilings; the server's allowlist and hard maximum govern the actual grant.
 
 Each grant receives a separate temporary Unix account and separate
 `authorized_keys` entry. Root SSH remains disabled/unchanged. Password login,
@@ -92,8 +101,8 @@ or a row in the Platform-writable SQLite database as proof of authorization.
 The helper is callable only through a fixed no-argument sudo rule with a
 bounded JSON request on standard input. It recomputes the SSH key fingerprint
 and compares it with the fingerprint shown to and approved by the root
-operator, then checks the requested capability subset, status, version, and
-expiry before making changes.
+operator, then checks the capability allowlist, status, version, and expiry
+before making changes.
 
 `host_admin` means unrestricted sudo and can disable its own expiry timer or
 create lasting access. The dashboard warns about this before grant. Expiry
@@ -122,12 +131,13 @@ access.
 
 ## Audit and abuse controls
 
-Store requester identity, approving profile, request/grant IDs, fingerprint,
-capabilities, reason, start/end timestamps, state transitions, and failure
-details. Do not store private keys, authentication tokens, or shell output.
-Require authenticated requesters, rate-limit open requests per profile and
-fingerprint, reject weak/unsupported key types, and retain only the fingerprint
-after expiry. Administrative views and every response use `no-store`.
+Store the profile authenticated by the browser confirmation, approving
+profile, request/grant IDs, fingerprint, capabilities, reason, start/end
+timestamps, state transitions, and failure details. Do not store private keys,
+authentication tokens, or shell output. Require browser-authenticated
+requesters, rate-limit open requests per profile and fingerprint, reject
+weak/unsupported key types, and retain only the fingerprint after expiry.
+Administrative views and every response use `no-store`.
 
 ## Delivery phases
 

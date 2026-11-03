@@ -353,7 +353,7 @@ mod unix_impl {
             ));
         }
         let row = sqlx::query(
-        "SELECT public_key, requested_capabilities_json, requested_duration_seconds,
+        "SELECT public_key,
          fingerprint, expires_at_unix, operation_detail, status, version FROM platform_ssh_access_requests WHERE id = ?",
     )
     .bind(id)
@@ -365,22 +365,14 @@ mod unix_impl {
         };
         let status: String = row.get("status");
         let actual_version: i64 = row.get("version");
-        let requested: Vec<String> =
-            serde_json::from_str(row.get("requested_capabilities_json"))
-                .map_err(|_| (id.to_string(), "stored SSH request is invalid"))?;
-        let requested_duration: i64 = row.get("requested_duration_seconds");
         let fingerprint: String = row.get("fingerprint");
         let stored_expiry: Option<i64> = row.get("expires_at_unix");
         let operation_detail: Option<String> = row.get("operation_detail");
         if status != "provisioning"
             || actual_version != version
             || operation_detail.as_deref() != Some("granting")
-            || duration > requested_duration
-            || granted
-                .iter()
-                .any(|value| !requested.iter().any(|item| item == value))
         {
-            return Err((id.to_string(), "SSH request is not approved for this grant"));
+            return Err((id.to_string(), "SSH grant is not approved"));
         }
         let public_key: String = row.get("public_key");
         let expected_fingerprint = input.expected_fingerprint.as_deref().unwrap_or("");

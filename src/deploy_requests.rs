@@ -96,6 +96,10 @@ pub(crate) struct IdentityCredentialDecision {
     pub(crate) credential_id: String,
     pub(crate) actor_profile_id: String,
     pub(crate) scope: String,
+    #[serde(default)]
+    pub(crate) bound_ssh_fingerprint: Option<String>,
+    #[serde(default)]
+    pub(crate) bound_ssh_request_hash: Option<String>,
 }
 
 pub(crate) fn router() -> Router {
@@ -759,7 +763,7 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .ok()?
         .strip_prefix("Bearer ")
 }
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))

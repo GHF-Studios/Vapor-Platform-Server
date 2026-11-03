@@ -236,15 +236,6 @@ async fn create_request(
     let Some(token) = bearer_token(&headers) else {
         return (StatusCode::UNAUTHORIZED, "request credential required\n").into_response();
     };
-    let credential = match crate::deploy_requests::verify_platform_request_credential(
-        token,
-        "platform:ssh-access:request",
-    )
-    .await
-    {
-        Ok(credential) => credential,
-        Err(status) => return status.into_response(),
-    };
     if let Err(message) = validate_request(&request) {
         return (StatusCode::BAD_REQUEST, message).into_response();
     }
@@ -254,6 +245,25 @@ async fn create_request(
             return (StatusCode::BAD_REQUEST, "invalid ssh-ed25519 public key\n").into_response()
         }
     };
+    let credential = match crate::deploy_requests::verify_platform_request_credential(
+        token,
+        "platform:ssh-access:request",
+    )
+    .await
+    {
+        Ok(credential) => credential,
+        Err(status) => return status.into_response(),
+    };
+    let request_hash = ssh_request_binding_hash(&key.fingerprint, &request);
+    if credential.bound_ssh_fingerprint.as_deref() != Some(key.fingerprint.as_str())
+        || credential.bound_ssh_request_hash.as_deref() != Some(request_hash.as_str())
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "authorization is bound to a different SSH key or request\n",
+        )
+            .into_response();
+    }
     if expire_stale_requests(&state.pool).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -395,7 +405,7 @@ async fn approve_request(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let row = match sqlx::query(
-        "SELECT requested_capabilities_json, requested_duration_seconds, fingerprint FROM platform_ssh_access_requests
+        "SELECT fingerprint FROM platform_ssh_access_requests
          WHERE id = ? AND status = 'pending' AND version = ?",
     )
     .bind(&id)
@@ -407,25 +417,12 @@ async fn approve_request(
         Ok(None) => return StatusCode::CONFLICT.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let requested: Vec<String> = match serde_json::from_str(
-        row.try_get::<&str, _>("requested_capabilities_json")
-            .unwrap_or("[]"),
-    ) {
-        Ok(value) => value,
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    };
-    let requested_duration: i64 = row.try_get("requested_duration_seconds").unwrap_or(0);
     let fingerprint: String = row.try_get("fingerprint").unwrap_or_default();
-    if request.granted_duration_seconds > requested_duration
-        || request
-            .granted_capabilities
-            .iter()
-            .any(|capability| !requested.contains(capability))
-        || (request
-            .granted_capabilities
-            .iter()
-            .any(|value| value == "host_admin")
-            && request.granted_capabilities.len() != 1)
+    if (request
+        .granted_capabilities
+        .iter()
+        .any(|value| value == "host_admin")
+        && request.granted_capabilities.len() != 1)
         || (request
             .granted_capabilities
             .iter()
@@ -434,7 +431,7 @@ async fn approve_request(
     {
         return (
             StatusCode::BAD_REQUEST,
-            "grant exceeds the requested scope\n",
+            "host-admin must be granted alone and requires explicit confirmation\n",
         )
             .into_response();
     }
@@ -697,6 +694,19 @@ fn validate_capabilities(capabilities: &[String]) -> Result<(), &'static str> {
         return Err("unsupported, duplicate, or conflicting capability\n");
     }
     Ok(())
+}
+
+fn ssh_request_binding_hash(fingerprint: &str, request: &CreateSshRequest) -> String {
+    let mut capabilities = request.requested_capabilities.clone();
+    capabilities.sort_unstable();
+    let canonical = format!(
+        "{}\n{}\n{}\n{}",
+        fingerprint,
+        request.purpose.trim(),
+        capabilities.join(" "),
+        request.requested_duration_seconds
+    );
+    crate::deploy_requests::sha256_hex(canonical.as_bytes())
 }
 
 fn valid_id(id: &str) -> bool {
