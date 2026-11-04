@@ -110,7 +110,8 @@ body { margin:0; min-height:100vh; }
 .nav-disabled { display:flex; justify-content:space-between; gap:8px; padding:9px 10px; margin:3px 0; color:#788797; }
 .nav-status { color:#9eacba; font-size:10px; white-space:nowrap; }
 .nav-status.status-unavailable { color:#ed7a80; }
-.nav-status.status-implemented { color:#6fc58a; }
+.nav-status.status-healthy { color:#6fc58a; }
+.nav-status.status-unknown { color:#9eacba; }
 .nav-status.status-planned { color:#d4bd69; }
 .service-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
 .service-card { background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
@@ -182,9 +183,25 @@ const JS: &str = r#"
       element.textContent = label;
       element.className = `status-pill status-${state}`;
     };
+    const updateNavHealth = services => {
+      for (const link of document.querySelectorAll('[data-admin-service]')) {
+        const status = link.querySelector('[data-nav-status]');
+        if (!status) continue;
+        const service = services && services.find(item => item.id === link.dataset.adminService);
+        if (!service || (service.health !== 'healthy' && service.health !== 'unavailable')) {
+          status.textContent = 'Unknown';
+          status.className = 'nav-status status-unknown';
+          continue;
+        }
+        const healthy = service.health === 'healthy';
+        status.textContent = healthy ? 'Healthy' : 'Offline';
+        status.className = `nav-status status-${healthy ? 'healthy' : 'unavailable'}`;
+      }
+    };
     if (!response) {
       setPill(operator, 'Unavailable', 'unavailable');
       setPill(platform, 'Unavailable', 'unavailable');
+      updateNavHealth(null);
       return;
     }
     if (!response.ok) {
@@ -193,6 +210,7 @@ const JS: &str = r#"
       const state = response.status === 401 || response.status === 403 ? 'protected' : 'unavailable';
       setPill(operator, label, state);
       setPill(platform, response.status === 401 || response.status === 403 ? 'Protected' : 'Unavailable', state);
+      updateNavHealth(null);
       return;
     }
 
@@ -201,14 +219,7 @@ const JS: &str = r#"
     const platformService = services.find(service => service.id === 'platform');
     const platformHealthy = platformService && platformService.health === 'healthy';
     setPill(platform, platformHealthy ? 'Healthy' : 'Unavailable', platformHealthy ? 'healthy' : 'unavailable');
-    for (const link of document.querySelectorAll('[data-admin-service]')) {
-      const service = services.find(item => item.id === link.dataset.adminService);
-      const status = link.querySelector('[data-nav-status]');
-      if (!service || !status) continue;
-      const healthy = service.health === 'healthy';
-      status.textContent = healthy ? 'Implemented' : 'Unavailable';
-      status.className = `nav-status ${healthy ? 'status-implemented' : 'status-unavailable'}`;
-    }
+    updateNavHealth(services);
   };
   const overview = document.querySelector('#platform-overview, #operations-status');
   if (overview) {
@@ -663,7 +674,7 @@ fn render_admin_navigation(current_path: &str) -> String {
                 };
                 let service = section.service_id.unwrap_or("");
                 html.push_str(&format!(
-                    "<a href=\"{}\" title=\"{}\" data-admin-service=\"{}\"{}><span>{}</span><small class=\"nav-status status-implemented\" data-nav-status>Implemented</small></a>",
+                    "<a href=\"{}\" title=\"{}\" data-admin-service=\"{}\"{}><span>{}</span><small class=\"nav-status status-unknown\" data-nav-status>Checking</small></a>",
                     escape_html(path),
                     escape_html(section.description),
                     escape_html(service),
