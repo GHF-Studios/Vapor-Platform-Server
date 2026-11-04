@@ -1,5 +1,6 @@
 mod admin;
 mod admin_auth;
+mod deploy_request_schema;
 mod deploy_requests;
 mod ssh_access;
 mod ssh_key;

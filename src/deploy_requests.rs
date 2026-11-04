@@ -15,6 +15,7 @@ use std::time::Duration;
 
 const REQUEST_TTL_SECONDS: i64 = 3 * 24 * 60 * 60;
 const MAX_REQUESTS: i64 = 200;
+const DISPATCH_STALE_SECONDS: i64 = 30;
 const SOURCE_REPOSITORY: &str = "GHF-Studios/Vapor-Platform-Server";
 const DEPLOY_BRANCH: &str = "main";
 const SUBMODULES: &[&str] = &[
@@ -81,6 +82,11 @@ struct DeployRequestSummary {
     decided_at_unix: Option<i64>,
     decision_reason: Option<String>,
     result_detail: Option<String>,
+    dispatch_state: String,
+    dispatch_attempts: i64,
+    dispatch_attempted_at_unix: Option<i64>,
+    dispatch_detail: Option<String>,
+    retry_eligible: bool,
 }
 
 #[derive(Serialize)]
@@ -163,6 +169,7 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
         .execute(&pool).await?;
     sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_deploy_requests_one_active_commit ON platform_deploy_requests(commit_hash) WHERE status IN ('pending','approved','executing')")
         .execute(&pool).await?;
+    crate::deploy_request_schema::ensure_dispatch_columns(&pool).await?;
     Ok(())
 }
 
@@ -298,6 +305,12 @@ async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderM
     if expire_requests(&state.pool, unix_now()).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    if normalize_stale_dispatches(&state.pool, unix_now())
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     let rows = match fetch_request_rows(&state.pool, owner.as_deref()).await {
         Ok(rows) => rows,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -323,6 +336,16 @@ async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderM
                 decided_at_unix: row.get("decided_at_unix"),
                 decision_reason: row.get("decision_reason"),
                 result_detail: row.get("result_detail"),
+                dispatch_state: row.get("dispatch_state"),
+                dispatch_attempts: row.get("dispatch_attempts"),
+                dispatch_attempted_at_unix: row.get("dispatch_attempted_at_unix"),
+                dispatch_detail: row.get("dispatch_detail"),
+                retry_eligible: retry_eligible(
+                    row.get("status"),
+                    row.get("dispatch_state"),
+                    row.get("dispatch_attempted_at_unix"),
+                    unix_now(),
+                ),
             })
         })
         .collect::<Vec<_>>();
@@ -334,7 +357,8 @@ async fn fetch_request_rows(
     owner_credential_id: Option<&str>,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
     let query = "SELECT id, repository, branch, commit_hash, tree_hash, submodules_json, workflow_url,
-                        summary, status, version, created_at_unix, expires_at_unix, decided_at_unix, decision_reason, result_detail
+                        summary, status, version, created_at_unix, expires_at_unix, decided_at_unix, decision_reason, result_detail,
+                        dispatch_state, dispatch_attempts, dispatch_attempted_at_unix, dispatch_detail
                  FROM platform_deploy_requests";
     if let Some(owner) = owner_credential_id {
         sqlx::query(&format!(
@@ -401,7 +425,20 @@ async fn decide_request(
     }
     let actor_profile_id = match require_root(&state, &headers).await {
         Ok(actor) => actor,
+        Err(response) if response.status() == StatusCode::SERVICE_UNAVAILABLE => {
+            return stage_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authorization_unavailable",
+                "authorization",
+                "The approval was not saved because root authorization could not be checked. Retry after Identity is available.",
+                false,
+                false,
+            );
+        }
         Err(response) => return response,
+    };
+    let Some(session_token) = crate::admin_auth::session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
     };
     let reason = request
         .reason
@@ -433,11 +470,31 @@ async fn decide_request(
     .await;
     match result {
         Ok(result) if result.rows_affected() == 1 && approve => {
-            dispatch_approved(&state, &headers, &id, request.expected_version + 1).await
+            dispatch_approved_authorized(
+                &state,
+                &id,
+                request.expected_version + 1,
+                session_token,
+            )
+            .await
         }
         Ok(result) if result.rows_affected() == 1 => (StatusCode::OK, Json(serde_json::json!({"id": id, "status": next, "version": request.expected_version + 1}))).into_response(),
         Ok(_) => (StatusCode::CONFLICT, "request is expired or no longer pending at that version\n").into_response(),
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(error) => {
+            eprintln!("deploy request {id}: stage=decision_persistence category=database_update_failed error={error}");
+            stage_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "decision_not_saved",
+                "decision",
+                if approve {
+                    "Approval was not saved. The request remains available for review."
+                } else {
+                    "Rejection was not saved. The request remains available for review."
+                },
+                false,
+                false,
+            )
+        }
     }
 }
 
@@ -457,7 +514,16 @@ async fn retry_dispatch(
     if !request.confirmed || request.expected_version < 1 || !valid_uuid(&id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    dispatch_approved(&state, &headers, &id, request.expected_version).await
+    if !same_origin(&state, &headers) {
+        return (StatusCode::FORBIDDEN, "same-origin request required\n").into_response();
+    }
+    if let Err(response) = require_root(&state, &headers).await {
+        return response;
+    }
+    let Some(session_token) = crate::admin_auth::session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    dispatch_approved_authorized(&state, &id, request.expected_version, session_token).await
 }
 
 #[derive(Serialize)]
@@ -526,60 +592,369 @@ struct DispatchOperation<'a> {
     session_token: &'a str,
 }
 
-async fn dispatch_approved(
+async fn dispatch_approved_authorized(
     state: &DeployRequestState,
-    headers: &HeaderMap,
     id: &str,
     version: i64,
+    session_token: &str,
 ) -> Response {
     if !valid_uuid(id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    if !same_origin(state, headers) {
-        return (StatusCode::FORBIDDEN, "same-origin request required\n").into_response();
+    if expire_requests(&state.pool, unix_now()).await.is_err() {
+        return stage_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "dispatch_not_started",
+            "request_state",
+            "Approval is saved, but the current request state could not be checked. Reload before retrying.",
+            true,
+            false,
+        );
     }
-    if let Err(response) = require_root(state, headers).await {
-        return response;
-    }
-    let Some(session_token) = crate::admin_auth::session_token(headers) else {
-        return StatusCode::UNAUTHORIZED.into_response();
+    let attempt = match begin_dispatch_attempt(&state.pool, id, version, unix_now()).await {
+        Ok(Some(attempt)) => attempt,
+        Ok(None) => {
+            return stage_error(
+                StatusCode::CONFLICT,
+                "dispatch_not_started",
+                "dispatch",
+                "This revision is no longer approved for dispatch, or a fresh dispatch attempt is already running.",
+                true,
+                false,
+            );
+        }
+        Err(error) => {
+            eprintln!(
+                "deploy request {id}: stage=dispatch_persistence category=database_update_failed error={error}"
+            );
+            return stage_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "dispatch_not_started",
+                "dispatch",
+                "Approval is saved, but the dispatch attempt could not be recorded.",
+                true,
+                false,
+            );
+        }
     };
-    let row = match sqlx::query("SELECT status, version FROM platform_deploy_requests WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await
-    {
-        Ok(Some(row)) => row,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    };
-    if row.get::<String, _>("status") != "approved" || row.get::<i64, _>("version") != version {
-        return StatusCode::CONFLICT.into_response();
-    }
     let operation = DispatchOperation {
         operation: "dispatch_deploy",
         request_id: id,
         expected_version: version,
         session_token,
     };
-    let output = match invoke_platform_ops(&operation).await {
-        Ok(value) => value,
-        Err(_) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "approval saved, but deploy dispatch failed; retry is available\n",
-            )
-                .into_response()
+    let (dispatch_state, detail, output) = match invoke_platform_ops(&operation).await {
+        Ok(value) => ("queued", "Approved deployment queued.", Some(value)),
+        Err(error) => {
+            eprintln!(
+                "deploy request {id}: stage=dispatch category={} error={}",
+                error.category, error.technical
+            );
+            (error.state, error.public_message, None)
         }
     };
+    let recorded = match finish_dispatch_attempt(&state.pool, id, attempt, dispatch_state, detail)
+        .await
+    {
+        Ok(recorded) => recorded,
+        Err(error) => {
+            eprintln!(
+                "deploy request {id}: stage=dispatch_persistence category=database_update_failed error={error}"
+            );
+            return stage_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "dispatch_result_not_recorded",
+                "dispatch_recording",
+                "Approval is saved, but the dispatch result could not be recorded. Reload the request before retrying.",
+                true,
+                false,
+            );
+        }
+    };
+    if !recorded {
+        return stage_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "dispatch_result_not_recorded",
+            "dispatch_recording",
+            "The request changed while dispatch was running. Reload it to see the current deployment state.",
+            true,
+            false,
+        );
+    }
+    if dispatch_state == "queued" {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({"id":id,"status":"approved","version":version,"decision":{"status":"approved","saved":true},"dispatch":{"status":"queued","detail":detail,"result":output}})),
+        ).into_response()
+    } else {
+        let retry_allowed = dispatch_retry_allowed(&state.pool, id, version, unix_now())
+            .await
+            .unwrap_or(false);
+        stage_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            if dispatch_state == "unknown" {
+                "dispatch_result_unknown"
+            } else {
+                "dispatch_failed"
+            },
+            "dispatch",
+            detail,
+            true,
+            retry_allowed,
+        )
+    }
+}
+
+async fn dispatch_retry_allowed(
+    pool: &SqlitePool,
+    id: &str,
+    version: i64,
+    now: i64,
+) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT status, dispatch_state, dispatch_attempted_at_unix
+         FROM platform_deploy_requests WHERE id = ? AND version = ?",
+    )
+    .bind(id)
+    .bind(version)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some_and(|row| {
+        retry_eligible(
+            row.get("status"),
+            row.get("dispatch_state"),
+            row.get("dispatch_attempted_at_unix"),
+            now,
+        )
+    }))
+}
+
+struct DispatchFailure {
+    state: &'static str,
+    category: &'static str,
+    technical: &'static str,
+    public_message: &'static str,
+}
+
+fn stage_error(
+    status: StatusCode,
+    code: &'static str,
+    stage: &'static str,
+    message: &'static str,
+    decision_saved: bool,
+    retry_eligible: bool,
+) -> Response {
     (
-        StatusCode::OK,
-        Json(serde_json::json!({"id":id,"status":"approved","dispatch":output})),
+        status,
+        Json(serde_json::json!({
+            "error": {
+                "code": code,
+                "stage": stage,
+                "message": message,
+                "decision_saved": decision_saved,
+                "retry_eligible": retry_eligible
+            }
+        })),
     )
         .into_response()
 }
 
-async fn invoke_platform_ops(operation: &impl Serialize) -> Result<serde_json::Value, ()> {
+fn retry_eligible(
+    status: String,
+    dispatch_state: String,
+    attempted_at: Option<i64>,
+    now: i64,
+) -> bool {
+    status == "approved"
+        && match dispatch_state.as_str() {
+            "not_attempted" | "failed" | "unknown" => true,
+            "dispatching" => attempted_at
+                .is_some_and(|attempted_at| attempted_at <= now - DISPATCH_STALE_SECONDS),
+            _ => false,
+        }
+}
+
+async fn begin_dispatch_attempt(
+    pool: &SqlitePool,
+    id: &str,
+    approved_version: i64,
+    now: i64,
+) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "UPDATE platform_deploy_requests
+         SET dispatch_state = 'dispatching', dispatch_attempts = dispatch_attempts + 1,
+             dispatch_attempted_at_unix = ?, dispatch_detail = NULL
+         WHERE id = ? AND status = 'approved' AND version = ?
+           AND (dispatch_state IN ('not_attempted','failed','unknown')
+                OR (dispatch_state = 'dispatching' AND dispatch_attempted_at_unix <= ?))
+         RETURNING dispatch_attempts",
+    )
+    .bind(now)
+    .bind(id)
+    .bind(approved_version)
+    .bind(now - DISPATCH_STALE_SECONDS)
+    .fetch_optional(pool)
+    .await
+}
+
+async fn normalize_stale_dispatches(pool: &SqlitePool, now: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE platform_deploy_requests
+         SET dispatch_state = 'unknown',
+             dispatch_detail = 'Previous dispatch attempt stopped responding; retry is available.'
+         WHERE status = 'approved' AND dispatch_state = 'dispatching'
+           AND dispatch_attempted_at_unix <= ?",
+    )
+    .bind(now - DISPATCH_STALE_SECONDS)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn finish_dispatch_attempt(
+    pool: &SqlitePool,
+    id: &str,
+    attempt: i64,
+    outcome: &str,
+    detail: &str,
+) -> Result<bool, sqlx::Error> {
+    let bounded_detail = detail.chars().take(240).collect::<String>();
+    let result = sqlx::query(
+        "UPDATE platform_deploy_requests
+         SET dispatch_state = ?, dispatch_detail = ?
+         WHERE id = ? AND dispatch_attempts = ? AND dispatch_state = 'dispatching'",
+    )
+    .bind(outcome)
+    .bind(bounded_detail)
+    .bind(id)
+    .bind(attempt)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::{
+        begin_dispatch_attempt, finish_dispatch_attempt, normalize_stale_dispatches, retry_eligible,
+    };
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::Row;
+
+    async fn pool_with_approved_request() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE platform_deploy_requests (id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, dispatch_state TEXT NOT NULL DEFAULT 'not_attempted', dispatch_attempts INTEGER NOT NULL DEFAULT 0, dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO platform_deploy_requests (id, status, version) VALUES ('r1', 'approved', 3)")
+            .execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn helper_failure_keeps_saved_approval_and_records_retryable_failure() {
+        let pool = pool_with_approved_request().await;
+        let attempt = begin_dispatch_attempt(&pool, "r1", 3, 100)
+            .await
+            .unwrap()
+            .unwrap();
+        finish_dispatch_attempt(&pool, "r1", attempt, "failed", "helper rejected")
+            .await
+            .unwrap();
+        let row = sqlx::query("SELECT status, version, dispatch_state, dispatch_detail FROM platform_deploy_requests WHERE id='r1'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.get::<String, _>("status"), "approved");
+        assert_eq!(row.get::<i64, _>("version"), 3);
+        assert_eq!(row.get::<String, _>("dispatch_state"), "failed");
+        assert!(retry_eligible(
+            row.get("status"),
+            row.get("dispatch_state"),
+            Some(101),
+            102
+        ));
+    }
+
+    #[tokio::test]
+    async fn completion_does_not_overwrite_worker_lifecycle_and_fresh_attempt_is_exclusive() {
+        let pool = pool_with_approved_request().await;
+        let attempt = begin_dispatch_attempt(&pool, "r1", 3, 100)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(begin_dispatch_attempt(&pool, "r1", 3, 101)
+            .await
+            .unwrap()
+            .is_none());
+        sqlx::query(
+            "UPDATE platform_deploy_requests SET status='executing', version=4 WHERE id='r1'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            finish_dispatch_attempt(&pool, "r1", attempt, "queued", "queued")
+                .await
+                .unwrap()
+        );
+        let row = sqlx::query(
+            "SELECT status, version, dispatch_state FROM platform_deploy_requests WHERE id='r1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("status"), "executing");
+        assert_eq!(row.get::<i64, _>("version"), 4);
+        assert_eq!(row.get::<String, _>("dispatch_state"), "queued");
+    }
+
+    #[tokio::test]
+    async fn stale_dispatching_attempt_can_be_reclaimed_and_unknown_is_retryable() {
+        let pool = pool_with_approved_request().await;
+        let first = begin_dispatch_attempt(&pool, "r1", 3, 100)
+            .await
+            .unwrap()
+            .unwrap();
+        normalize_stale_dispatches(&pool, 130).await.unwrap();
+        let row = sqlx::query(
+            "SELECT dispatch_state, dispatch_detail FROM platform_deploy_requests WHERE id='r1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("dispatch_state"), "unknown");
+        assert!(row
+            .get::<String, _>("dispatch_detail")
+            .contains("stopped responding"));
+        assert!(begin_dispatch_attempt(&pool, "r1", 3, 130)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(
+            !finish_dispatch_attempt(&pool, "r1", first, "queued", "late")
+                .await
+                .unwrap()
+        );
+        assert!(retry_eligible(
+            "approved".into(),
+            "unknown".into(),
+            None,
+            140
+        ));
+        assert!(!retry_eligible(
+            "executing".into(),
+            "failed".into(),
+            None,
+            140
+        ));
+    }
+}
+
+async fn invoke_platform_ops(
+    operation: &impl Serialize,
+) -> Result<serde_json::Value, DispatchFailure> {
     let operation_path = std::env::var_os("VAPOR_PLATFORM_OPS_PATH")
         .unwrap_or_else(|| "/usr/local/libexec/vapor-platform-ops".into());
     let mut child = tokio::process::Command::new("/usr/bin/sudo")
@@ -590,28 +965,62 @@ async fn invoke_platform_ops(operation: &impl Serialize) -> Result<serde_json::V
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|_| ())?;
-    let bytes = serde_json::to_vec(operation).map_err(|_| ())?;
+        .map_err(|_| DispatchFailure {
+            state: "failed",
+            category: "helper_start_failed",
+            technical: "failed to start fixed platform helper",
+            public_message: "Approval is saved, but the deployment helper could not be started.",
+        })?;
+    let bytes = serde_json::to_vec(operation).map_err(|_| DispatchFailure {
+        state: "failed",
+        category: "helper_request_encoding_failed",
+        technical: "could not encode helper request",
+        public_message: "Approval is saved, but the deployment request could not be prepared.",
+    })?;
     if bytes.len() > 4096 {
-        return Err(());
+        return Err(DispatchFailure {
+            state: "failed",
+            category: "helper_request_too_large",
+            technical: "helper request exceeded size limit",
+            public_message: "Approval is saved, but the deployment request could not be prepared.",
+        });
     }
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
-        stdin.write_all(&bytes).await.map_err(|_| ())?;
+        stdin.write_all(&bytes).await.map_err(|_| DispatchFailure { state: "unknown", category: "helper_request_write_failed", technical: "could not write helper request", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
     } else {
-        return Err(());
+        return Err(DispatchFailure {
+            state: "failed",
+            category: "helper_stdin_unavailable",
+            technical: "helper stdin was unavailable",
+            public_message: "Approval is saved, but the deployment helper could not be started.",
+        });
     }
     let result = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
         .await
-        .map_err(|_| ())?
-        .map_err(|_| ())?;
+        .map_err(|_| DispatchFailure { state: "unknown", category: "helper_timeout", technical: "helper wait exceeded ten-second timeout", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?
+        .map_err(|_| DispatchFailure { state: "unknown", category: "helper_wait_failed", technical: "could not collect helper result", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
     if !result.status.success() || result.stdout.len() > 4096 {
-        return Err(());
+        return Err(DispatchFailure {
+            state: "failed",
+            category: "helper_rejected",
+            technical: "fixed helper rejected or failed operation",
+            public_message:
+                "Approval is saved, but the deployment helper did not queue the deployment.",
+        });
     }
-    let value: serde_json::Value = serde_json::from_slice(&result.stdout).map_err(|_| ())?;
-    (value.get("ok").and_then(serde_json::Value::as_bool) == Some(true))
-        .then_some(value)
-        .ok_or(())
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).map_err(|_| DispatchFailure { state: "unknown", category: "helper_response_invalid", technical: "helper returned invalid JSON", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
+    if value.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        Ok(value)
+    } else {
+        Err(DispatchFailure {
+            state: "failed",
+            category: "helper_rejected",
+            technical: "fixed helper rejected operation",
+            public_message:
+                "Approval is saved, but the deployment helper did not queue the deployment.",
+        })
+    }
 }
 
 fn valid_uuid(value: &str) -> bool {

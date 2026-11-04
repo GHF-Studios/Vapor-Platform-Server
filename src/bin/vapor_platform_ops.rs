@@ -2,6 +2,15 @@
 mod ssh_cli;
 #[path = "../ssh_policy.rs"]
 mod ssh_policy;
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn valid_identity_authz_endpoint(endpoint: &str) -> bool {
+    matches!(
+        endpoint,
+        "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check"
+            | "http://127.0.0.1:7113/v1/internal/authorization/check"
+    )
+}
 #[cfg(unix)]
 mod unix_impl {
     use base64::Engine;
@@ -492,21 +501,7 @@ mod unix_impl {
         let endpoint = configured_value("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL").unwrap_or_else(|| {
             "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check".to_string()
         });
-        let Ok(parsed_endpoint) = reqwest::Url::parse(&endpoint) else {
-            return false;
-        };
-        let loopback = parsed_endpoint
-            .host_str()
-            .and_then(|host| host.parse::<std::net::IpAddr>().ok())
-            .is_some_and(|address| address.is_loopback());
-        if parsed_endpoint.scheme() != "http"
-            || !loopback
-            || !parsed_endpoint.username().is_empty()
-            || parsed_endpoint.password().is_some()
-            || parsed_endpoint.query().is_some()
-            || parsed_endpoint.fragment().is_some()
-            || parsed_endpoint.path() != "/api/identity/v1/internal/authorization/check"
-        {
+        if !super::valid_identity_authz_endpoint(&endpoint) {
             return false;
         }
         let Ok(client) = reqwest::Client::builder()
@@ -1331,4 +1326,33 @@ fn main() {
         return;
     }
     eprintln!("vapor_platform_ops is a Linux server helper and cannot run on this platform");
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::valid_identity_authz_endpoint;
+
+    #[test]
+    fn accepts_the_two_configured_identity_topologies() {
+        assert!(valid_identity_authz_endpoint(
+            "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check"
+        ));
+        assert!(valid_identity_authz_endpoint(
+            "http://127.0.0.1:7113/v1/internal/authorization/check"
+        ));
+    }
+
+    #[test]
+    fn rejects_other_endpoints_and_url_variants() {
+        for endpoint in [
+            "http://localhost:7110/api/identity/v1/internal/authorization/check",
+            "http://127.0.0.1:7111/api/identity/v1/internal/authorization/check",
+            "https://127.0.0.1:7110/api/identity/v1/internal/authorization/check",
+            "http://user@127.0.0.1:7110/api/identity/v1/internal/authorization/check",
+            "http://127.0.0.1:7113/v1/internal/authorization/check?x=1",
+            "http://127.0.0.1:7113/v1/internal/authorization/check/",
+        ] {
+            assert!(!valid_identity_authz_endpoint(endpoint), "{endpoint}");
+        }
+    }
 }

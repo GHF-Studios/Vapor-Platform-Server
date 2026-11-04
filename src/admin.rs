@@ -314,6 +314,7 @@ const JS: &str = r#"
 
   const deployRequests = document.querySelector('#deploy-requests');
   if (deployRequests) {
+    const actionFeedback = new Map();
     const refreshDeployRequests = async () => {
       let response;
       let requests;
@@ -341,6 +342,16 @@ const JS: &str = r#"
         card.className = 'card';
         const heading = document.createElement('h3');
         heading.textContent = `${item.repository} · ${item.branch} · ${item.status}`;
+        const decisionStage = document.createElement('p');
+        decisionStage.className = 'muted';
+        decisionStage.textContent = `Decision: ${item.status === 'pending' ? 'awaiting review' : item.status === 'rejected' ? 'rejected' : item.status === 'expired' ? 'expired' : 'approved and saved'}`;
+        const dispatchStage = document.createElement('p');
+        dispatchStage.className = 'muted';
+        const dispatchLabels = {
+          not_attempted: 'not attempted', dispatching: 'dispatch in progress',
+          queued: 'queued', failed: 'failed; retry available', unknown: 'result unknown; retry available'
+        };
+        dispatchStage.textContent = `Deployment: ${dispatchLabels[item.dispatch_state] || 'not reported'}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
         const revision = document.createElement('p');
         revision.textContent = `Commit ${item.commit} · tree ${item.tree}`;
         const pins = document.createElement('p');
@@ -352,7 +363,13 @@ const JS: &str = r#"
         workflow.href = item.workflow_url;
         workflow.rel = 'noopener noreferrer';
         workflow.textContent = 'Open successful CI run';
-        card.append(heading, revision, pins, summary, workflow);
+        card.append(heading, decisionStage, dispatchStage, revision, pins, summary, workflow);
+        if (actionFeedback.has(item.id)) {
+          const feedback = document.createElement('p');
+          feedback.className = 'muted';
+          feedback.textContent = actionFeedback.get(item.id);
+          card.append(feedback);
+        }
         if (item.result_detail) {
           const outcome = document.createElement('p');
           outcome.className = 'muted';
@@ -370,7 +387,7 @@ const JS: &str = r#"
         }
         details.append(summaryLabel, list);
         card.append(details);
-        for (const decision of (item.status === 'pending' ? ['approve', 'reject'] : item.status === 'approved' ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
+        for (const decision of (item.status === 'pending' ? ['approve', 'reject'] : item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
           const form = document.createElement('form');
           form.className = 'inline';
           const label = document.createElement('label');
@@ -387,16 +404,23 @@ const JS: &str = r#"
             event.preventDefault();
             if (!confirmed.checked) return;
             button.disabled = true;
-            const result = await fetch(`/api/admin/deploy-requests/${encodeURIComponent(item.id)}/${decision}`, {
-              method: 'POST', credentials: 'same-origin', cache: 'no-store',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify(['dispatch', 'reconcile'].includes(decision)
-                ? { expected_version: item.version, confirmed: true }
-                : { expected_version: item.version, confirmed: true,
-                    reason: decision === 'approve' ? 'approved in Platform Operations' : 'rejected in Platform Operations' })
-            });
-            if (result.ok) await refreshDeployRequests();
-            else { button.disabled = false; button.textContent = `Failed (${result.status}); reload`; }
+            try {
+              const result = await fetch(`/api/admin/deploy-requests/${encodeURIComponent(item.id)}/${decision}`, {
+                method: 'POST', credentials: 'same-origin', cache: 'no-store',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(['dispatch', 'reconcile'].includes(decision)
+                  ? { expected_version: item.version, confirmed: true }
+                  : { expected_version: item.version, confirmed: true,
+                      reason: decision === 'approve' ? 'approved in Platform Operations' : 'rejected in Platform Operations' })
+              });
+              const body = await result.clone().json().catch(() => null);
+              const plainText = body ? '' : await result.text().catch(() => '');
+              const message = body?.error?.message || plainText.trim().slice(0, 240) || (result.ok ? 'Action completed.' : `Action failed (${result.status}).`);
+              actionFeedback.set(item.id, String(message).slice(0, 240));
+            } catch (_) {
+              actionFeedback.set(item.id, 'The response was lost. Reload the request to see whether the decision or dispatch stage was saved.');
+            }
+            await refreshDeployRequests();
           });
           card.append(form);
         }
@@ -773,7 +797,7 @@ fn operations_page(view: OperationsView) -> String {
     .collect::<String>();
 
     let content = match view {
-        OperationsView::Deployments => "<section class=\"card\"><h2>Deployment requests</h2><p class=\"muted\">Review the exact tested revision, CI result, and pinned service revisions before deciding. A decision is recorded by the existing Platform approval handler.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment requests…</p></div></section>".to_owned(),
+        OperationsView::Deployments => "<section class=\"card\"><h2>Deployment requests</h2><p class=\"muted\">Review the exact tested revision, CI result, and pinned service revisions. Approving records your decision and attempts to queue that deployment; the request card reports both stages.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment requests…</p></div></section>".to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
         OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
         OperationsView::History => "<section class=\"card\"><h2>Latest operation result</h2><p class=\"muted\">The current Platform API exposes a latest-status pointer, not a complete event history. This view reports only that record.</p><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
@@ -1439,6 +1463,26 @@ mod tests {
         );
         assert!(script.contains("Access history"));
         assert!(script.contains("if (item.granted_duration_seconds != null)"));
+    }
+
+    #[tokio::test]
+    async fn deploy_ui_separates_decision_and_dispatch_and_uses_retry_eligibility() {
+        let response = admin_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/assets/admin.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let script = std::str::from_utf8(&body).unwrap();
+        assert!(script.contains("Decision: ${item.status"));
+        assert!(script.contains("Deployment: ${dispatchLabels[item.dispatch_state]"));
+        assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
+        assert!(script.contains("const body = await result.clone().json()"));
+        assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
     }
 
     #[tokio::test]
