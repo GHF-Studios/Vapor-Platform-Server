@@ -1228,6 +1228,12 @@ mod tests {
         "vapor-session-12345678-1234-4234-9234-123456789abc-12345678-1234-4234-9234-123456789abc";
     const SERVICE_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+    // The Platform installs this middleware around the composed service
+    // routers. Exercise the same public admin surface in route-level tests.
+    fn admin_app() -> Router {
+        super::router().layer(axum::middleware::from_fn(super::shell_middleware))
+    }
+
     #[derive(Clone)]
     struct OverviewMockState {
         authorization_requests: Arc<AtomicUsize>,
@@ -1283,7 +1289,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_root_lists_fixed_modules() {
-        let response = super::router()
+        let response = admin_app()
             .oneshot(
                 Request::builder()
                     .uri("/admin")
@@ -1304,7 +1310,7 @@ mod tests {
 
     #[tokio::test]
     async fn registry_admin_is_linked_and_unimplemented_modules_stay_planned() {
-        let response = super::router()
+        let response = admin_app()
             .oneshot(
                 Request::builder()
                     .uri("/admin")
@@ -1324,7 +1330,7 @@ mod tests {
 
     #[tokio::test]
     async fn public_shell_contains_no_operator_data() {
-        let response = super::router()
+        let response = admin_app()
             .oneshot(
                 Request::builder()
                     .uri("/admin")
@@ -1343,7 +1349,7 @@ mod tests {
 
     #[tokio::test]
     async fn operator_responses_are_private_no_store() {
-        let response = super::router()
+        let response = admin_app()
             .oneshot(
                 Request::builder()
                     .uri("/admin")
@@ -1361,7 +1367,7 @@ mod tests {
 
     #[tokio::test]
     async fn overview_rejects_missing_session_and_is_not_cacheable() {
-        let response = super::router()
+        let response = admin_app()
             .oneshot(
                 Request::builder()
                     .uri("/api/admin/overview")
@@ -1380,7 +1386,7 @@ mod tests {
 
     #[tokio::test]
     async fn operations_page_requires_root_and_has_no_mutation_routes() {
-        let get_response = super::router()
+        let get_response = admin_app()
             .oneshot(
                 Request::builder()
                     .uri("/admin/operations")
@@ -1395,7 +1401,7 @@ mod tests {
             "private, no-store"
         );
 
-        let post_response = super::router()
+        let post_response = admin_app()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -1410,7 +1416,7 @@ mod tests {
 
     #[tokio::test]
     async fn ssh_access_ui_distinguishes_authorization_failures_and_shows_safe_api_details() {
-        let response = super::router()
+        let response = admin_app()
             .oneshot(
                 Request::builder()
                     .uri("/admin/assets/admin.js")
@@ -1437,7 +1443,7 @@ mod tests {
 
     #[tokio::test]
     async fn operations_history_api_requires_root_before_reading_record() {
-        let response = super::router()
+        let response = admin_app()
             .oneshot(
                 Request::builder()
                     .uri("/api/admin/operations")
