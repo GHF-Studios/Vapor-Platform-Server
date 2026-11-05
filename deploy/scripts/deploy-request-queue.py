@@ -4,13 +4,15 @@
 import argparse
 import hashlib
 import json
+import pathlib
 import sqlite3
 import sys
 import time
 
 
 def connect(path):
-    db = sqlite3.connect(path, timeout=5, isolation_level=None)
+    database_uri = pathlib.Path(path).resolve().as_uri() + "?mode=rw"
+    db = sqlite3.connect(database_uri, uri=True, timeout=5, isolation_level=None)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA busy_timeout = 5000")
     return db
@@ -40,7 +42,14 @@ def claim(db, request_id):
     db.execute("BEGIN IMMEDIATE")
     try:
         db.execute(
-            "UPDATE platform_deploy_requests SET status = 'expired', version = version + 1, decided_at_unix = ? "
+            "UPDATE platform_deploy_requests SET status = 'expired', version = version + 1, decided_at_unix = ?, "
+            "dispatch_state = CASE "
+            "WHEN status = 'approved' AND dispatch_state IN ('queued', 'dispatching') THEN 'expired' "
+            "ELSE dispatch_state END, "
+            "dispatch_detail = CASE "
+            "WHEN status = 'approved' AND dispatch_state IN ('queued', 'dispatching') "
+            "THEN 'Approval expired before the worker claimed this request.' "
+            "ELSE dispatch_detail END "
             "WHERE status IN ('pending', 'approved') AND expires_at_unix <= ?",
             (now, now),
         )

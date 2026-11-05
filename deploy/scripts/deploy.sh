@@ -178,12 +178,23 @@ fi
 
 bash "${VAPOR_DEPLOY_ROOT}/deploy/scripts/configure-authorization.sh"
 
+# The privileged operation helper is built from the Platform package even in
+# services mode, so its lockfile is required for every deployment mode.
+if [ ! -f "${VAPOR_DEPLOY_ROOT}/Cargo.lock" ]; then
+  echo "error: Platform Cargo.lock is missing; commit it before building the operation helper" >&2
+  exit 1
+fi
+
+# Platform's root-only operation helper is installed in both deployment modes.
+# Build it explicitly so a clean services-mode install does not depend on a
+# binary left behind by an earlier monolith build.
+export VAPOR_PLATFORM_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD)"
+cargo build --release --locked \
+  --manifest-path "${VAPOR_DEPLOY_ROOT}/Cargo.toml" \
+  --target-dir "${VAPOR_DEPLOY_ROOT}/target" \
+  --bin vapor_platform_ops
+
 if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
-  if [ ! -f "${VAPOR_DEPLOY_ROOT}/Cargo.lock" ]; then
-    echo "error: composed server Cargo.lock is missing; generate and commit it before deploying monolith mode" >&2
-    exit 1
-  fi
-  export VAPOR_PLATFORM_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD)"
   cargo build --release --locked \
     --manifest-path "${VAPOR_DEPLOY_ROOT}/Cargo.toml" \
     --target-dir "${VAPOR_DEPLOY_ROOT}/target"

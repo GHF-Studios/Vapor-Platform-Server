@@ -49,6 +49,7 @@ struct AuthorizationRequirement {
 #[derive(Deserialize)]
 struct AuthorizationDecision {
     allowed: bool,
+    expires_at_unix: i64,
     profile_id: Option<String>,
 }
 
@@ -137,10 +138,27 @@ pub(crate) async fn authorize_root_profile_with_client(
     }
     let decision: AuthorizationDecision =
         serde_json::from_slice(&body).map_err(|_| AuthFailure::Unavailable)?;
-    if decision.allowed {
-        decision.profile_id.ok_or(AuthFailure::Unavailable)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| AuthFailure::Unavailable)?
+        .as_secs() as i64;
+    if let Some(failure) = authorization_failure(decision.allowed, decision.expires_at_unix, now) {
+        return Err(failure);
+    }
+    decision.profile_id.ok_or(AuthFailure::Unavailable)
+}
+
+fn authorization_failure(
+    allowed: bool,
+    expires_at_unix: i64,
+    now_unix: i64,
+) -> Option<AuthFailure> {
+    if expires_at_unix <= now_unix {
+        Some(AuthFailure::Unauthorized)
+    } else if !allowed {
+        Some(AuthFailure::Forbidden)
     } else {
-        Err(AuthFailure::Forbidden)
+        None
     }
 }
 
@@ -247,7 +265,7 @@ mod tests {
             StatusCode::OK,
             Json(Decision {
                 allowed: state.allowed && valid,
-                expires_at_unix: 0,
+                expires_at_unix: i64::MAX,
                 profile_id: Some("test-root-profile".to_string()),
             }),
         )
@@ -329,6 +347,23 @@ mod tests {
         assert_eq!(result, Ok(()));
         assert!(*observed.lock().unwrap());
         task.abort();
+    }
+
+    #[test]
+    fn expired_sessions_and_current_non_root_sessions_have_distinct_failures() {
+        assert_eq!(
+            super::authorization_failure(false, 99, 100),
+            Some(AuthFailure::Unauthorized)
+        );
+        assert_eq!(
+            super::authorization_failure(true, 99, 100),
+            Some(AuthFailure::Unauthorized)
+        );
+        assert_eq!(
+            super::authorization_failure(false, 101, 100),
+            Some(AuthFailure::Forbidden)
+        );
+        assert_eq!(super::authorization_failure(true, 101, 100), None);
     }
 
     #[tokio::test]

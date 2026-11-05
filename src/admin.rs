@@ -349,9 +349,12 @@ const JS: &str = r#"
         dispatchStage.className = 'muted';
         const dispatchLabels = {
           not_attempted: 'not attempted', dispatching: 'dispatch in progress',
-          queued: 'queued', failed: 'failed; retry available', unknown: 'result unknown; retry available'
+          queued: 'queued', expired: 'expired before worker claim',
+          failed: 'dispatch failed', unknown: 'dispatch result unknown'
         };
-        dispatchStage.textContent = `Deployment: ${dispatchLabels[item.dispatch_state] || 'not reported'}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
+        const retryLabel = item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)
+          ? '; retry available' : '';
+        dispatchStage.textContent = `Deployment: ${dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
         const revision = document.createElement('p');
         revision.textContent = `Commit ${item.commit} · tree ${item.tree}`;
         const pins = document.createElement('p');
@@ -432,6 +435,21 @@ const JS: &str = r#"
 
   const sshAccess = document.querySelector('#ssh-access');
   if (sshAccess) {
+    const actionFeedback = new Map();
+    const submitSshAction = async (button, itemId, path, body, fallback) => {
+      button.disabled = true;
+      try {
+        const result = await fetch(path, {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+        });
+        if (result.ok) actionFeedback.delete(itemId);
+        else actionFeedback.set(itemId, await responseFailure(result, fallback));
+      } catch (_) {
+        actionFeedback.set(itemId, 'No response was received; the request may have completed. The current status has been refreshed; inspect access history before retrying.');
+      }
+      await refresh();
+    };
     const refresh = async () => {
       let response;
       let items;
@@ -453,6 +471,13 @@ const JS: &str = r#"
         const scope = document.createElement('p'); scope.className = 'muted';
         scope.textContent = `Requested: ${item.requested_capabilities.join(', ') || 'shell only'} · ${item.requested_duration_seconds}s`;
         card.append(title, purpose, scope);
+        if (actionFeedback.has(item.id)) {
+          const feedback = document.createElement('p');
+          feedback.className = 'error';
+          feedback.setAttribute('role', 'alert');
+          feedback.textContent = actionFeedback.get(item.id);
+          card.append(feedback);
+        }
         if (item.detail) {
           const detail = document.createElement('p'); detail.className = 'muted'; detail.textContent = item.detail;
           card.append(detail);
@@ -528,23 +553,18 @@ const JS: &str = r#"
             event.preventDefault(); if (!confirm.checked) return;
             const selected = choices.filter(input => input.checked).map(input => input.value);
             if (selected.includes('host_admin') && (selected.length !== 1 || !adminConfirm.checked)) return;
-            button.disabled = true;
-            const result = await fetch(`/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/approve`, {
-              method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ expected_version: item.version, confirmed: true, host_admin_confirmed: adminConfirm.checked,
-                granted_capabilities: selected, granted_duration_seconds: Number(duration.value) })
-            });
-            if (result.ok) await refresh(); else { button.disabled = false; await showResponseFailure(form, result, 'Grant failed'); }
+            await submitSshAction(button, item.id,
+              `/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/approve`,
+              { expected_version: item.version, confirmed: true, host_admin_confirmed: adminConfirm.checked,
+                granted_capabilities: selected, granted_duration_seconds: Number(duration.value) },
+              'Grant failed');
           });
           card.append(form);
           const reject = document.createElement('button'); reject.type = 'button'; reject.textContent = 'Reject request';
           reject.addEventListener('click', async () => {
-            reject.disabled = true;
-            const result = await fetch(`/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/reject`, {
-              method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ expected_version: item.version, confirmed: true })
-            });
-            if (result.ok) await refresh(); else { reject.disabled = false; await showResponseFailure(card, result, 'Reject failed'); }
+            await submitSshAction(reject, item.id,
+              `/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/reject`,
+              { expected_version: item.version, confirmed: true }, 'Rejection failed');
           });
           card.append(reject);
         } else if (item.status === 'active' || item.status === 'failed') {
@@ -555,12 +575,10 @@ const JS: &str = r#"
             : ' Revoke and terminate this account'));
           const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'Revoke access'; form.append(label, button);
           form.addEventListener('submit', async event => {
-            event.preventDefault(); if (!confirm.checked) return; button.disabled = true;
-            const result = await fetch(`/api/admin/ssh-access/grants/${encodeURIComponent(item.id)}/revoke`, {
-              method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ expected_version: item.version, confirmed: true })
-            });
-            if (result.ok) await refresh(); else { button.disabled = false; await showResponseFailure(form, result, 'Revoke failed'); }
+            event.preventDefault(); if (!confirm.checked) return;
+            await submitSshAction(button, item.id,
+              `/api/admin/ssh-access/grants/${encodeURIComponent(item.id)}/revoke`,
+              { expected_version: item.version, confirmed: true }, 'Revocation failed');
           });
           card.append(form);
         }
@@ -1279,7 +1297,7 @@ mod tests {
             && body["policy"]["mode"] == "all"
             && body["policy"]["requirements"][0]["role"] == "root";
         Json(
-            json!({"allowed": valid, "expires_at_unix": 0, "profile_id": if valid { Some("mock-root-profile") } else { None }}),
+            json!({"allowed": valid, "expires_at_unix": i64::MAX, "profile_id": if valid { Some("mock-root-profile") } else { None }}),
         )
     }
 
@@ -1457,7 +1475,10 @@ mod tests {
             .contains("Sign in with an Identity root account to review temporary SSH requests."));
         assert!(script.contains("Your signed-in account does not have the Platform root role."));
         assert!(script.contains("const responseFailure = async (response, fallback) =>"));
-        assert!(script.contains("await showResponseFailure(form, result, 'Grant failed')"));
+        assert!(script.contains("'Grant failed');"));
+        assert!(script
+            .contains("const submitSshAction = async (button, itemId, path, body, fallback) =>"));
+        assert!(script.contains("No response was received; the request may have completed."));
         assert!(
             script.contains("/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/events")
         );
@@ -1480,6 +1501,8 @@ mod tests {
         let script = std::str::from_utf8(&body).unwrap();
         assert!(script.contains("Decision: ${item.status"));
         assert!(script.contains("Deployment: ${dispatchLabels[item.dispatch_state]"));
+        assert!(script.contains("expired: 'expired before worker claim'"));
+        assert!(script.contains("? '; retry available' : '';"));
         assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));

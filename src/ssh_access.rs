@@ -1,3 +1,4 @@
+use crate::ssh_policy::PENDING_TTL_SECONDS;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::header::CACHE_CONTROL;
@@ -11,8 +12,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::path::PathBuf;
 use std::time::Duration;
-use crate::ssh_policy::PENDING_TTL_SECONDS;
-
 const MAX_DURATION_SECONDS: i64 = 8 * 60 * 60;
 const MAX_REQUESTS: i64 = 200;
 const MAX_REQUEST_EVENTS: i64 = 100;
@@ -110,6 +109,42 @@ struct RootOperation<'a> {
     granted_capabilities: &'a [String],
     granted_duration_seconds: i64,
     expires_at_unix: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootOperationResult {
+    ok: bool,
+    operation_id: String,
+    state: String,
+    detail: String,
+}
+
+fn parse_root_operation_output(
+    process_succeeded: bool,
+    stdout: &[u8],
+    expected_id: &str,
+    expected_success_state: &str,
+) -> Result<(), String> {
+    if stdout.len() > 4096 {
+        return Err("privileged helper returned an oversized result".to_owned());
+    }
+    let result: RootOperationResult = serde_json::from_slice(stdout)
+        .map_err(|_| "privileged helper returned an invalid result".to_owned())?;
+    if result.operation_id != expected_id
+        || result.detail.is_empty()
+        || result.detail.len() > 256
+        || result.detail.chars().any(char::is_control)
+        || (result.ok && (!process_succeeded || result.state != expected_success_state))
+        || (!result.ok && (process_succeeded || result.state != "failed"))
+    {
+        return Err("privileged helper returned an inconsistent result".to_owned());
+    }
+    if result.ok {
+        Ok(())
+    } else {
+        Err(result.detail)
+    }
 }
 
 pub(crate) fn router() -> Router {
@@ -463,6 +498,9 @@ async fn approve_request(
     let Some(session_token) = crate::admin_auth::session_token(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
+    if expire_stale_requests(&state.pool).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     let row = match sqlx::query(
         "SELECT fingerprint FROM platform_ssh_access_requests
          WHERE id = ? AND status = 'pending' AND version = ?",
@@ -494,26 +532,24 @@ async fn approve_request(
         )
             .into_response();
     }
-    let expires = unix_now().saturating_add(request.granted_duration_seconds);
+    let now = unix_now();
+    let expires = now.saturating_add(request.granted_duration_seconds);
     let granted = serde_json::to_string(&request.granted_capabilities).unwrap_or_default();
-    let transitioning = sqlx::query(
-        "UPDATE platform_ssh_access_requests SET status = 'provisioning', version = version + 1,
-         decided_by_profile_id = ?, decided_by_actor_kind='identity_profile', decided_by_actor_label=NULL,
-         granted_capabilities_json = ?, granted_duration_seconds = ?, decided_at_unix = ?,
-         expires_at_unix = ?, operation_detail='granting'
-         WHERE id = ? AND status = 'pending' AND version = ?",
+    match begin_ssh_grant(
+        &state.pool,
+        &id,
+        request.expected_version,
+        &actor,
+        &granted,
+        request.granted_duration_seconds,
+        expires,
+        now,
     )
-    .bind(actor)
-    .bind(&granted)
-    .bind(request.granted_duration_seconds)
-    .bind(unix_now())
-    .bind(expires)
-    .bind(&id)
-    .bind(request.expected_version)
-    .execute(&state.pool)
-    .await;
-    if !matches!(transitioning, Ok(result) if result.rows_affected() == 1) {
-        return StatusCode::CONFLICT.into_response();
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::CONFLICT.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
     let payload = RootOperation {
         operation: "grant_ssh",
@@ -526,17 +562,28 @@ async fn approve_request(
         granted_duration_seconds: request.granted_duration_seconds,
         expires_at_unix: Some(expires),
     };
-    if run_root_operation(&payload).await.is_err() {
-        let _ = sqlx::query(
+    if let Err(helper_failure) = run_root_operation(&payload).await {
+        let detail = format!("grant helper failed: {helper_failure}");
+        let update = sqlx::query(
             "UPDATE platform_ssh_access_requests SET status = 'failed', version = version + 1,
-             operation_detail = 'privileged grant helper failed' WHERE id = ? AND status = 'provisioning'",
+             operation_detail = ? WHERE id = ? AND status = 'provisioning' AND version = ?
+             AND operation_detail = 'granting'",
         )
+        .bind(&detail)
         .bind(&id)
+        .bind(request.expected_version + 1)
         .execute(&state.pool)
         .await;
+        if !matches!(update, Ok(result) if result.rows_affected() == 1) {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "grant helper failed and Platform could not record the result; inspect the host before retrying\n",
+            )
+                .into_response();
+        }
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            "grant helper failed; no access was confirmed\n",
+            format!("{detail}; inspect the request and revoke if any access remains\n"),
         )
             .into_response();
     }
@@ -643,19 +690,27 @@ async fn revoke_grant(
         granted_duration_seconds: 0,
         expires_at_unix: None,
     };
-    if run_root_operation(&payload).await.is_err() {
-        let _ = sqlx::query(
+    if let Err(helper_failure) = run_root_operation(&payload).await {
+        let detail =
+            format!("revocation helper failed; access may remain active: {helper_failure}");
+        let update = sqlx::query(
             "UPDATE platform_ssh_access_requests SET status = 'failed', version = version + 1,
-             operation_detail = 'revocation helper failed; access may remain active' WHERE id = ? AND status = 'provisioning'",
+             operation_detail = ? WHERE id = ? AND status = 'provisioning' AND version = ?
+             AND operation_detail = 'revoking'",
         )
+        .bind(&detail)
         .bind(&id)
+        .bind(request.expected_version + 1)
         .execute(&state.pool)
         .await;
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "revocation failed; access may remain active\n",
-        )
-            .into_response();
+        if !matches!(update, Ok(result) if result.rows_affected() == 1) {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "revocation helper failed and Platform could not record the result; access may remain active\n",
+            )
+                .into_response();
+        }
+        return (StatusCode::SERVICE_UNAVAILABLE, format!("{detail}\n")).into_response();
     }
     let result = sqlx::query(
         "UPDATE platform_ssh_access_requests SET status = 'revoked', version = version + 1,
@@ -675,7 +730,7 @@ async fn revoke_grant(
         .into_response()
 }
 
-async fn run_root_operation(payload: &RootOperation<'_>) -> Result<(), ()> {
+async fn run_root_operation(payload: &RootOperation<'_>) -> Result<(), String> {
     let operation_path = std::env::var_os("VAPOR_PLATFORM_OPS_PATH")
         .unwrap_or_else(|| "/usr/local/libexec/vapor-platform-ops".into());
     let mut child = tokio::process::Command::new("/usr/bin/sudo")
@@ -686,30 +741,38 @@ async fn run_root_operation(payload: &RootOperation<'_>) -> Result<(), ()> {
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|_| ())?;
-    let input = serde_json::to_vec(payload).map_err(|_| ())?;
+        .map_err(|_| "could not start privileged helper".to_owned())?;
+    let input = serde_json::to_vec(payload)
+        .map_err(|_| "could not encode privileged operation".to_owned())?;
     if input.len() > 4096 {
-        return Err(());
+        return Err("privileged operation input exceeds its size limit".to_owned());
     }
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
-        stdin.write_all(&input).await.map_err(|_| ())?;
+        stdin
+            .write_all(&input)
+            .await
+            .map_err(|_| "could not send privileged operation".to_owned())?;
     } else {
-        return Err(());
+        return Err("privileged helper input is unavailable".to_owned());
     }
     let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
         .await
-        .map_err(|_| ())?
-        .map_err(|_| ())?;
-    if !output.status.success() || output.stdout.len() > 4096 {
-        return Err(());
-    }
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|_| ())?;
-    if result.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
-        Ok(())
-    } else {
-        Err(())
-    }
+        .map_err(|_| "privileged helper timed out".to_owned())?
+        .map_err(|_| "could not collect privileged helper result".to_owned())?;
+    let expected_success_state = match payload.operation {
+        "dispatch_deploy" => "queued",
+        "reconcile_deploy" => "failed",
+        "grant_ssh" => "active",
+        "revoke_ssh" => "revoked",
+        _ => return Err("unsupported privileged operation".to_owned()),
+    };
+    parse_root_operation_output(
+        output.status.success(),
+        &output.stdout,
+        payload.request_id,
+        expected_success_state,
+    )
 }
 
 async fn require_root(state: &SshAccessState, headers: &HeaderMap) -> Result<String, Response> {
@@ -789,6 +852,37 @@ fn same_origin(state: &SshAccessState, headers: &HeaderMap) -> bool {
         == Some(state.public_origin.as_str())
 }
 
+async fn begin_ssh_grant(
+    pool: &SqlitePool,
+    id: &str,
+    expected_version: i64,
+    actor_profile_id: &str,
+    granted_capabilities_json: &str,
+    granted_duration_seconds: i64,
+    expires_at_unix: i64,
+    now: i64,
+) -> Result<bool, sqlx::Error> {
+    let cutoff = now.saturating_sub(PENDING_TTL_SECONDS);
+    let result = sqlx::query(
+        "UPDATE platform_ssh_access_requests SET status = 'provisioning', version = version + 1,
+         decided_by_profile_id = ?, decided_by_actor_kind='identity_profile', decided_by_actor_label=NULL,
+         granted_capabilities_json = ?, granted_duration_seconds = ?, decided_at_unix = ?,
+         expires_at_unix = ?, operation_detail='granting'
+         WHERE id = ? AND status = 'pending' AND version = ? AND created_at_unix > ?",
+    )
+    .bind(actor_profile_id)
+    .bind(granted_capabilities_json)
+    .bind(granted_duration_seconds)
+    .bind(now)
+    .bind(expires_at_unix)
+    .bind(id)
+    .bind(expected_version)
+    .bind(cutoff)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -813,7 +907,8 @@ async fn expire_stale_requests(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "UPDATE platform_ssh_access_requests SET status='failed', version=version+1,
          decided_by_actor_kind='system_recovery', decided_by_actor_label='startup-recovery',
          operation_detail='interrupted privileged operation; cleanup may be required'
-         WHERE status='provisioning' AND decided_at_unix <= ?",
+         WHERE status='provisioning' AND decided_at_unix <= ?
+           AND COALESCE(operation_detail, '') NOT IN ('granting', 'revoking', 'expiring')",
     )
     .bind(interrupted_cutoff)
     .execute(pool)
@@ -832,6 +927,111 @@ async fn no_store(request: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn grant_transition_pool(created_at: i64) -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE platform_ssh_access_requests (
+                id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL,
+                decided_by_profile_id TEXT, decided_by_actor_kind TEXT,
+                decided_by_actor_label TEXT, granted_capabilities_json TEXT,
+                granted_duration_seconds INTEGER, decided_at_unix INTEGER,
+                expires_at_unix INTEGER, operation_detail TEXT, created_at_unix INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO platform_ssh_access_requests (id, status, version, created_at_unix)
+             VALUES ('request-1', 'pending', 4, ?)",
+        )
+        .bind(created_at)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn stale_ssh_request_cannot_transition_to_provisioning() {
+        let now = PENDING_TTL_SECONDS + 10_000;
+        let cutoff = now - PENDING_TTL_SECONDS;
+        let pool = grant_transition_pool(cutoff).await;
+
+        let changed = begin_ssh_grant(
+            &pool,
+            "request-1",
+            4,
+            "root-profile",
+            "[\"vapor_deploy\"]",
+            3600,
+            now + 3600,
+            now,
+        )
+        .await
+        .unwrap();
+
+        assert!(!changed);
+        let row = sqlx::query(
+            "SELECT status, version FROM platform_ssh_access_requests WHERE id='request-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("status"), "pending");
+        assert_eq!(row.get::<i64, _>("version"), 4);
+    }
+
+    #[test]
+    fn root_operation_results_are_bound_and_failure_details_are_bounded() {
+        let expected_id = "request-1";
+        let success =
+            br#"{"ok":true,"operation_id":"request-1","state":"active","detail":"grant active"}"#;
+        assert_eq!(
+            parse_root_operation_output(true, success, expected_id, "active"),
+            Ok(())
+        );
+        let wrong_state =
+            br#"{"ok":true,"operation_id":"request-1","state":"revoked","detail":"grant active"}"#;
+        assert!(parse_root_operation_output(true, wrong_state, expected_id, "active").is_err());
+
+        let failure = br#"{"ok":false,"operation_id":"request-1","state":"failed","detail":"rollback incomplete"}"#;
+        assert_eq!(
+            parse_root_operation_output(false, failure, expected_id, "active"),
+            Err("rollback incomplete".to_owned())
+        );
+
+        let mismatched_id =
+            br#"{"ok":false,"operation_id":"other","state":"failed","detail":"failure"}"#;
+        assert!(parse_root_operation_output(false, mismatched_id, expected_id, "active").is_err());
+        assert!(
+            parse_root_operation_output(false, &vec![b'x'; 4097], expected_id, "active").is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn current_ssh_request_can_transition_to_provisioning() {
+        let now = PENDING_TTL_SECONDS + 10_000;
+        let pool = grant_transition_pool(now - PENDING_TTL_SECONDS + 1).await;
+
+        assert!(begin_ssh_grant(
+            &pool,
+            "request-1",
+            4,
+            "root-profile",
+            "[\"vapor_deploy\"]",
+            3600,
+            now + 3600,
+            now,
+        )
+        .await
+        .unwrap());
+    }
 
     #[tokio::test]
     async fn request_history_requires_an_identity_root_session() {

@@ -27,6 +27,10 @@ fi
 if systemctl is-enabled --quiet vapor-deploy.timer; then
   systemctl disable vapor-deploy.timer
 fi
+if systemctl is-active --quiet vapor-deploy.service; then
+  echo "error: the legacy deploy service is still running; let it finish, then rerun this installer" >&2
+  exit 1
+fi
 rm -f -- "${legacy_timer}" "${legacy_service}"
 systemctl daemon-reload
 if systemctl is-active --quiet vapor-deploy.timer; then

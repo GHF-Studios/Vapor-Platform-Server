@@ -98,6 +98,7 @@ struct CreatedRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct IdentityCredentialDecision {
     pub(crate) credential_id: String,
     pub(crate) actor_profile_id: String,
@@ -107,6 +108,8 @@ pub(crate) struct IdentityCredentialDecision {
     #[serde(default)]
     pub(crate) bound_ssh_request_hash: Option<String>,
 }
+
+const MAX_IDENTITY_CREDENTIAL_RESPONSE_BYTES: usize = 4096;
 
 pub(crate) fn router() -> Router {
     let state = state();
@@ -379,7 +382,17 @@ async fn fetch_request_rows(
 async fn expire_requests(pool: &SqlitePool, now: i64) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE platform_deploy_requests SET status = 'expired', version = version + 1,
-         decided_at_unix = ? WHERE status IN ('pending','approved') AND expires_at_unix <= ?",
+         decided_at_unix = ?,
+         dispatch_state = CASE
+             WHEN status = 'approved' AND dispatch_state IN ('queued','dispatching') THEN 'expired'
+             ELSE dispatch_state
+         END,
+         dispatch_detail = CASE
+             WHEN status = 'approved' AND dispatch_state IN ('queued','dispatching')
+             THEN 'Approval expired before the worker claimed this request.'
+             ELSE dispatch_detail
+         END
+         WHERE status IN ('pending','approved') AND expires_at_unix <= ?",
     )
     .bind(now)
     .bind(now)
@@ -573,7 +586,7 @@ async fn reconcile_execution(
         expected_version: request.expected_version,
         session_token,
     };
-    match invoke_platform_ops(&operation).await {
+    match invoke_platform_ops(&operation, &id, "failed").await {
         Ok(output) => (StatusCode::OK, Json(output)).into_response(),
         Err(_) => (
             StatusCode::CONFLICT,
@@ -590,6 +603,15 @@ struct DispatchOperation<'a> {
     request_id: &'a str,
     expected_version: i64,
     session_token: &'a str,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PlatformOperationResult {
+    ok: bool,
+    operation_id: String,
+    state: String,
+    detail: String,
 }
 
 async fn dispatch_approved_authorized(
@@ -643,7 +665,8 @@ async fn dispatch_approved_authorized(
         expected_version: version,
         session_token,
     };
-    let (dispatch_state, detail, output) = match invoke_platform_ops(&operation).await {
+    let (dispatch_state, detail, output) = match invoke_platform_ops(&operation, id, "queued").await
+    {
         Ok(value) => ("queued", "Approved deployment queued.", Some(value)),
         Err(error) => {
             eprintln!(
@@ -822,7 +845,8 @@ async fn finish_dispatch_attempt(
     let result = sqlx::query(
         "UPDATE platform_deploy_requests
          SET dispatch_state = ?, dispatch_detail = ?
-         WHERE id = ? AND dispatch_attempts = ? AND dispatch_state = 'dispatching'",
+         WHERE id = ? AND dispatch_attempts = ? AND dispatch_state = 'dispatching'
+           AND status != 'expired'",
     )
     .bind(outcome)
     .bind(bounded_detail)
@@ -836,7 +860,8 @@ async fn finish_dispatch_attempt(
 #[cfg(test)]
 mod dispatch_tests {
     use super::{
-        begin_dispatch_attempt, finish_dispatch_attempt, normalize_stale_dispatches, retry_eligible,
+        begin_dispatch_attempt, expire_requests, finish_dispatch_attempt,
+        normalize_stale_dispatches, retry_eligible,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Row;
@@ -852,6 +877,78 @@ mod dispatch_tests {
         sqlx::query("INSERT INTO platform_deploy_requests (id, status, version) VALUES ('r1', 'approved', 3)")
             .execute(&pool).await.unwrap();
         pool
+    }
+
+    async fn pool_with_expiring_requests() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE platform_deploy_requests (id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, dispatch_state TEXT NOT NULL DEFAULT 'not_attempted', dispatch_attempts INTEGER NOT NULL DEFAULT 0, dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO platform_deploy_requests (id, status, version, expires_at_unix, dispatch_state, dispatch_attempts, dispatch_attempted_at_unix) VALUES ('queued', 'approved', 3, 99, 'queued', 1, 90), ('dispatching', 'approved', 3, 99, 'dispatching', 1, 90), ('pending', 'pending', 1, 99, 'not_attempted', 0, NULL), ('future', 'approved', 2, 101, 'queued', 1, 90), ('executing', 'executing', 4, 99, 'queued', 1, 90)")
+            .execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn expired_queued_deploy_cannot_keep_a_false_queued_state_or_accept_late_result() {
+        let pool = pool_with_expiring_requests().await;
+
+        expire_requests(&pool, 100).await.unwrap();
+        let queued = sqlx::query("SELECT status, dispatch_state, dispatch_detail FROM platform_deploy_requests WHERE id='queued'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(queued.get::<String, _>("status"), "expired");
+        assert_eq!(queued.get::<String, _>("dispatch_state"), "expired");
+        assert!(queued
+            .get::<String, _>("dispatch_detail")
+            .contains("expired before the worker claimed"));
+        assert!(!retry_eligible(
+            queued.get("status"),
+            queued.get("dispatch_state"),
+            Some(90),
+            100
+        ));
+
+        let dispatching = sqlx::query(
+            "SELECT status, dispatch_state FROM platform_deploy_requests WHERE id='dispatching'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(dispatching.get::<String, _>("status"), "expired");
+        assert_eq!(dispatching.get::<String, _>("dispatch_state"), "expired");
+        assert!(
+            !finish_dispatch_attempt(&pool, "dispatching", 1, "queued", "queued")
+                .await
+                .unwrap()
+        );
+
+        let pending = sqlx::query(
+            "SELECT status, dispatch_state FROM platform_deploy_requests WHERE id='pending'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(pending.get::<String, _>("status"), "expired");
+        assert_eq!(pending.get::<String, _>("dispatch_state"), "not_attempted");
+
+        let future = sqlx::query(
+            "SELECT status, dispatch_state FROM platform_deploy_requests WHERE id='future'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(future.get::<String, _>("status"), "approved");
+        assert_eq!(future.get::<String, _>("dispatch_state"), "queued");
+
+        let executing =
+            sqlx::query("SELECT status FROM platform_deploy_requests WHERE id='executing'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(executing.get::<String, _>("status"), "executing");
     }
 
     #[tokio::test]
@@ -954,7 +1051,9 @@ mod dispatch_tests {
 
 async fn invoke_platform_ops(
     operation: &impl Serialize,
-) -> Result<serde_json::Value, DispatchFailure> {
+    expected_id: &str,
+    expected_success_state: &str,
+) -> Result<PlatformOperationResult, DispatchFailure> {
     let operation_path = std::env::var_os("VAPOR_PLATFORM_OPS_PATH")
         .unwrap_or_else(|| "/usr/local/libexec/vapor-platform-ops".into());
     let mut child = tokio::process::Command::new("/usr/bin/sudo")
@@ -1009,8 +1108,22 @@ async fn invoke_platform_ops(
                 "Approval is saved, but the deployment helper did not queue the deployment.",
         });
     }
-    let value: serde_json::Value = serde_json::from_slice(&result.stdout).map_err(|_| DispatchFailure { state: "unknown", category: "helper_response_invalid", technical: "helper returned invalid JSON", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
-    if value.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+    let value: PlatformOperationResult = serde_json::from_slice(&result.stdout).map_err(|_| DispatchFailure { state: "unknown", category: "helper_response_invalid", technical: "helper returned invalid JSON", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
+    if value.operation_id != expected_id
+        || value.detail.is_empty()
+        || value.detail.len() > 256
+        || value.detail.chars().any(char::is_control)
+        || (value.ok && value.state != expected_success_state)
+        || (!value.ok && value.state != "failed")
+    {
+        return Err(DispatchFailure {
+            state: "unknown",
+            category: "helper_response_mismatch",
+            technical: "fixed helper returned a mismatched operation result",
+            public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying.",
+        });
+    }
+    if value.ok {
         Ok(value)
     } else {
         Err(DispatchFailure {
@@ -1088,14 +1201,36 @@ pub(crate) async fn verify_platform_request_credential(
             StatusCode::SERVICE_UNAVAILABLE
         });
     }
-    let verified: IdentityCredentialDecision = response
-        .json()
-        .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let body = read_bounded_identity_response(response).await?;
+    let verified: IdentityCredentialDecision =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     if verified.scope != scope || verified.actor_profile_id.is_empty() {
         return Err(StatusCode::FORBIDDEN);
     }
     Ok(verified)
+}
+
+async fn read_bounded_identity_response(
+    mut response: reqwest::Response,
+) -> Result<Vec<u8>, StatusCode> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_IDENTITY_CREDENTIAL_RESPONSE_BYTES as u64)
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_IDENTITY_CREDENTIAL_RESPONSE_BYTES {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 async fn require_root(state: &DeployRequestState, headers: &HeaderMap) -> Result<String, Response> {
@@ -1195,7 +1330,13 @@ async fn no_store(request: Request<Body>, next: Next) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_request, CreateDeployRequest, SubmodulePin, SUBMODULES};
+    use super::{
+        read_bounded_identity_response, validate_request, CreateDeployRequest,
+        IdentityCredentialDecision, SubmodulePin, SUBMODULES,
+    };
+    use axum::routing::get;
+    use axum::Router;
+    use tokio::net::TcpListener;
 
     fn valid_request() -> CreateDeployRequest {
         CreateDeployRequest {
@@ -1245,5 +1386,32 @@ mod tests {
         let mut request = valid_request();
         request.workflow_url = "https://attacker.example/actions".to_string();
         assert!(validate_request(&request).is_err());
+    }
+
+    #[tokio::test]
+    async fn identity_credential_response_is_bounded() {
+        let app = Router::new().route("/credential", get(|| async { "x".repeat(4097) }));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let response = reqwest::Client::new()
+            .get(format!("http://{address}/credential"))
+            .send()
+            .await
+            .unwrap();
+
+        assert!(read_bounded_identity_response(response).await.is_err());
+        server.abort();
+    }
+
+    #[test]
+    fn identity_credential_response_rejects_unknown_fields() {
+        let valid = br#"{"credential_id":"credential-1","actor_profile_id":"profile-1","scope":"platform:deploy-request:create","bound_ssh_fingerprint":null,"bound_ssh_request_hash":null}"#;
+        assert!(serde_json::from_slice::<IdentityCredentialDecision>(valid).is_ok());
+
+        let unexpected = br#"{"credential_id":"credential-1","actor_profile_id":"profile-1","scope":"platform:deploy-request:create","bound_ssh_fingerprint":null,"bound_ssh_request_hash":null,"is_root":true}"#;
+        assert!(serde_json::from_slice::<IdentityCredentialDecision>(unexpected).is_err());
     }
 }

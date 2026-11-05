@@ -5,5 +5,6 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=infinity
 EnvironmentFile=-/etc/vapor-server/platform.env
-ExecStart=/usr/bin/flock -n /run/vapor-server-deploy.lock /opt/vapor-platform-server/deploy/scripts/run-approved-deploy.sh %i
+ExecStart=/usr/bin/flock /run/vapor-server-deploy.lock /opt/vapor-platform-server/deploy/scripts/run-approved-deploy.sh %i

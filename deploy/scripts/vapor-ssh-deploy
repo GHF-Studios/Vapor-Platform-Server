@@ -4,10 +4,18 @@ if [ "$#" -ne 0 ]; then
   echo "usage: vapor-ssh-deploy" >&2
   exit 2
 fi
+platform_env=/etc/vapor-server/platform.env
+if [ -r "${platform_env}" ]; then
+  # This root-owned file is the same deployment configuration loaded by the
+  # Platform service and approved-deploy worker.
+  # shellcheck disable=SC1090
+  source "${platform_env}"
+fi
 database="${VAPOR_PLATFORM_DB:-${VAPOR_PLATFORM_STATE:-/var/lib/vapor-server/platform}/platform.sqlite3}"
-mapfile -t request_ids < <(python3 - "${database}" <<'PY'
-import sqlite3, sys, time, uuid
-with sqlite3.connect(sys.argv[1]) as db:
+request_ids_output="$(python3 - "${database}" <<'PY'
+import pathlib, sqlite3, sys, time, uuid
+database_uri = pathlib.Path(sys.argv[1]).resolve().as_uri() + "?mode=ro"
+with sqlite3.connect(database_uri, uri=True) as db:
     rows = db.execute("SELECT id FROM platform_deploy_requests WHERE status='approved' AND expires_at_unix>? ORDER BY decided_at_unix, created_at_unix", (int(time.time()),))
     for (value,) in rows:
         try:
@@ -15,7 +23,11 @@ with sqlite3.connect(sys.argv[1]) as db:
         except (ValueError, TypeError):
             continue
 PY
-)
+)"
+request_ids=()
+if [[ -n "${request_ids_output}" ]]; then
+  mapfile -t request_ids <<<"${request_ids_output}"
+fi
 if [ "${#request_ids[@]}" -eq 0 ]; then
   echo "No approved deployment is waiting."
   exit 0

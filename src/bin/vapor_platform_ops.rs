@@ -4,6 +4,43 @@ mod ssh_cli;
 mod ssh_policy;
 
 #[cfg_attr(not(unix), allow(dead_code))]
+const MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES: usize = 4096;
+
+#[cfg_attr(not(unix), allow(dead_code))]
+#[derive(serde::Deserialize)]
+struct IdentityAuthorizationDecision {
+    allowed: bool,
+    expires_at_unix: i64,
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn identity_decision_is_current(allowed: bool, expires_at_unix: i64, now_unix: i64) -> bool {
+    allowed && expires_at_unix > now_unix
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn identity_response_allows_root(status: reqwest::StatusCode, body: &[u8], now_unix: i64) -> bool {
+    if status != reqwest::StatusCode::OK || body.len() > MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES {
+        return false;
+    }
+    serde_json::from_slice::<IdentityAuthorizationDecision>(body).is_ok_and(|decision| {
+        identity_decision_is_current(decision.allowed, decision.expires_at_unix, now_unix)
+    })
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn grant_setup_failure_detail(
+    primary_failure: &'static str,
+    rollback_completed: bool,
+) -> &'static str {
+    if rollback_completed {
+        primary_failure
+    } else {
+        "grant setup failed and rollback was incomplete; access artifacts may remain; retry revoke and inspect the host"
+    }
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
 fn valid_identity_authz_endpoint(endpoint: &str) -> bool {
     matches!(
         endpoint,
@@ -72,11 +109,6 @@ mod unix_impl {
     struct AuthorizationRequirement {
         kind: &'static str,
         role: &'static str,
-    }
-
-    #[derive(Deserialize)]
-    struct AuthorizationDecision {
-        allowed: bool,
     }
 
     pub async fn run_entry() {
@@ -533,13 +565,29 @@ mod unix_impl {
         else {
             return false;
         };
-        if !response.status().is_success() {
+        if response.status() != reqwest::StatusCode::OK
+            || response.content_length().is_some_and(|length| {
+                length > super::MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES as u64
+            })
+        {
             return false;
         }
-        response
-            .json::<AuthorizationDecision>()
-            .await
-            .is_ok_and(|decision| decision.allowed)
+        let mut body = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if body.len().saturating_add(chunk.len())
+                        > super::MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES
+                    {
+                        return false;
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(_) => return false,
+            }
+        }
+        super::identity_response_allows_root(reqwest::StatusCode::OK, &body, unix_now())
     }
 
     async fn verify_deploy_request(
@@ -682,16 +730,38 @@ mod unix_impl {
         {
             return Err((id.to_string(), "invalid grant expiry"));
         }
-        create_managed_account(id, &public_key, granted, expires).await?;
+        create_managed_account(pool, id, version, &public_key, granted, expires).await?;
         Ok(())
     }
 
     async fn create_managed_account(
+        pool: &SqlitePool,
         id: &str,
+        expected_version: i64,
         public_key: &str,
         capabilities: &[String],
         expires: i64,
     ) -> Result<(), (String, &'static str)> {
+        let _lifecycle_lock = acquire_cleanup_lock(id)?;
+        let row = sqlx::query(
+            "SELECT status, version, operation_detail, expires_at_unix
+             FROM platform_ssh_access_requests WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| (id.to_string(), "could not recheck SSH grant state"))?;
+        let Some(row) = row else {
+            return Err((id.to_string(), "SSH grant no longer exists"));
+        };
+        if row.get::<String, _>("status") != "provisioning"
+            || row.get::<i64, _>("version") != expected_version
+            || row.get::<Option<String>, _>("operation_detail").as_deref() != Some("granting")
+            || row.get::<Option<i64>, _>("expires_at_unix") != Some(expires)
+            || expires <= unix_now()
+        {
+            return Err((id.to_string(), "SSH grant is no longer current"));
+        }
         let username = ssh_username(id);
         if account_exists(&username) {
             return Err((
@@ -699,8 +769,27 @@ mod unix_impl {
                 "temporary account already exists; refusing duplicate grant",
             ));
         }
+        match create_managed_account_locked(id, public_key, capabilities, expires).await {
+            Ok(()) => Ok(()),
+            Err((_, primary_failure)) => {
+                let rollback_completed = remove_managed_account_locked(id).await.is_ok();
+                Err((
+                    id.to_string(),
+                    super::grant_setup_failure_detail(primary_failure, rollback_completed),
+                ))
+            }
+        }
+    }
+
+    async fn create_managed_account_locked(
+        id: &str,
+        public_key: &str,
+        capabilities: &[String],
+        expires: i64,
+    ) -> Result<(), (String, &'static str)> {
+        let username = ssh_username(id);
         let hash = random_password_hash(id).await?;
-        run_command(
+        if run_command(
             "/usr/sbin/useradd",
             &[
                 "--create-home",
@@ -714,7 +803,10 @@ mod unix_impl {
             ],
         )
         .await
-        .map_err(|_| (id.to_string(), "could not create temporary account"))?;
+        .is_err()
+        {
+            return Err((id.to_string(), "could not create temporary account"));
+        }
         let home = format!("/home/{username}");
         let ssh_dir = format!("{home}/.ssh");
         if run_command("/usr/bin/chown", &["root:root", &home])
@@ -724,7 +816,6 @@ mod unix_impl {
                 .await
                 .is_err()
         {
-            let _ = remove_managed_account(id).await;
             return Err((id.to_string(), "could not secure temporary account home"));
         }
         let workspace = format!("{home}/workspace");
@@ -744,7 +835,6 @@ mod unix_impl {
         .await
         .is_err()
         {
-            let _ = remove_managed_account(id).await;
             return Err((id.to_string(), "could not prepare temporary workspace"));
         }
         if run_command(
@@ -754,16 +844,17 @@ mod unix_impl {
         .await
         .is_err()
         {
-            let _ = remove_managed_account(id).await;
             return Err((
                 id.to_string(),
                 "could not prepare managed SSH key directory",
             ));
         }
+        if install_expiry_units(id, expires).await.is_err() {
+            return Err((id.to_string(), "could not install persistent expiry timer"));
+        }
         let key_path = format!("{ssh_dir}/authorized_keys");
         let key_line = format!("{public_key}\n");
         if atomic_write_root_file(&key_path, key_line.as_bytes(), 0o644).is_err() {
-            let _ = remove_managed_account(id).await;
             return Err((id.to_string(), "could not install managed public key"));
         }
         let sudoers_path = format!("/etc/sudoers.d/vapor-ssh-{id}");
@@ -773,12 +864,7 @@ mod unix_impl {
                 .await
                 .is_err()
         {
-            let _ = remove_managed_account(id).await;
             return Err((id.to_string(), "scoped sudo policy did not validate"));
-        }
-        if install_expiry_units(id, expires).await.is_err() {
-            let _ = remove_managed_account(id).await;
-            return Err((id.to_string(), "could not install persistent expiry timer"));
         }
         Ok(())
     }
@@ -850,6 +936,10 @@ mod unix_impl {
 
     async fn remove_managed_account(id: &str) -> Result<(), (String, &'static str)> {
         let _cleanup_lock = acquire_cleanup_lock(id)?;
+        remove_managed_account_locked(id).await
+    }
+
+    async fn remove_managed_account_locked(id: &str) -> Result<(), (String, &'static str)> {
         let username = ssh_username(id);
         let key_path = format!("/home/{username}/.ssh/authorized_keys");
         let sudoers = format!("/etc/sudoers.d/vapor-ssh-{id}");
@@ -1246,8 +1336,9 @@ mod unix_impl {
             )
             .await
             .map_err(|_| "Platform database is unavailable")?;
+        let _cleanup_lock = acquire_cleanup_lock(id).map_err(|_| "could not lock SSH grant")?;
         let row = sqlx::query(
-            "SELECT status, expires_at_unix FROM platform_ssh_access_requests WHERE id=?",
+            "SELECT status, version, expires_at_unix FROM platform_ssh_access_requests WHERE id=?",
         )
         .bind(id)
         .fetch_optional(&pool)
@@ -1266,19 +1357,57 @@ mod unix_impl {
         {
             return Err("SSH grant is not due to expire");
         }
-        remove_managed_account(id)
-            .await
-            .map_err(|_| "temporary account cleanup failed")?;
-        sqlx::query(
-        "UPDATE platform_ssh_access_requests SET status = 'expired', version = version + 1,
-         public_key = '', decided_by_profile_id = NULL, decided_by_actor_kind='system_expiry',
-         decided_by_actor_label='expiry-timer', operation_detail = NULL WHERE id = ? AND status IN ('active','provisioning','failed') AND expires_at_unix <= ?",
-    )
-    .bind(id)
-    .bind(unix_now())
-    .execute(&pool)
-    .await
-    .map_err(|_| "could not record grant expiry")?;
+        let version: i64 = row.get("version");
+        let expires: i64 = row.get("expires_at_unix");
+        let now = unix_now();
+        let claimed = sqlx::query(
+            "UPDATE platform_ssh_access_requests
+             SET status='provisioning', version=version+1, decided_by_profile_id=NULL,
+                 decided_by_actor_kind='system_expiry', decided_by_actor_label='expiry-timer',
+                 decided_at_unix=?, operation_detail='expiring'
+             WHERE id=? AND status IN ('active','provisioning','failed') AND version=?
+               AND expires_at_unix=? AND expires_at_unix<=?",
+        )
+        .bind(now)
+        .bind(id)
+        .bind(version)
+        .bind(expires)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .map_err(|_| "could not claim grant expiry")?;
+        if claimed.rows_affected() != 1 {
+            return Err("SSH grant changed before expiry cleanup");
+        }
+        let expiring_version = version + 1;
+        if remove_managed_account_locked(id).await.is_err() {
+            let _ = sqlx::query(
+                "UPDATE platform_ssh_access_requests
+                 SET status='failed', version=version+1,
+                     operation_detail='expiry cleanup failed; access may remain active'
+                 WHERE id=? AND status='provisioning' AND version=? AND operation_detail='expiring'",
+            )
+            .bind(id)
+            .bind(expiring_version)
+            .execute(&pool)
+            .await;
+            return Err("temporary account cleanup failed; access may remain active");
+        }
+        let completed = sqlx::query(
+            "UPDATE platform_ssh_access_requests
+             SET status='expired', version=version+1, public_key='',
+                 decided_by_profile_id=NULL, decided_by_actor_kind='system_expiry',
+                 decided_by_actor_label='expiry-timer', operation_detail=NULL
+             WHERE id=? AND status='provisioning' AND version=? AND operation_detail='expiring'",
+        )
+        .bind(id)
+        .bind(expiring_version)
+        .execute(&pool)
+        .await
+        .map_err(|_| "could not record grant expiry")?;
+        if completed.rows_affected() != 1 {
+            return Err("grant cleanup completed but expiry state needs reconciliation");
+        }
         Ok(())
     }
 
@@ -1354,5 +1483,49 @@ mod endpoint_tests {
         ] {
             assert!(!valid_identity_authz_endpoint(endpoint), "{endpoint}");
         }
+    }
+
+    #[test]
+    fn privileged_helper_rejects_expired_or_denied_identity_decisions() {
+        assert!(!super::identity_decision_is_current(true, 99, 100));
+        assert!(super::identity_decision_is_current(true, 101, 100));
+        assert!(!super::identity_decision_is_current(false, 101, 100));
+    }
+
+    #[test]
+    fn privileged_helper_requires_bounded_exact_success_identity_response() {
+        let body = br#"{"allowed":true,"expires_at_unix":101}"#;
+        assert!(super::identity_response_allows_root(
+            reqwest::StatusCode::OK,
+            body,
+            100
+        ));
+        assert!(!super::identity_response_allows_root(
+            reqwest::StatusCode::CREATED,
+            body,
+            100
+        ));
+        assert!(!super::identity_response_allows_root(
+            reqwest::StatusCode::OK,
+            &vec![b' '; super::MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES + 1],
+            100
+        ));
+        assert!(!super::identity_response_allows_root(
+            reqwest::StatusCode::OK,
+            br#"{"allowed":true}"#,
+            100
+        ));
+    }
+
+    #[test]
+    fn incomplete_grant_rollback_is_reported_as_recoverable_host_state() {
+        assert_eq!(
+            super::grant_setup_failure_detail("could not create temporary account", true),
+            "could not create temporary account"
+        );
+        assert!(
+            super::grant_setup_failure_detail("ignored", false).contains("rollback was incomplete")
+        );
+        assert!(super::grant_setup_failure_detail("ignored", false).contains("retry revoke"));
     }
 }
