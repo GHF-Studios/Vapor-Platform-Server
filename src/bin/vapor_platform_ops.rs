@@ -556,7 +556,7 @@ mod unix_impl {
             },
             include_profile_id: true,
         };
-        let Ok(response) = client
+        let Ok(mut response) = client
             .post(endpoint)
             .bearer_auth(service_token)
             .json(&request)
