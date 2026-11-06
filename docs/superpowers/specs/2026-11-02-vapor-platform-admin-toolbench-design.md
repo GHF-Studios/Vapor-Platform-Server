@@ -246,6 +246,9 @@ complete admin product.
 - Overview answers, at a glance: which services are healthy, which features are
   actually ready, what operation is pending/running/failed, and what requires
   the operator next. Health and feature readiness remain distinct.
+- The Overview request queue is a read-only summary of owner API records. It
+  may show counts and deep links, but the owner workflow remains the only place
+  to inspect immutable request details or make decisions.
 - Operations has separate Deployments, Hosting, Temporary Access, and History
   views. Every operation shows requester, exact revision/target, approval
   state, start/end time, result, and a bounded explanation; long-running work
@@ -263,6 +266,28 @@ complete admin product.
 - Build Cache shows one current snapshot per target, freshness against the
   single supported Vapor/toolchain lock, builder status and last outcome. Only
   the builder workflow can replace a snapshot.
+
+### Request history ownership contract
+
+- Operations History is a read-only projection over bounded owner APIs. It
+  must never query service databases or create a second cross-service ledger.
+- Keep decision state separate from execution/dispatch state. For example,
+  “approved · dispatch failed” remains searchable both as an approved request
+  and as a dispatch failure.
+- Request summaries show requester provenance from the owner API (Identity
+  profile ID and request channel). The Platform shell does not join or query
+  Identity storage to invent a display name.
+- A source outage is local to that source and does not erase records returned
+  by other services. Identify which service supplied each record and when its
+  records were refreshed.
+- The current APIs return at most 200 recent records per owner. Shared
+  cursor-based pagination and durable Platform deploy/restore history require
+  owner contracts and remain outside this slice.
+- An Identity request can pass its expiry timestamp while its persisted status
+  remains `pending`; the current expiry transition happens when an approval is
+  attempted. The dashboard may show this as expired-by-time, but must not
+  present it as an active approval or mutate Identity state. Identity still
+  needs to decide and implement its durable expiry transition/audit behavior.
 
 ### Acceptance bar
 

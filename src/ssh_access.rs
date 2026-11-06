@@ -65,6 +65,8 @@ struct RejectSshRequest {
 #[derive(Serialize)]
 struct SshRequestSummary {
     id: String,
+    requester_profile_id: String,
+    requester_kind: String,
     host: String,
     username: Option<String>,
     fingerprint: String,
@@ -384,7 +386,7 @@ async fn list_requests(State(state): State<SshAccessState>, headers: HeaderMap) 
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let rows = match sqlx::query(
-        "SELECT id, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json,
+        "SELECT id, requester_profile_id, requester_credential_id, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json,
          requested_duration_seconds, granted_duration_seconds, status, version, created_at_unix, expires_at_unix, operation_detail
          FROM platform_ssh_access_requests ORDER BY created_at_unix DESC LIMIT ?",
     )
@@ -400,6 +402,16 @@ async fn list_requests(State(state): State<SshAccessState>, headers: HeaderMap) 
         .filter_map(|row| {
             Some(SshRequestSummary {
                 id: row.try_get("id").ok()?,
+                requester_profile_id: row.try_get("requester_profile_id").ok()?,
+                requester_kind: if row
+                    .try_get::<Option<String>, _>("requester_credential_id")
+                    .ok()?
+                    .is_some()
+                {
+                    "request credential".to_owned()
+                } else {
+                    "interactive session".to_owned()
+                },
                 host: state.ssh_host.clone(),
                 username: (row.try_get::<&str, _>("status").ok()? == "active").then(|| {
                     format!(

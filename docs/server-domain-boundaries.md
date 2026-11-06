@@ -68,6 +68,53 @@ Workshop tags remain discovery hints and are not enforced Vapor semantics.
 | Operations/recovery | Implemented root-owned workflow plus service contracts | Backups, restore/import composition, deploy health, latest deploy/restore status, emergency operator paths | Normal product workflows, service business decisions |
 | Cross-domain admin UI | Implemented shared shell | `/admin` navigation and read-only Platform overview/Operations; Identity, Registry, and Artifact own protected sections | Replacing domain services or storing canonical domain state |
 
+## Admin authority, request lifecycle, and history
+
+The shared admin UI is a presentation and navigation layer. It does not decide
+who may perform an action, own another service's request state, or create a
+second audit ledger. Each service owns its request lifecycle and exposes only
+the records its protected admin API intentionally returns.
+
+| Request or operation | State owner | Who decides | Who executes | History source |
+| --- | --- | --- | --- | --- |
+| Platform deployment request | Platform | Root Identity session approves/rejects the exact pinned revision | Platform's fixed privileged helper and request-scoped systemd worker | Platform deploy-request API; request status, dispatch stage, and result are distinct |
+| Temporary SSH access | Platform | Root Identity session chooses the actual capability and duration or rejects | Platform's root-owned typed helper provisions/revokes the restricted account; expiry timer enforces the grant | Platform SSH-request API and per-request transition events |
+| Identity role permission request | Identity | Root Identity session approves/rejects the requested grant/revoke | Identity applies the role transition | Identity permission-request API and Identity audit log |
+| Catalog, release, and build-cache administration | Registry, Artifact, and Build Cache respectively | The owning service's authorized policy | The owning service's audited operation, when implemented | Owner API; no Platform database reads |
+| Shared navigation, service health, and attention counts | Platform shell | No authority decision | No mutation | Explicit owner health and protected request-list APIs; no service DB reads |
+
+The Operations **History** view is a bounded, read-only projection over the
+Platform deployment and temporary-access APIs plus Identity's permission
+request API. The service API that owns a record remains authoritative; partial
+service outages are reported per source. The view does not write records or
+aggregate service databases. Each source currently returns at most its most
+recent 200 requests. Per-request temporary-access transitions are fetched from
+the Platform event endpoint when expanded.
+
+`/var/lib/vapor-server/operations/latest.json` is only the latest deploy/restore
+status pointer. It is not an operation event log and must never be presented as
+complete history. Durable multi-entry Platform deploy/restore operation
+history, a shared cursor/pagination contract across services, and a common
+cross-service audit-event schema remain open work. They require owner-service
+contracts first; they do not justify a central database reader or moving audit
+ownership into the Platform shell.
+
+The bounded request APIs expose requester provenance as an opaque Identity
+profile ID plus whether the request came through a request credential or an
+interactive session. The UI may display and search those fields, but must not
+resolve another service's profile database itself. Human-readable requester
+labels require a deliberate Identity-owned directory/summary API and remain
+open work.
+
+Identity permission requests have a special current-state edge: the approval
+handler persists `expired` when an expired request is acted on, but there is no
+periodic expiry transition today. Until Identity adds an owner-side lifecycle
+transition, the combined history view labels an overdue `pending` request as
+“expired · owner transition pending” from its expiry timestamp. It does not
+mutate the record or offer it as a live approval. Whether Identity should add a
+scheduled expiry sweep, and what audit event it should emit, remains an
+Identity-owned lifecycle decision.
+
 ## Route and API implications
 
 Current route ownership remains:
@@ -85,6 +132,9 @@ Current route ownership remains:
 /admin/build-cache        Build Cache-owned target snapshot inventory
 /api/admin/overview       root-authorized service health summary
 /api/admin/operations     root-authorized latest deploy/restore status
+/api/admin/deploy-requests Platform-owned deployment requests and stages
+/api/admin/ssh-access/requests Platform-owned temporary SSH requests
+/api/identity/v1/admin/permission-requests Identity-owned role permission requests
 /api/identity/            identity API
 /api/diagnostics/         diagnostics API
 /api/build-cache/         current target snapshot API

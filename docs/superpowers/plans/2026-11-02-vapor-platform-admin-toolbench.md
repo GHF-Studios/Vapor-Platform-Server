@@ -249,6 +249,31 @@ truth for this pass.
 - Replace opaque failures with bounded operator-facing explanations and a
   correlation ID; never return arbitrary command output or secrets.
 
+#### Focused Phase B implementation checkpoint (2026-11-06)
+
+- [x] Add a read-only Overview queue for deployment, temporary-access, and
+  Identity permission requests, with links to each service-owned workflow.
+- [x] Add searchable/filterable Operations History across Platform deployment,
+  Platform temporary-access, and Identity permission-request owner APIs.
+- [x] Preserve owner boundaries and report per-source partial failures; lazy
+  load SSH request transition events from the Platform event endpoint.
+- [x] Keep request decision and deployment dispatch states independently
+  filterable and visible; distinguish the latest deploy/restore pointer from
+  request history.
+- [x] Show an Identity request as expired-by-time when its expiry timestamp has
+  passed, while clearly indicating that Identity has not persisted the status
+  transition and leaving owner state untouched.
+- [x] Add explicit refresh and per-source refresh status.
+- [x] Show request provenance in owner summaries and review cards without
+  exposing or joining owner databases from the Platform shell.
+- [x] When approval is persisted but dispatch fails, report both stages and
+  any retry eligibility instead of displaying an ambiguous generic 503.
+- [ ] Add owner-defined cursor pagination and durable multi-entry deploy/
+  restore operation history. Current owner APIs are limited to their latest
+  200 request records; do not paper over this with a Platform-owned ledger.
+- [ ] Identity must define a durable expiry sweep and audit event for pending
+  permission requests that pass their TTL.
+
 ### Phase C: finish service-owned workbenches
 
 - Identity: profiles, linked providers, roles, permission requests, sessions,

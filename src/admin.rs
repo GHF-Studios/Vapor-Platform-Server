@@ -134,6 +134,32 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .status-pill.status-healthy { border-color:#316947; color:#8bd59f; }
 .status-pill.status-unavailable { border-color:#7a3e45; color:#f08b92; }
 .status-pill.status-protected { border-color:#53677e; color:#b4c2d1; }
+.history-controls { display:grid; grid-template-columns:minmax(220px,2fr) repeat(2,minmax(150px,1fr)); gap:10px; align-items:end; margin:12px 0; }
+.history-controls label { margin:0; }
+.history-count { margin:8px 0 12px; }
+.history-toolbar { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0; }
+.history-toolbar p { margin:0; }
+.history-list { display:grid; gap:8px; }
+.request-queue-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; margin-top:12px; }
+.request-queue-card { min-width:0; background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
+.request-queue-card h3 { margin:0 0 8px; font-size:14px; }
+.request-queue-count { margin:0; color:#e6edf3; font-size:22px; font-weight:700; }
+.request-queue-label { margin:2px 0 8px; color:#9eacba; font-size:12px; }
+.request-queue-card a { font-size:12px; }
+.request-queue-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.request-queue-header h2 { margin:0; }
+.history-entry { background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
+.history-entry header { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.history-entry h3 { margin:0; font-size:14px; overflow-wrap:anywhere; }
+.history-meta { display:flex; flex-wrap:wrap; gap:6px 12px; margin:6px 0; color:#9eacba; font-size:12px; }
+.history-kind { color:#8fc5f4; font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.06em; }
+.history-state { border:1px solid #40536a; border-radius:10px; padding:1px 7px; white-space:nowrap; font-size:11px; }
+.history-state.state-good { border-color:#316947; color:#8bd59f; }
+.history-state.state-warning { border-color:#806a2f; color:#e5cb78; }
+.history-state.state-danger { border-color:#7a3e45; color:#f08b92; }
+.history-detail { margin:7px 0 0; overflow-wrap:anywhere; }
+.history-detail-list { margin:6px 0 0; padding-left:18px; color:#c7d2de; }
+.table-scroll { max-width:100%; overflow-x:auto; }
 .skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; background:#fff; color:#111; }
 .skip-link:focus { left:8px; }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
@@ -151,12 +177,21 @@ form.inline { display:inline; }
 .notice { background:#163222; border-left:3px solid #42a56b; padding:8px 10px; }
 .error { background:#3a2024; border-left:3px solid #da626c; padding:8px 10px; }
 @media(max-width:720px) { .shell { grid-template-columns:1fr; } .shell > nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } .nav-group { display:inline-block; margin:8px 8px 4px; } .shell > nav a { display:inline-flex; } .admin-header { align-items:flex-start; flex-direction:column; padding:12px 14px; } .admin-statuses { justify-content:flex-start; } main { padding:20px 14px; } }
+@media(max-width:560px) { .history-controls { grid-template-columns:1fr; } .history-entry header { flex-direction:column; } }
 "#;
 
 const JS: &str = r#"
 (() => {
   const main = document.querySelector('main#admin-content');
   if (!main) return;
+  document.querySelectorAll('time[data-unix]').forEach(element => {
+    const seconds = Number(element.dataset.unix);
+    if (Number.isFinite(seconds) && seconds > 0 && seconds <= 8640000000000) {
+      const date = new Date(seconds * 1000);
+      element.dateTime = date.toISOString();
+      element.textContent = date.toLocaleString();
+    }
+  });
   const responseFailure = async (response, fallback) => {
     let detail = '';
     try { detail = (await response.text()).trim(); } catch (_) {}
@@ -282,34 +317,268 @@ const JS: &str = r#"
       .catch(() => updateShellStatus(null, null));
   }
 
-  const history = document.querySelector('#operations-history');
-  if (history) {
+  const requestQueue = document.querySelector('#operator-queue');
+  if (requestQueue) {
+    const refreshQueueButton = document.querySelector('#operator-queue-refresh');
+    const sources = [
+      { name: 'Deployments', url: '/api/admin/deploy-requests', href: '/admin/operations?view=deployments', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'approved' && ['failed', 'unknown', 'dispatching', 'queued'].includes(item.dispatch_state)).length, secondaryLabel: 'Approved, dispatch unresolved' }) },
+      { name: 'Temporary access', url: '/api/admin/ssh-access/requests', href: '/admin/operations?view=temporary-access', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'active').length, secondaryLabel: 'Active grants' }) },
+      { name: 'Identity permissions', url: '/api/identity/v1/admin/permission-requests', href: '/admin/identity', summarize: items => { const pending = items.filter(item => item.status === 'pending'); const overdue = pending.filter(item => Number(item.expires_at_unix) > 0 && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000)).length; return { primary: pending.length - overdue, label: 'Awaiting review', secondary: overdue, secondaryLabel: 'Expired by time; owner transition pending' }; } }
+    ];
+    const renderQueue = async () => {
+      if (refreshQueueButton?.disabled) return;
+      if (refreshQueueButton) { refreshQueueButton.disabled = true; refreshQueueButton.textContent = 'Refreshing…'; }
+      requestQueue.replaceChildren();
+      const grid = document.createElement('div'); grid.className = 'request-queue-grid';
+      const outcomes = await Promise.all(sources.map(async source => {
+        try {
+          const response = await fetch(source.url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+          const items = await response.json().catch(() => null);
+          if (!response.ok) return { source, error: response.status === 401 ? 'Sign in required' : response.status === 403 ? 'Root access required' : `Unavailable (HTTP ${response.status})` };
+          if (!Array.isArray(items)) return { source, error: 'Invalid service response' };
+          return { source, counts: source.summarize(items) };
+        } catch (_) { return { source, error: 'Could not contact service' }; }
+      }));
+      for (const outcome of outcomes) {
+        const card = document.createElement('section'); card.className = 'request-queue-card';
+        const heading = document.createElement('h3'); heading.textContent = outcome.source.name; card.append(heading);
+        if (outcome.error) {
+          const status = document.createElement('p'); status.className = 'error'; status.textContent = outcome.error; card.append(status);
+        } else {
+          const primary = document.createElement('p'); primary.className = 'request-queue-count'; primary.textContent = String(outcome.counts.primary);
+          const primaryLabel = document.createElement('p'); primaryLabel.className = 'request-queue-label'; primaryLabel.textContent = outcome.counts.label;
+          card.append(primary, primaryLabel);
+          if (outcome.counts.secondary > 0) {
+            const secondary = document.createElement('p'); secondary.className = 'muted'; secondary.textContent = `${outcome.counts.secondary} · ${outcome.counts.secondaryLabel}`; card.append(secondary);
+          }
+        }
+        const link = document.createElement('a'); link.href = outcome.source.href; link.textContent = 'Open owner workflow'; card.append(link);
+        grid.append(card);
+      }
+      requestQueue.replaceChildren(grid);
+      if (refreshQueueButton) { refreshQueueButton.disabled = false; refreshQueueButton.textContent = 'Refresh'; }
+    };
+    refreshQueueButton?.addEventListener('click', renderQueue);
+    renderQueue();
+  }
+
+  const latestOperation = document.querySelector('#latest-operation-status');
+  if (latestOperation) {
     fetch('/api/admin/operations', { credentials: 'same-origin', cache: 'no-store' })
       .then(async response => ({ response, body: await response.json().catch(() => null) }))
       .then(({ response, body }) => {
-        history.replaceChildren();
+        latestOperation.replaceChildren();
         if (!response.ok) {
-          history.textContent = response.status === 401 ? 'Sign in to view operation history.' :
-            response.status === 403 ? 'Root access is required to view operation history.' :
-            'Operation history is temporarily unavailable.';
+          latestOperation.textContent = response.status === 401 ? 'Sign in to view the latest operation result.' :
+            response.status === 403 ? 'Root access is required to view the latest operation result.' :
+            'The latest operation result is temporarily unavailable.';
           return;
         }
         if (!body || body.record_status !== 'reported' || !body.record) {
-          history.textContent = body && body.record_status === 'invalid' ?
-            'The latest operation record is invalid.' : 'No runtime operation record is reported.';
+          latestOperation.textContent = body && body.record_status === 'invalid' ?
+            'The latest operation record is invalid.' : 'No latest operation result is reported.';
           return;
         }
         const record = body.record;
         const title = document.createElement('h3');
-        title.textContent = `Latest ${record.operation}: ${record.result}`;
+        title.textContent = `${record.operation === 'deploy' ? 'Latest deployment' : 'Latest restore'}: ${record.result}`;
         const details = document.createElement('p');
         details.className = 'muted';
         details.textContent = `Revision ${record.revision} · ${record.server_mode} · started ${record.started_at_utc} · finished ${record.finished_at_utc}`;
-        history.append(title, details);
+        latestOperation.append(title, details);
       })
       .catch(() => {
-        history.textContent = 'Operation history is temporarily unavailable.';
+        latestOperation.textContent = 'The latest operation result is temporarily unavailable.';
       });
+  }
+
+  const operationHistory = document.querySelector('#operations-history');
+  if (operationHistory) {
+    const search = document.querySelector('#history-search');
+    const kindFilter = document.querySelector('#history-kind');
+    const statusFilter = document.querySelector('#history-status');
+    const count = document.querySelector('#history-count');
+    const sourceStatus = document.querySelector('#history-sources');
+    const sources = [
+      { kind: 'Deployment', label: 'Platform deployments', url: '/api/admin/deploy-requests' },
+      { kind: 'Temporary access', label: 'Platform temporary access', url: '/api/admin/ssh-access/requests' },
+      { kind: 'Identity request', label: 'Identity permission requests', url: '/api/identity/v1/admin/permission-requests' }
+    ];
+    const validTimestamp = value => Number.isFinite(value) && value > 0 && value <= 8640000000000;
+    const humanTime = value => validTimestamp(value)
+      ? new Date(value * 1000).toLocaleString() : 'Time not recorded';
+    const isoTime = value => validTimestamp(value) ? new Date(value * 1000).toISOString() : '';
+    const safeText = value => typeof value === 'string' ? value : '';
+    let records = [];
+    let failures = [];
+    const addRecord = (source, item) => {
+      if (!item || typeof item !== 'object') return;
+      const record = { kind: source.kind, source: source.label, id: safeText(item.id), status: safeText(item.status), statusKey: safeText(item.status), dispatchStatusKey: '', statusLabel: safeText(item.status), timestamp: Number(item.decided_at_unix || item.created_at_unix || 0), timestampLabel: item.decided_at_unix ? 'Decision recorded' : 'Request created', title: '', subject: '', details: [], link: '', search: '' };
+      if (source.kind === 'Deployment') {
+        record.dispatchStatusKey = `dispatch-${safeText(item.dispatch_state)}`;
+        record.statusLabel = `${safeText(item.status)} · dispatch ${safeText(item.dispatch_state) || 'not reported'}`;
+        if (item.decided_at_unix) record.timestampLabel = 'Decision recorded';
+        record.title = `${safeText(item.repository)} · ${safeText(item.branch)}`;
+        record.subject = `Commit ${safeText(item.commit)}`;
+        record.details = [
+          `Submitted by: ${safeText(item.requester_kind) || 'unknown'} · profile ${safeText(item.requester_profile_id) || 'unknown'}`,
+          item.expires_at_unix ? `Request expires: ${humanTime(Number(item.expires_at_unix))}` : '',
+          `Decision: ${item.status === 'pending' ? 'awaiting review' : safeText(item.status)}${item.decision_reason ? ` · ${safeText(item.decision_reason)}` : ''}`,
+          `Dispatch: ${safeText(item.dispatch_state) || 'not reported'}${item.dispatch_attempts ? ` · ${item.dispatch_attempts} attempt(s)` : ''}${item.dispatch_detail ? ` · ${safeText(item.dispatch_detail)}` : ''}`,
+          item.result_detail ? `Outcome: ${safeText(item.result_detail)}` : '',
+          item.summary ? `Request: ${safeText(item.summary)}` : ''
+        ].filter(Boolean);
+        record.link = safeText(item.workflow_url);
+        record.search = [record.title, record.subject, item.requester_profile_id, item.requester_kind, item.summary, item.decision_reason, item.dispatch_detail, item.result_detail].join(' ');
+      } else if (source.kind === 'Temporary access') {
+        record.timestampLabel = 'Request created';
+        record.title = safeText(item.purpose) || 'Temporary SSH access request';
+        record.subject = `Key ${safeText(item.fingerprint)}`;
+        record.details = [
+          `Submitted by: ${safeText(item.requester_kind) || 'unknown'} · profile ${safeText(item.requester_profile_id) || 'unknown'}`,
+          item.expires_at_unix ? `Grant expires: ${humanTime(Number(item.expires_at_unix))}` : '',
+          `Requested capabilities: ${(Array.isArray(item.requested_capabilities) ? item.requested_capabilities : []).join(', ') || 'none'}`,
+          `Requested duration: ${item.requested_duration_seconds || 0} seconds`,
+          item.granted_duration_seconds != null ? `Granted: ${(Array.isArray(item.granted_capabilities) ? item.granted_capabilities : []).join(', ') || 'no capabilities'} · ${item.granted_duration_seconds} seconds` : '',
+          item.detail ? `Latest operation: ${safeText(item.detail)}` : ''
+        ].filter(Boolean);
+        record.search = [record.title, record.subject, item.requester_profile_id, ...record.details].join(' ');
+        record.eventsUrl = `/api/admin/ssh-access/requests/${encodeURIComponent(record.id)}/events`;
+      } else {
+        const expiredPending = item.status === 'pending' && Number(item.expires_at_unix) > 0 && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000);
+        if (expiredPending) {
+          record.statusKey = 'expired-pending';
+          record.statusLabel = 'expired · owner transition pending';
+        }
+        record.title = `${safeText(item.action)} ${safeText(item.role)}`.trim() || 'Identity permission request';
+        record.subject = `Steam ${safeText(item.steam_id64)} · GitHub ${safeText(item.github_login)}`;
+        record.details = [
+          `Submitted by: ${safeText(item.requester_kind) || 'unknown'} · profile ${safeText(item.requester_profile_id) || 'unknown'}`,
+          item.expires_at_unix ? `Request expires: ${humanTime(Number(item.expires_at_unix))}` : '',
+          expiredPending ? 'The request passed its expiry time. Identity has not yet persisted the expired status; this dashboard does not change owner state.' : '',
+          item.decision_reason ? `Decision reason: ${safeText(item.decision_reason)}` : '',
+          item.decided_at_unix ? `Decided: ${humanTime(Number(item.decided_at_unix))}` : 'No decision recorded'
+        ].filter(Boolean);
+        record.link = '/admin/identity';
+        record.search = [record.title, record.subject, item.requester_profile_id, item.requester_kind, item.decision_reason].join(' ');
+      }
+      if (record.id && record.status) records.push(record);
+    };
+    const renderHistory = () => {
+      const query = (search?.value || '').trim().toLocaleLowerCase();
+      const selectedKind = kindFilter?.value || 'all';
+      const selectedStatus = statusFilter?.value || 'all';
+      const visible = records.filter(record =>
+        (selectedKind === 'all' || record.kind === selectedKind) &&
+        (selectedStatus === 'all' || record.statusKey === selectedStatus || record.dispatchStatusKey === selectedStatus) &&
+        (!query || `${record.kind} ${record.statusLabel} ${record.id} ${record.search}`.toLocaleLowerCase().includes(query))
+      );
+      operationHistory.replaceChildren();
+      count.textContent = `Showing ${visible.length} of ${records.length} loaded requests.`;
+      if (!records.length && failures.length === sources.length) {
+        operationHistory.textContent = 'Request history could not be loaded from any owner service.';
+        return;
+      }
+      if (!visible.length) {
+        operationHistory.textContent = records.length ? 'No requests match these filters.' : 'No requests have been recorded by the available services.';
+        return;
+      }
+      const list = document.createElement('div');
+      list.className = 'history-list';
+      for (const record of visible) {
+        const card = document.createElement('article');
+        card.className = 'history-entry';
+        const header = document.createElement('header');
+        const heading = document.createElement('h3'); heading.textContent = record.title;
+        const state = document.createElement('span'); state.className = 'history-state'; state.textContent = record.statusLabel;
+        if (record.status === 'failed' || record.status === 'rejected' || record.status === 'expired' || record.status === 'cancelled' || record.status === 'revoked' || record.dispatchStatusKey === 'dispatch-failed' || record.dispatchStatusKey === 'dispatch-unknown') state.classList.add('state-danger');
+        else if (record.status === 'succeeded' || record.status === 'active') state.classList.add('state-good');
+        else if (record.status === 'pending' || record.status === 'approved' || record.status === 'executing' || record.status === 'provisioning' || record.status === 'stale' || record.statusKey === 'expired-pending' || record.dispatchStatusKey === 'dispatch-dispatching' || record.dispatchStatusKey === 'dispatch-queued') state.classList.add('state-warning');
+        header.append(heading, state);
+        const meta = document.createElement('p'); meta.className = 'history-meta';
+        const kind = document.createElement('span'); kind.className = 'history-kind'; kind.textContent = record.kind;
+        const date = document.createElement('time'); date.dateTime = isoTime(record.timestamp);
+        date.textContent = `${record.timestampLabel}: ${humanTime(record.timestamp)}`;
+        const id = document.createElement('span'); id.textContent = `Request ${record.id}`;
+        meta.append(kind, date, id);
+        card.append(header, meta);
+        if (record.subject) { const subject = document.createElement('p'); subject.className = 'history-detail'; subject.textContent = record.subject; card.append(subject); }
+        if (record.details.length) {
+          const detailList = document.createElement('ul'); detailList.className = 'history-detail-list';
+          for (const detail of record.details) { const line = document.createElement('li'); line.textContent = detail; detailList.append(line); }
+          card.append(detailList);
+        }
+        if (record.link) { const link = document.createElement('a'); link.href = record.link; link.textContent = record.kind === 'Deployment' ? 'Open CI run' : 'Open owning section'; link.rel = 'noopener noreferrer'; card.append(link); }
+        if (record.eventsUrl) {
+          const details = document.createElement('details');
+          const summary = document.createElement('summary'); summary.textContent = 'Request activity';
+          const body = document.createElement('div'); body.className = 'history-detail'; body.textContent = 'Open to load owner-recorded status changes.';
+          details.append(summary, body);
+          details.addEventListener('toggle', async () => {
+            if (!details.open || details.dataset.loaded === 'true') return;
+            body.textContent = 'Loading activity…';
+            try {
+              const response = await fetch(record.eventsUrl, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+              const events = await response.json().catch(() => null);
+              if (!response.ok || !Array.isArray(events)) { body.textContent = response.status === 403 ? 'Root access required.' : `Activity unavailable (HTTP ${response.status}).`; return; }
+              body.replaceChildren();
+              if (!events.length) body.textContent = 'No request transitions were recorded.';
+              for (const event of events) {
+                const line = document.createElement('p'); line.className = 'history-detail';
+                const transition = event.from_status ? `${event.from_status} → ${event.to_status}` : event.to_status;
+                line.textContent = `${humanTime(Number(event.at_unix))} · ${transition} · ${safeText(event.actor_label || event.actor_kind)}`;
+                body.append(line);
+              }
+              details.dataset.loaded = 'true';
+            } catch (_) { body.textContent = 'Could not contact the Platform history API.'; }
+          });
+          card.append(details);
+        }
+        list.append(card);
+      }
+      operationHistory.append(list);
+    };
+    const refreshButton = document.querySelector('#history-refresh');
+    const loadHistory = async () => {
+      if (refreshButton?.disabled) return;
+      if (refreshButton) { refreshButton.disabled = true; refreshButton.textContent = 'Refreshing…'; }
+      records = [];
+      failures = [];
+      operationHistory.replaceChildren();
+      sourceStatus.textContent = 'Loading recent request records from their owning services…';
+      const results = await Promise.all(sources.map(async source => {
+        try {
+          const response = await fetch(source.url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+          const body = await response.json().catch(() => null);
+          if (!response.ok) return { source, error: response.status === 401 ? 'Sign in required.' : response.status === 403 ? 'Root access required.' : `Unavailable (HTTP ${response.status}).` };
+          if (!Array.isArray(body)) return { source, error: 'The service returned an invalid history response.' };
+          return { source, items: body };
+        } catch (_) { return { source, error: 'Could not contact this service.' }; }
+      }));
+      for (const result of results) {
+        if (result.error) failures.push(`${result.source.label}: ${result.error}`);
+        else for (const item of result.items) addRecord(result.source, item);
+      }
+      records.sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id));
+      sourceStatus.replaceChildren();
+      for (const result of results) {
+        const line = document.createElement('p');
+        line.className = result.error ? 'error' : 'muted';
+        line.textContent = `${result.source.label}: ${result.error || `${result.items.length} record(s) available (up to 200).`}`;
+        sourceStatus.append(line);
+      }
+      const refreshed = document.createElement('span');
+      refreshed.className = 'muted';
+      refreshed.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      sourceStatus.append(refreshed);
+      renderHistory();
+      if (refreshButton) { refreshButton.disabled = false; refreshButton.textContent = 'Refresh records'; }
+    };
+    search?.addEventListener('input', renderHistory);
+    kindFilter?.addEventListener('change', renderHistory);
+    statusFilter?.addEventListener('change', renderHistory);
+    refreshButton?.addEventListener('click', loadHistory);
+    loadHistory();
   }
 
   const deployRequests = document.querySelector('#deploy-requests');
@@ -342,6 +611,9 @@ const JS: &str = r#"
         card.className = 'card';
         const heading = document.createElement('h3');
         heading.textContent = `${item.repository} · ${item.branch} · ${item.status}`;
+        const requester = document.createElement('p');
+        requester.className = 'muted';
+        requester.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
         const decisionStage = document.createElement('p');
         decisionStage.className = 'muted';
         decisionStage.textContent = `Decision: ${item.status === 'pending' ? 'awaiting review' : item.status === 'rejected' ? 'rejected' : item.status === 'expired' ? 'expired' : 'approved and saved'}`;
@@ -366,10 +638,10 @@ const JS: &str = r#"
         workflow.href = item.workflow_url;
         workflow.rel = 'noopener noreferrer';
         workflow.textContent = 'Open successful CI run';
-        card.append(heading, decisionStage, dispatchStage, revision, pins, summary, workflow);
+        card.append(heading, requester, decisionStage, dispatchStage, revision, pins, summary, workflow);
         if (actionFeedback.has(item.id)) {
           const feedback = document.createElement('p');
-          feedback.className = 'muted';
+          feedback.className = item.status === 'approved' && ['failed', 'unknown'].includes(item.dispatch_state) ? 'error' : 'muted';
           feedback.textContent = actionFeedback.get(item.id);
           card.append(feedback);
         }
@@ -418,7 +690,13 @@ const JS: &str = r#"
               });
               const body = await result.clone().json().catch(() => null);
               const plainText = body ? '' : await result.text().catch(() => '');
-              const message = body?.error?.message || plainText.trim().slice(0, 240) || (result.ok ? 'Action completed.' : `Action failed (${result.status}).`);
+              const decisionSaved = body?.error?.decision_saved === true;
+              const dispatchState = body?.error?.code === 'dispatch_result_unknown' ? 'dispatch outcome is unknown' :
+                body?.error?.code === 'dispatch_failed' ? 'dispatch failed' : 'the next deployment stage did not complete';
+              const savedStage = decisionSaved
+                ? `Approval saved, but ${dispatchState}: ${body.error.message || 'no further detail was reported.'}${body.error.retry_eligible ? ' A retry is available.' : ''}`
+                : '';
+              const message = savedStage || body?.error?.message || plainText.trim().slice(0, 240) || (result.ok ? 'Action completed.' : `Action failed (${result.status}).`);
               actionFeedback.set(item.id, String(message).slice(0, 240));
             } catch (_) {
               actionFeedback.set(item.id, 'The response was lost. Reload the request to see whether the decision or dispatch stage was saved.');
@@ -468,9 +746,11 @@ const JS: &str = r#"
         const card = document.createElement('article'); card.className = 'card';
         const title = document.createElement('h3'); title.textContent = `${item.status} · ${item.fingerprint}`;
         const purpose = document.createElement('p'); purpose.textContent = item.purpose;
+        const requester = document.createElement('p'); requester.className = 'muted';
+        requester.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
         const scope = document.createElement('p'); scope.className = 'muted';
         scope.textContent = `Requested: ${item.requested_capabilities.join(', ') || 'shell only'} · ${item.requested_duration_seconds}s`;
-        card.append(title, purpose, scope);
+        card.append(title, purpose, requester, scope);
         if (actionFeedback.has(item.id)) {
           const feedback = document.createElement('p');
           feedback.className = 'error';
@@ -744,7 +1024,7 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let html = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card operator-actions\"><h2>Operator work areas</h2><p class=\"muted\">Choose a workflow. The overview does not report pending request counts or infer feature readiness.</p><div class=\"action-links\"><a href=\"/admin/operations?view=deployments\">Review deployment requests</a><a href=\"/admin/operations?view=hosting\">Inspect service health</a><a href=\"/admin/operations?view=temporary-access\">Review temporary access</a><a href=\"/admin/operations?view=history\">View latest operation result</a></div></section></main></body></html>";
+    let html = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><div class=\"request-queue-header\"><h2>Requests needing attention</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts come from each owner service. Open the owning workflow to review or act.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section><section class=\"card operator-actions\"><h2>Operator work areas</h2><p class=\"muted\">Choose a workflow. Request counts and approval decisions remain with their owning services.</p><div class=\"action-links\"><a href=\"/admin/operations?view=deployments\">Review deployment requests</a><a href=\"/admin/operations?view=hosting\">Inspect service health</a><a href=\"/admin/operations?view=temporary-access\">Review temporary access</a><a href=\"/admin/operations?view=history\">Review request history</a></div></section></main></body></html>";
     html_response(StatusCode::OK, "text/html; charset=utf-8", html.to_owned())
 }
 
@@ -818,7 +1098,7 @@ fn operations_page(view: OperationsView) -> String {
         OperationsView::Deployments => "<section class=\"card\"><h2>Deployment requests</h2><p class=\"muted\">Review the exact tested revision, CI result, and pinned service revisions. Approving records your decision and attempts to queue that deployment; the request card reports both stages.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment requests…</p></div></section>".to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
         OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
-        OperationsView::History => "<section class=\"card\"><h2>Latest operation result</h2><p class=\"muted\">The current Platform API exposes a latest-status pointer, not a complete event history. This view reports only that record.</p><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
+        OperationsView::History => "<section class=\"card\"><h2>Request history</h2><p class=\"muted\">A read-only view of recent Platform deployment/access requests and Identity permission requests. Each owning service remains authoritative for its records and decisions; a service that is unavailable is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><button id=\"history-refresh\" type=\"button\">Refresh records</button></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading request sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading request history…</p></div></section><section class=\"card\"><h2>Latest deploy or restore result</h2><p class=\"muted\">This is the Platform’s latest status pointer, not an event log. Request history above comes from the records retained by each owner.</p><div id=\"latest-operation-status\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
     };
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><nav class=\"operation-tabs\" aria-label=\"Operations views\">{tabs}</nav><section aria-labelledby=\"operations-view-title\"><h2 id=\"operations-view-title\">{}</h2>{content}</section></main></body></html>",

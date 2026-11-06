@@ -68,6 +68,8 @@ struct DecideRequest {
 #[derive(Serialize)]
 struct DeployRequestSummary {
     id: String,
+    requester_profile_id: String,
+    requester_kind: String,
     repository: String,
     branch: String,
     commit: String,
@@ -325,6 +327,15 @@ async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderM
                 serde_json::from_str(row.get("submodules_json")).ok()?;
             Some(DeployRequestSummary {
                 id: row.get("id"),
+                requester_profile_id: row.get("requester_profile_id"),
+                requester_kind: if row
+                    .get::<Option<String>, _>("requester_credential_id")
+                    .is_some()
+                {
+                    "request credential".to_owned()
+                } else {
+                    "interactive session".to_owned()
+                },
                 repository: row.get("repository"),
                 branch: row.get("branch"),
                 commit: row.get("commit_hash"),
@@ -359,7 +370,7 @@ async fn fetch_request_rows(
     pool: &SqlitePool,
     owner_credential_id: Option<&str>,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
-    let query = "SELECT id, repository, branch, commit_hash, tree_hash, submodules_json, workflow_url,
+    let query = "SELECT id, requester_profile_id, requester_credential_id, repository, branch, commit_hash, tree_hash, submodules_json, workflow_url,
                         summary, status, version, created_at_unix, expires_at_unix, decided_at_unix, decision_reason, result_detail,
                         dispatch_state, dispatch_attempts, dispatch_attempted_at_unix, dispatch_detail
                  FROM platform_deploy_requests";
