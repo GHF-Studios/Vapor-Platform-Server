@@ -305,8 +305,8 @@ pagination/history.
   accepts this media type only for a known implemented module path, applies the
   8 MiB bound, preserves the owner's status, and forces `private, no-store`.
   The owner remains responsible for authentication, authorization, auditing,
-  and safe HTML encoding. Legacy full documents may use the old wrapper only
-  while their service is being migrated; they are not the new contract.
+  and safe HTML encoding. Full HTML documents are passed through unchanged;
+  they are never searched or rewritten by the shared shell.
 - For independently deployed services, deploy the Platform contract consumer
   before an owner begins returning v1 fragments. Roll back in reverse order.
 - Browser session/authentication is shared-origin and protected against CSRF;

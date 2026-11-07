@@ -240,13 +240,15 @@ truth for this pass.
 
 - [x] Define the v1 owner-rendered HTML fragment media type and document its
   bounded shared-shell behavior and independent-service rollout order.
-- [x] Migrate Build Cache's page and authorization errors to fragments; Platform
-  now composes the full document for this contract without parsing the owner's
-  HTML and preserves owner status codes.
-- [ ] Migrate the remaining owner pages and remove the temporary legacy
-  whole-document wrapper after all owners implement the contract.
-- [ ] Centralize route/navigation metadata and complete accessibility and
-  responsive-layout review.
+- [x] Migrate Build Cache, Artifact, Registry, and Identity pages, including
+  their authentication/error views, to the fragment contract. Platform-owned
+  Overview and Operations pages use the same contract.
+- [x] Remove whole-document parsing and rewriting from the Platform shell;
+  uncontracted HTML now passes through untouched.
+- [x] Keep the navigation inventory and page titles derived from the single
+  Platform module descriptor, and derive deploy-card target choices from the
+  server-side deployment allowlist instead of a JavaScript copy.
+- [ ] Complete the remaining accessibility and responsive-layout review.
 
 ### Phase B: make Overview and Operations useful
 

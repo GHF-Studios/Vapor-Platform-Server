@@ -1277,9 +1277,9 @@ async fn platform_healthz() -> &'static str {
     "ok\n"
 }
 
-/// Apply the shared, Platform-owned HTML frame to service-owned admin pages.
-/// Services keep rendering their `<main id="admin-content">`; the platform
-/// contributes navigation without taking ownership of their page contents.
+/// Apply the Platform-owned document frame to a versioned service page fragment.
+/// Owner services keep authorization and page contents; this middleware only
+/// composes the bounded fragment with Platform navigation and assets.
 pub async fn shell_middleware(request: Request, next: Next) -> Response {
     let path = request.uri().path().to_owned();
     let is_admin_document = request.method() == axum::http::Method::GET
@@ -1334,51 +1334,14 @@ pub async fn shell_middleware(request: Request, next: Next) -> Response {
             .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
         return response;
     }
-    if !is_admin_document
-        || !response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("text/html"))
-    {
-        return response;
-    }
-
-    let (mut parts, body) = response.into_parts();
-    let bytes = match to_bytes(body, MAX_ADMIN_PAGE_BYTES).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return html_response(
-                StatusCode::BAD_GATEWAY,
-                "text/html; charset=utf-8",
-                "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Admin page unavailable</title><body><main><h1>Admin page unavailable</h1><p>The service page exceeded the Platform shell size limit.</p></main></body></html>".to_owned(),
-            );
-        }
-    };
-    let Ok(html) = String::from_utf8(bytes.to_vec()) else {
-        return Response::from_parts(parts, Body::from(bytes));
-    };
-    let Some(wrapped) = wrap_admin_document(&html, &path) else {
-        return Response::from_parts(parts, Body::from(bytes));
-    };
-
-    parts.headers.remove(CONTENT_LENGTH);
-    parts
-        .headers
-        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
-    Response::from_parts(parts, Body::from(wrapped))
+    response
 }
 
 fn render_admin_fragment_document(fragment: &str, current_path: &str) -> Option<String> {
-    let section = MODULES
-        .iter()
-        .find(|section| section.path == Some(current_path))?;
-    if !matches!(section.state, SectionState::Implemented) {
-        return None;
-    }
+    let title = admin_page_title(current_path)?;
     let mut html = String::with_capacity(fragment.len() + 1800);
     html.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>");
-    html.push_str(&escape_html(section.name));
+    html.push_str(&escape_html(title));
     html.push_str(" · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><a class=\"skip-link\" href=\"#admin-content\">Skip to content</a><div class=\"shell\">");
     html.push_str(&render_admin_navigation(current_path));
     html.push_str("<div class=\"admin-workspace\">");
@@ -1387,6 +1350,23 @@ fn render_admin_fragment_document(fragment: &str, current_path: &str) -> Option<
     html.push_str(fragment);
     html.push_str("</main></div></div></body></html>");
     Some(html)
+}
+
+fn admin_page_title(current_path: &str) -> Option<&'static str> {
+    let normalized_path = current_path.trim_end_matches('/');
+    if normalized_path == "/admin/operations" {
+        return Some("Operations");
+    }
+    MODULES
+        .iter()
+        .filter(|section| matches!(section.state, SectionState::Implemented))
+        .filter(|section| {
+            section
+                .path
+                .is_some_and(|path| section_path_matches(path, normalized_path))
+        })
+        .max_by_key(|section| section.path.map_or(0, str::len))
+        .map(|section| section.name)
 }
 
 fn admin_shell_error(status: StatusCode, current_path: &str) -> Response {
@@ -1405,48 +1385,8 @@ fn admin_shell_error(status: StatusCode, current_path: &str) -> Response {
     response
 }
 
-fn wrap_admin_document(html: &str, current_path: &str) -> Option<String> {
-    let lowered = html.to_ascii_lowercase();
-    let body_start = lowered.find("<body")?;
-    let body_open_end = lowered[body_start..].find('>')? + body_start + 1;
-    let body_end = lowered.rfind("</body>")?;
-    if !lowered.contains("<main id=\"admin-content\"") {
-        return None;
-    }
-    if body_end < body_open_end
-        || lowered[body_open_end..body_end].contains("<div class=\"shell\">")
-    {
-        return None;
-    }
-
-    let mut wrapped = String::with_capacity(html.len() + 1200);
-    wrapped.push_str(&html[..body_open_end]);
-    wrapped.push_str("<a class=\"skip-link\" href=\"#admin-content\">Skip to content</a>");
-    wrapped.push_str("<div class=\"shell\">");
-    wrapped.push_str(&render_admin_navigation(current_path));
-    wrapped.push_str("<div class=\"admin-workspace\">");
-    wrapped.push_str(&render_admin_header(current_path));
-    wrapped.push_str(&html[body_open_end..body_end]);
-    wrapped.push_str("</div></div>");
-    wrapped.push_str(&html[body_end..]);
-    Some(wrapped)
-}
-
 fn render_admin_header(current_path: &str) -> String {
-    let normalized_path = if current_path == "/admin/" {
-        "/admin"
-    } else {
-        current_path
-    };
-    let current = MODULES
-        .iter()
-        .filter(|section| {
-            section
-                .path
-                .is_some_and(|path| section_path_matches(path, normalized_path))
-        })
-        .max_by_key(|section| section.path.map_or(0, str::len));
-    let section_name = current.map_or("Administration", |section| section.name);
+    let section_name = admin_page_title(current_path).unwrap_or("Administration");
     let deployment_targets = crate::deploy_requests::SERVICE_DEPLOY_TARGETS.join(",");
     format!(
         "<header class=\"admin-header\" data-deployment-targets=\"{}\"><div><p class=\"eyebrow\">Current section</p><p class=\"admin-section-name\">{}</p></div><div class=\"admin-statuses\"><p class=\"admin-status-item\">Operator session <span class=\"status-pill status-protected\" data-operator-session role=\"status\" aria-live=\"polite\">Checking</span></p><p class=\"admin-status-item\">Platform <span class=\"status-pill\" data-platform-status role=\"status\" aria-live=\"polite\">Checking</span></p></div></header>",
@@ -1505,8 +1445,8 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let html = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><div class=\"request-queue-header\"><h2>Requests needing attention</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts come from each owner service. Open the approvals inbox to review unanswered requests.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section><section class=\"card operator-actions\"><h2>Operator work areas</h2><p class=\"muted\">Choose a workflow. Request counts and approval decisions remain with their owning services.</p><div class=\"action-links\"><a href=\"/admin/approvals\">Review pending approvals</a><a href=\"/admin/deployments\">Inspect deployments</a><a href=\"/admin/hosting\">Inspect service health</a><a href=\"/admin/ssh-access\">Manage temporary SSH access</a><a href=\"/admin/history\">Review request history</a></div></section></main></body></html>";
-    html_response(StatusCode::OK, "text/html; charset=utf-8", html.to_owned())
+    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><div class=\"request-queue-header\"><h2>Requests needing attention</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts come from each owner service. Open the approvals inbox to review unanswered requests.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section><section class=\"card operator-actions\"><h2>Operator work areas</h2><p class=\"muted\">Choose a workflow. Request counts and approval decisions remain with their owning services.</p><div class=\"action-links\"><a href=\"/admin/approvals\">Review pending approvals</a><a href=\"/admin/deployments\">Inspect deployments</a><a href=\"/admin/hosting\">Inspect service health</a><a href=\"/admin/ssh-access\">Manage temporary SSH access</a><a href=\"/admin/history\">Review request history</a></div></section>";
+    admin_page_response(StatusCode::OK, fragment)
 }
 
 async fn operations(
@@ -1514,9 +1454,8 @@ async fn operations(
     Query(query): Query<OperationsQuery>,
 ) -> Response {
     let Some(view) = OperationsView::parse(query.view.as_deref()) else {
-        return html_response(
+        return admin_page_response(
             StatusCode::BAD_REQUEST,
-            "text/html; charset=utf-8",
             operations_error_page(
                 "Unknown Operations view",
                 "Choose Approvals, Deployments, Hosting, Temporary Access, or History.",
@@ -1557,7 +1496,9 @@ async fn operations_view(headers: axum::http::HeaderMap, view: OperationsView) -
         .build()
     {
         Ok(client) => client,
-        Err(_) => return auth_unavailable_response(crate::admin_auth::AuthFailure::Unavailable),
+        Err(_) => {
+            return admin_page_auth_response(crate::admin_auth::AuthFailure::Unavailable)
+        }
     };
     if let Err(failure) = crate::admin_auth::authorize_root_with_client(
         &headers,
@@ -1567,13 +1508,9 @@ async fn operations_view(headers: axum::http::HeaderMap, view: OperationsView) -
     )
     .await
     {
-        return auth_unavailable_response(failure);
+        return admin_page_auth_response(failure);
     }
-    html_response(
-        StatusCode::OK,
-        "text/html; charset=utf-8",
-        operations_page(view),
-    )
+    admin_page_response(StatusCode::OK, operations_page(view))
 }
 
 fn operations_page(view: OperationsView) -> String {
@@ -1589,8 +1526,7 @@ fn operations_page(view: OperationsView) -> String {
         OperationsView::History => "<section class=\"card\"><h2>Request and operation history</h2><p class=\"muted\">Read-only Platform deploy/restore outcomes and owner-sourced deployment, access, and Identity request records. Each owning service remains authoritative for its records and decisions; an unavailable source is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><div><button id=\"history-load-more\" type=\"button\" hidden>Load older records</button> <button id=\"history-refresh\" type=\"button\">Refresh records</button></div></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Platform operation</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>success</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option><option value=\"dispatch-claimed\">claimed by worker</option><option value=\"dispatch-completed\">worker completed</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading history sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading history…</p></div></section>".to_owned(),
     };
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Platform · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>{}</h1>{content}</main></body></html>",
-        view.name(),
+        "<p class=\"eyebrow\">Platform · Operations</p><h1>{}</h1>{content}",
         view.name(),
         content = content
     )
@@ -1598,7 +1534,7 @@ fn operations_page(view: OperationsView) -> String {
 
 fn operations_error_page(title: &str, message: &str) -> String {
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"error\">{}</p><a href=\"/admin/approvals\">Return to Approvals</a></main></body></html>",
+        "<p class=\"eyebrow\">Platform · {}</p><h1>Operations</h1><p class=\"error\">{}</p><a href=\"/admin/approvals\">Return to Approvals</a>",
         escape_html(title),
         escape_html(message)
     )
@@ -1884,6 +1820,21 @@ fn auth_unavailable_response(failure: crate::admin_auth::AuthFailure) -> Respons
     )
 }
 
+fn admin_page_auth_response(failure: crate::admin_auth::AuthFailure) -> Response {
+    let fragment = match failure {
+        crate::admin_auth::AuthFailure::Unauthorized => {
+            "<p class=\"eyebrow\">Platform · Operations</p><h1>Sign-in required</h1><p>Sign in with a root administrator account to view Operations.</p><a href=\"/login\">Sign in</a>"
+        }
+        crate::admin_auth::AuthFailure::Forbidden => {
+            "<p class=\"eyebrow\">Platform · Operations</p><h1>Root access required</h1><p>This work area is available to root administrators.</p>"
+        }
+        crate::admin_auth::AuthFailure::Unavailable => {
+            "<p class=\"eyebrow\">Platform · Operations</p><h1>Authorization unavailable</h1><p>Identity authorization is temporarily unavailable. Retry in a moment.</p>"
+        }
+    };
+    admin_page_response(failure.status(), fragment)
+}
+
 async fn probe_services(client: &reqwest::Client, origin: &str) -> Vec<ServiceSummary> {
     probe_services_for_mode(
         client,
@@ -2076,6 +2027,19 @@ fn html_response(status: StatusCode, content_type: &'static str, body: String) -
     response
 }
 
+fn admin_page_response(status: StatusCode, fragment: impl Into<String>) -> Response {
+    let mut response = fragment.into().into_response();
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/vnd.vapor.admin-page.v1+html; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    response
+}
+
 fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -2200,6 +2164,89 @@ mod tests {
         ] {
             assert!(html.contains(&format!("href=\"{route}\"")));
         }
+    }
+
+    #[tokio::test]
+    async fn platform_landing_returns_the_owner_page_fragment_contract() {
+        let response = super::landing().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/vnd.vapor.admin-page.v1+html; charset=utf-8"
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let fragment = std::str::from_utf8(&body).unwrap();
+        assert!(fragment.starts_with("<p class=\"eyebrow\">Platform</p>"));
+        assert!(!fragment.contains("<!doctype html>"));
+        assert!(!fragment.contains("<main"));
+    }
+
+    #[tokio::test]
+    async fn shared_shell_does_not_parse_uncontracted_owner_html() {
+        use axum::http::header::CONTENT_TYPE;
+        use axum::routing::get;
+
+        const FULL_DOCUMENT: &str = "<!doctype html><html><body><main id=\"admin-content\"><h1>legacy</h1></main></body></html>";
+        let owner = Router::new().route(
+            "/admin/build-cache",
+            get(|| async {
+                let mut response = (StatusCode::OK, FULL_DOCUMENT).into_response();
+                response.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("text/html; charset=utf-8"),
+                );
+                response
+            }),
+        );
+        let response = owner
+            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .oneshot(
+                Request::get("/admin/build-cache")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(std::str::from_utf8(&body).unwrap(), FULL_DOCUMENT);
+    }
+
+    #[tokio::test]
+    async fn shared_shell_rejects_oversized_owner_fragments_with_a_bounded_error_page() {
+        use axum::http::header::CONTENT_TYPE;
+        use axum::routing::get;
+
+        let oversized = vec![b'x'; super::MAX_ADMIN_PAGE_BYTES + 1];
+        let owner = Router::new().route(
+            "/admin/build-cache",
+            get(move || {
+                let body = oversized.clone();
+                async move {
+                    let mut response = (StatusCode::OK, Body::from(body)).into_response();
+                    response.headers_mut().insert(
+                        CONTENT_TYPE,
+                        HeaderValue::from_static("application/vnd.vapor.admin-page.v1+html"),
+                    );
+                    response
+                }
+            }),
+        );
+        let response = owner
+            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .oneshot(
+                Request::get("/admin/build-cache")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(body.len() < 4096);
+        assert!(std::str::from_utf8(&body)
+            .unwrap()
+            .contains("invalid or oversized page fragment"));
     }
 
     #[tokio::test]
@@ -2551,9 +2598,18 @@ mod tests {
             .unwrap();
         assert_eq!(get_response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
+            get_response.headers().get("content-type").unwrap(),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
             get_response.headers().get("cache-control").unwrap(),
             "private, no-store"
         );
+        let body = get_response.into_body().collect().await.unwrap().to_bytes();
+        let document = std::str::from_utf8(&body).unwrap();
+        assert!(document.contains("Sign-in required"));
+        assert!(document.contains("/login"));
+        assert!(document.contains("<nav aria-label=\"Platform administration\">"));
 
         let post_response = admin_app()
             .oneshot(
@@ -2566,6 +2622,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(post_response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn operations_auth_errors_are_shell_fragments_not_api_json() {
+        for (failure, expected_status, expected_text) in [
+            (
+                crate::admin_auth::AuthFailure::Unauthorized,
+                StatusCode::UNAUTHORIZED,
+                "Sign-in required",
+            ),
+            (
+                crate::admin_auth::AuthFailure::Forbidden,
+                StatusCode::FORBIDDEN,
+                "Root access required",
+            ),
+            (
+                crate::admin_auth::AuthFailure::Unavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Identity authorization is temporarily unavailable",
+            ),
+        ] {
+            let response = super::admin_page_auth_response(failure);
+            assert_eq!(response.status(), expected_status);
+            assert_eq!(
+                response.headers()["content-type"],
+                "application/vnd.vapor.admin-page.v1+html; charset=utf-8"
+            );
+            assert_eq!(response.headers()["cache-control"], "private, no-store");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let fragment = std::str::from_utf8(&body).unwrap();
+            assert!(fragment.contains(expected_text));
+            assert!(!fragment.starts_with('{'));
+        }
     }
 
     #[test]
@@ -2595,10 +2684,21 @@ mod tests {
         assert!(script.contains("loadMoreButton?.addEventListener('click', loadMoreHistory)"));
     }
 
-    #[test]
-    fn operations_error_page_loads_shared_shell_status_script() {
-        let page = super::operations_error_page("Unavailable", "Try again later.");
-        assert!(page.contains("/admin/assets/admin.js"));
+    #[tokio::test]
+    async fn operations_error_page_loads_the_platform_owned_shared_shell() {
+        let response = admin_app()
+            .oneshot(
+                Request::get("/admin/operations?view=unknown")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(std::str::from_utf8(&body)
+            .unwrap()
+            .contains("/admin/assets/admin.js"));
     }
 
     #[tokio::test]
