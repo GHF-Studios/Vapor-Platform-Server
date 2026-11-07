@@ -45,7 +45,7 @@ function New-RecoveryArchive {
         Remove-Item -LiteralPath (Join-Path $kit 'recovery_bundle_metadata.py') -Force
     }
     $archivePath = Join-Path $Root $ArchiveName
-    $tar = (Get-Command tar.exe -CommandType Application -ErrorAction Stop).Source
+    $tar = (Get-Command tar.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     & $tar -czf $archivePath -C $stage 'vapor-platform-recovery'
     if ($LASTEXITCODE -ne 0) { throw "Could not create recovery fixture archive (tar exit $LASTEXITCODE)." }
     return [System.IO.File]::ReadAllBytes($archivePath)

@@ -30,7 +30,7 @@ $scpCommand = if ([string]::IsNullOrWhiteSpace($env:VAPOR_USB_TEST_SCP_EXECUTABL
 } else {
     Get-Command -Name $env:VAPOR_USB_TEST_SCP_EXECUTABLE -CommandType Application, ExternalScript -ErrorAction Stop
 }
-$tarCommand = Get-Command tar.exe -CommandType Application -ErrorAction Stop
+$tarCommand = Get-Command tar.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $ssh = $sshCommand.Source
 $scp = $scpCommand.Source
 $tar = $tarCommand.Source
