@@ -117,6 +117,26 @@ and must not be read as current host status.
   current deployment path is the owner-approved request for `b1e2d3c`, or a
   newly reviewed bootstrap pinned to that exact revision.
 
+## Workstation SSH and temporary-account recheck (2026-11-07 16:41 UTC)
+
+- The existing `vps-codex-20261105` identity successfully logs in as
+  `leslieghf`. Its current sudo policy allows the existing deploy and
+  service-control wrappers without a password; other root commands require a
+  password. The deploy wrapper reports that no approved deployment is waiting.
+- An all-users `groups` scan printed `vpsssh_240aab1d : vapor-temp-ssh` once.
+  Subsequent direct checks found no matching `/etc/passwd` or `getent` record,
+  no home or `authorized_keys` file, and no active expiry timer; five later SSH
+  sessions reported the same host machine ID and no account. The request key
+  still failed authentication as that username. Group-scan output alone is
+  therefore not proof of a currently usable account; the host artifact state
+  was inconsistent during these checks.
+- The live service probe found Caddy, Platform Server, Identity, Homepage,
+  Docs, Diagnostics, Registry, Artifact, Build Cache, and the state-export
+  timer active. The standalone Platform Gateway unit is absent/inactive, while
+  the public `/healthz` responds `ok`; the protected admin route returns 401
+  without an owner session. The public root still serves the old Vapor link
+  page. No host files or services were changed.
+
 ## Failed-dispatch closure and bootstrap handoff (2026-11-07 12:46 UTC)
 
 Historical: this section records the state before direct root SSH access and
