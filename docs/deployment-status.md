@@ -1,6 +1,6 @@
 # Vapor server deployment status
 
-## Current live state (2026-11-07 15:00 UTC)
+## Current live state (2026-11-07 15:06 UTC)
 
 This is the newest verified state; older entries below are historical snapshots
 and must not be read as current host status.
@@ -8,9 +8,11 @@ and must not be read as current host status.
 - The VPS is running Platform commit
   `12192d85348432ee24d1ce7c02ff2dab6eeded84` in `services` mode. The independent
   Homepage, Docs, Identity, Diagnostics, Registry, Artifact, and Build Cache
-  services, the Platform gateway, and Caddy are active. Local health checks on
-  ports 7110–7117 returned HTTP 200; the state-export timer is active and the
-  retired deploy polling timer remains inactive.
+  services, the Platform gateway, and Caddy are active. The deployed
+  `deploy/scripts/health-check.sh` completed successfully over root SSH; it
+  checks each service endpoint, Caddy's implemented admin routes, unauthenticated
+  service contracts, Atlas through Caddy, and the enabled/active state-export
+  timer. The retired deploy polling timer remains inactive.
 - Caddy routes `/cli/ssh/*` to Identity. The SSH authorization API returns
   `422` for an empty request body and the authorization page returns `400`
   without its required query string; these expected validation responses
