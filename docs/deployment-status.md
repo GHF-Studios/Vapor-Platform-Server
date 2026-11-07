@@ -16,18 +16,26 @@ and must not be read as current host status.
   without its required query string; these expected validation responses
   confirm both requests reach Identity. The unauthenticated Operations page
   returns `401` as expected.
-- A root-only recovery archive was created at
+- The successful bootstrap created a root-only pre-cutover archive at
   `/var/backups/vapor-server/vapor-platform-recovery-20261107T143242Z-6f6756d3ec6b.tar.gz`.
-  The successful bootstrap report confirms services-mode health and that the
-  periodic deploy timer was not started.
-- The three pending full-deploy requests for commits `7d07590`, `96e650f`, and
-  `12192d8` are visible in the Platform database. The first two are superseded
-  by the live `12192d8` deployment; the request for `12192d8` was also created
+  The hourly exporter subsequently published a newer recovery generation for
+  the live revision at
+  `/var/backups/vapor-server/vapor-platform-recovery-20261107T145633Z-12192d853484.tar.gz`.
+  Its `.sha256` sidecar matched; the bundle validator accepted its structure
+  and manifest; metadata reports `services`, Ubuntu 26.04 LTS, and root commit
+  `12192d8`. The periodic deploy timer was not started.
+- The three pending full-deploy requests are `f08c9dec-627f-414e-b4e5-54562100df2f`
+  (`7d07590`), `ed74751d-d3b2-4e67-a719-744121bd34d5` (`96e650f`), and
+  `3196a6b8-2eb2-4957-b56a-2b7241bfce7d` (`12192d8`). The first two are
+  superseded by the live `12192d8` deployment; the latest request was created
   automatically after the direct, owner-authorized recovery deploy. No request
-  was approved by that direct deployment. Leave the two older pending requests
-  unapproved; reject/close them through the authenticated Operations interface
-  when available. The current request queue is not yet reconciled with this
-  out-of-band deployment.
+  was approved by that direct deployment. These records were left unchanged;
+  the dashboard should reject obsolete pending requests and reconcile the
+  latest request with the already-live revision through an audited operation.
+- No 128 GB removable recovery drive is currently mounted on the Windows
+  workstation (the only FAT32 volume is about 1 GB). The real USB pull and
+  clean-host restore drill remain unverified; no Task Scheduler job was
+  registered against an assumed drive letter.
 - The reusable SSH bootstrap branch has been updated to pin `12192d8` and to
   check the `/cli/ssh/authorize` route as well as the API route. It is a future
   recovery artifact; the current VPS is already cut over.
