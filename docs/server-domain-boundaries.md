@@ -66,7 +66,7 @@ Workshop tags remain discovery hints and are not enforced Vapor semantics.
 | Toolchain/API UX | Future integration boundary | Stable CLI/Shell/launcher workflows over existing APIs | Canonical state, role decisions, publish execution |
 | MCP/capability surface | Future capability boundary | Machine/action capabilities, least-privilege grants, capability audit | Business state, bypassing service APIs |
 | Operations/recovery | Implemented root-owned workflow plus service contracts | Backups, restore/import composition, deploy health, latest deploy/restore status, emergency operator paths | Normal product workflows, service business decisions |
-| Cross-domain admin UI | Implemented shared shell | `/admin` navigation and read-only Platform overview/Operations; Identity, Registry, and Artifact own protected sections | Replacing domain services or storing canonical domain state |
+| Cross-domain admin UI | Implemented shared shell | `/admin` navigation; owner-routed Approvals, Deployments, SSH Access, Hosting, and History pages; Identity, Registry, and Artifact own protected sections | Replacing domain services or storing canonical domain state |
 
 ## Admin authority, request lifecycle, and history
 
@@ -125,7 +125,12 @@ Current route ownership remains:
 /login                    identity
 /logout                   identity
 /admin                    shared Platform admin shell
-/admin/operations         Platform-owned read-only status and runbook links
+/admin/approvals          protected inbox for pending Platform and Identity decisions
+/admin/deployments        Platform-owned deployment requests and execution stages
+/admin/ssh-access         Platform-owned temporary SSH grants and active access
+/admin/hosting            Platform service health and feature readiness
+/admin/history            bounded owner-sourced request and operation history
+/admin/operations         Platform operations page with view query routing
 /admin/identity           Identity-owned admin section
 /admin/workshop           Registry-owned catalog inventory
 /admin/artifacts          Artifact-owned release inventory

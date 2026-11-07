@@ -43,7 +43,12 @@ available for service maintenance and rollback.
 /docs/                    -> docs
 /login                    -> identity browser login/register
 /admin                    -> shared Platform admin toolbench
-/admin/operations         -> Platform-owned read-only deployment/recovery status
+/admin/approvals          -> pending Platform and Identity decisions
+/admin/deployments        -> Platform-owned deployment lifecycle and stages
+/admin/ssh-access         -> Platform temporary access and active grants
+/admin/hosting            -> service health and feature readiness
+/admin/history            -> bounded owner-sourced request and operation history
+/admin/operations         -> Platform operations pages via view query
 /admin/workshop           -> Registry-owned read-only catalog inventory
 /admin/identity           -> Identity-owned admin section
 /admin/artifacts          -> Artifact-owned read-only release inventory
