@@ -697,7 +697,7 @@ mod unix_impl {
             return Err((id.to_string(), "deploy worker is not stopped"));
         }
 
-        record_stopped_deploy_failure(pool, id, version).await
+        super::record_stopped_deploy_failure(pool, id, version).await
     }
 
     async fn grant_ssh(

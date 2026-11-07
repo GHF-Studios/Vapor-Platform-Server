@@ -11,9 +11,10 @@
   remains closed as failed and requires a fresh approval; the deployment effect
   itself is still explicitly unknown.
 - Regression tests cover each recovery bound and the stopped-worker lifecycle
-  transition. The full local Platform test recipe passed after these changes;
-  the latest successful GitHub run (42347768694) predates them, so a new CI run
-  is required.
+  transition. The full local Platform test recipe passed after these changes.
+- CI run `42348443012` found a Linux-only helper qualification error that the
+  Windows build could not expose; the call is corrected in the follow-up
+  commit. The next CI run is the validation gate for that correction.
 - SSH read-only probes using both the root key and the same key for `leslieghf`
   were rejected. No VPS changes were made.
 
