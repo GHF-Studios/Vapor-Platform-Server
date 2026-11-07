@@ -38,7 +38,7 @@ enum SectionState {
 // the overview endpoint; a mounted route must not imply that its service is up.
 const MODULES: &[AdminSection] = &[
     AdminSection {
-        group: "Overview",
+        group: "Operate",
         name: "Overview",
         path: Some("/admin"),
         description: "Service health and readiness",
@@ -55,7 +55,7 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Implemented,
     },
     AdminSection {
-        group: "Catalog",
+        group: "Ecosystem",
         name: "Workshop / Registry",
         path: Some("/admin/workshop"),
         description: "Registry-owned catalog inventory",
@@ -71,7 +71,7 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Implemented,
     },
     AdminSection {
-        group: "Distribution",
+        group: "Ecosystem",
         name: "Artifacts",
         path: Some("/admin/artifacts"),
         description: "Signed Vapor releases",
@@ -80,14 +80,14 @@ const MODULES: &[AdminSection] = &[
     },
     AdminSection {
         name: "Build Cache",
-        group: "Distribution",
+        group: "Ecosystem",
         path: Some("/admin/build-cache"),
         description: "Per-target compiler snapshots",
         service_ids: &["build-cache"],
         state: SectionState::Implemented,
     },
     AdminSection {
-        group: "Distribution",
+        group: "Ecosystem",
         name: "Native builders",
         path: None,
         description: "VPS-managed Linux and Windows build orchestration is not available yet",
@@ -95,7 +95,7 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Planned,
     },
     AdminSection {
-        group: "Operations",
+        group: "Operate",
         name: "Approvals",
         path: Some("/admin/approvals"),
         description: "Pending decisions from Platform and Identity",
@@ -103,7 +103,7 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Implemented,
     },
     AdminSection {
-        group: "Operations",
+        group: "Operate",
         name: "Deployments",
         path: Some("/admin/deployments"),
         description: "Deployment lifecycle and execution stages",
@@ -111,7 +111,7 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Implemented,
     },
     AdminSection {
-        group: "Operations",
+        group: "Operate",
         name: "SSH Access",
         path: Some("/admin/ssh-access"),
         description: "Temporary access grants and active sessions",
@@ -119,7 +119,7 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Implemented,
     },
     AdminSection {
-        group: "Operations",
+        group: "Operate",
         name: "Hosting",
         path: Some("/admin/hosting"),
         description: "Service health and feature readiness",
@@ -136,7 +136,7 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Implemented,
     },
     AdminSection {
-        group: "Operations",
+        group: "Operate",
         name: "History",
         path: Some("/admin/history"),
         description: "Recent owner-sourced request and operation history",
@@ -153,6 +153,12 @@ body { margin:0; min-height:100vh; }
 .shell > nav { padding:22px 14px; background:#182330; border-right:1px solid #2b3a4b; }
 .brand { margin:0 0 18px; font-size:16px; letter-spacing:.03em; }
 .nav-group { margin:19px 10px 6px; color:#8092a5; font-size:10px; letter-spacing:.11em; text-transform:uppercase; }
+.nav-section { margin:12px 0 0; }
+.nav-section > summary { cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between; padding:5px 10px; }
+.nav-section > summary::-webkit-details-marker { display:none; }
+.nav-section > summary::after { content:'+'; color:#8092a5; font-size:14px; }
+.nav-section[open] > summary::after { content:'−'; }
+.nav-section > a, .nav-section > .nav-disabled { margin-left:4px !important; }
 .shell > nav a { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; margin:3px 0; border-radius:5px; color:#c7d2de; text-decoration:none; }
 .shell > nav a:hover, .shell > nav a[aria-current="page"] { background:#26394e; color:#fff; }
 .operation-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 22px; padding:0 0 6px; border-bottom:1px solid #2b3a4b; }
@@ -222,6 +228,42 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .history-state.state-danger { border-color:#7a3e45; color:#f08b92; }
 .history-detail { margin:7px 0 0; overflow-wrap:anywhere; }
 .history-detail-list { margin:6px 0 0; padding-left:18px; color:#c7d2de; }
+.ssh-workbench { display:grid; grid-template-columns:minmax(260px, .78fr) minmax(360px, 1.5fr); gap:14px; align-items:start; }
+.ssh-list-panel, .ssh-detail-panel { min-width:0; background:#182330; border:1px solid #2b3a4b; border-radius:7px; }
+.ssh-list-panel { overflow:hidden; }
+.ssh-list-toolbar { padding:12px; border-bottom:1px solid #2b3a4b; }
+.ssh-list-toolbar label { margin:0 0 8px; }
+.ssh-list-toolbar input, .ssh-list-toolbar select { width:100%; }
+.ssh-list-count { margin:8px 0 0; color:#9eacba; font-size:12px; }
+.ssh-record-list { list-style:none; padding:0; margin:0; max-height:66vh; overflow:auto; }
+.ssh-record-list li + li { border-top:1px solid #2b3a4b; }
+.ssh-record { display:block; width:100%; padding:11px 12px; border:0; border-radius:0; text-align:left; background:transparent; }
+.ssh-record:hover, .ssh-record[aria-current="true"] { background:#26394e; }
+.ssh-record strong, .ssh-record span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ssh-record strong { font-size:13px; }
+.ssh-record span { margin-top:3px; color:#9eacba; font-size:11px; }
+.ssh-record .ssh-record-state { color:#8fc5f4; text-transform:capitalize; }
+.ssh-detail-panel { padding:18px; }
+.ssh-detail-header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; border-bottom:1px solid #2b3a4b; padding-bottom:12px; }
+.ssh-detail-header h2 { margin:0; overflow-wrap:anywhere; font-size:18px; }
+.ssh-detail-header p { margin:5px 0 0; }
+.ssh-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:14px 0; }
+.ssh-fact { min-width:0; padding:10px; background:#111821; border-radius:5px; }
+.ssh-fact dt { color:#9eacba; font-size:11px; }
+.ssh-fact dd { margin:3px 0 0; overflow-wrap:anywhere; }
+.ssh-action-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+.ssh-action-row label { margin:0; }
+.ssh-history { margin-top:14px; border-top:1px solid #2b3a4b; padding-top:10px; }
+.ssh-history-list { max-height:260px; overflow:auto; }
+.ssh-history-list p { margin:7px 0; padding-left:10px; border-left:2px solid #40536a; }
+.ssh-pending-note { padding:10px; border-left:3px solid #d4bd69; background:#28271e; }
+.approval-source { margin:10px 0; background:#182330; border:1px solid #2b3a4b; border-radius:7px; overflow:hidden; }
+.approval-source > summary { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px; cursor:pointer; list-style:none; font-weight:650; }
+.approval-source > summary::-webkit-details-marker { display:none; }
+.approval-source > summary::after { content:'+'; order:2; margin-left:auto; color:#8092a5; }
+.approval-source[open] > summary::after { content:'−'; }
+.approval-source-count { order:1; margin-left:auto; color:#9eacba; font-size:12px; font-weight:500; }
+.approval-source-body { padding:0 14px 12px; }
 .table-scroll { max-width:100%; overflow-x:auto; }
 .table-scroll:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
 .skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; background:#fff; color:#111; }
@@ -240,6 +282,7 @@ label { display:block; margin:8px 0; }
 form.inline { display:inline; }
 .notice { background:#163222; border-left:3px solid #42a56b; padding:8px 10px; }
 .error { background:#3a2024; border-left:3px solid #da626c; padding:8px 10px; }
+@media(max-width:820px) { .ssh-workbench { grid-template-columns:1fr; } .ssh-record-list { max-height:36vh; } }
 @media(max-width:720px) { .shell { grid-template-columns:1fr; } .shell > nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } .nav-group { display:inline-block; margin:8px 8px 4px; } .shell > nav a { display:inline-flex; } .admin-header { align-items:flex-start; flex-direction:column; padding:12px 14px; } .admin-statuses { justify-content:flex-start; } main { padding:20px 14px; } }
 @media(max-width:620px) { .history-controls { grid-template-columns:1fr; } }
 @media(max-width:560px) { .history-entry header { flex-direction:column; } }
@@ -484,6 +527,11 @@ const JS: &str = r#"
       deploy: document.querySelector('#approvals-more-deploy'),
       ssh: document.querySelector('#approvals-more-ssh')
     };
+    const countBadges = {
+      deploy: document.querySelector('#pending-deploy-count'),
+      ssh: document.querySelector('#pending-ssh-count'),
+      identity: document.querySelector('#pending-identity-count')
+    };
     const sourceDefinitions = [
       { key: 'deploy', url: '/api/admin/deploy-requests?limit=200', label: 'Platform deployment approvals' },
       { key: 'ssh', url: '/api/admin/ssh-access/requests?limit=200', label: 'Platform SSH access requests' },
@@ -690,6 +738,7 @@ const JS: &str = r#"
       const state = sourceState[source.key];
       const records = state.records;
       const pending = records.filter(item => item && item.status === 'pending');
+      if (countBadges[source.key]) countBadges[source.key].textContent = `${pending.length} pending`;
       const expiredIdentity = source.key === 'identity' ? pending.filter(isExpiredByTime) : [];
       const actionable = source.key === 'identity'
         ? pending.filter(item => !isExpiredByTime(item))
@@ -744,6 +793,7 @@ const JS: &str = r#"
         renderSource(source);
       } catch (_) {
         container.replaceChildren();
+        if (countBadges[source.key]) countBadges[source.key].textContent = 'Unavailable';
         appendText(container, 'p', 'This request source is temporarily unavailable or returned an invalid response.', 'error');
       }
     };
@@ -1206,129 +1256,166 @@ const JS: &str = r#"
     refreshDeployRequests();
   }
 
-  const sshAccess = document.querySelector('#ssh-access');
-  if (sshAccess) {
-    const actionFeedback = new Map();
-    const submitSshAction = async (button, itemId, path, body, fallback) => {
-      button.disabled = true;
-      try {
-        const result = await fetch(path, {
-          method: 'POST', credentials: 'same-origin', cache: 'no-store',
-          headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
-        });
-        if (result.ok) actionFeedback.delete(itemId);
-        else actionFeedback.set(itemId, await responseFailure(result, fallback));
-      } catch (_) {
-        actionFeedback.set(itemId, 'No response was received; the request may have completed. The current status has been refreshed; inspect access history before retrying.');
+  const sshAccessList = document.querySelector('#ssh-access-list');
+  const sshAccessDetail = document.querySelector('#ssh-access-detail');
+  if (sshAccessList && sshAccessDetail) {
+    const search = document.querySelector('#ssh-access-search');
+    const filter = document.querySelector('#ssh-access-filter');
+    const count = document.querySelector('#ssh-access-count');
+    const feedback = document.createElement('p'); feedback.id = 'ssh-access-feedback';
+    feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
+    sshAccessList.closest('.ssh-workbench')?.before(feedback);
+    const refreshButton = document.querySelector('#ssh-access-refresh');
+    let records = [];
+    let selectedId = null;
+    const statusLabel = value => String(value || 'unknown').replaceAll('_', ' ');
+    const formatTime = seconds => Number.isFinite(Number(seconds)) && Number(seconds) > 0
+      ? new Date(Number(seconds) * 1000).toLocaleString() : 'Not set';
+    const itemName = item => item.username || item.purpose || item.fingerprint || 'SSH access request';
+    const makeFact = (label, value) => {
+      const wrapper = document.createElement('div'); wrapper.className = 'ssh-fact';
+      const term = document.createElement('dt'); term.textContent = label;
+      const description = document.createElement('dd'); description.textContent = value || 'Not reported';
+      wrapper.append(term, description); return wrapper;
+    };
+    const isClosed = item => ['revoked', 'rejected', 'expired', 'cancelled'].includes(item.status);
+    const matchesFilter = item => {
+      const mode = filter.value;
+      if (mode === 'active') return item.status === 'active';
+      if (mode === 'pending') return item.status === 'pending';
+      if (mode === 'history') return isClosed(item) || item.status === 'failed';
+      return true;
+    };
+    const visibleRecords = () => {
+      const needle = search.value.trim().toLocaleLowerCase();
+      return records.filter(item => matchesFilter(item) && (!needle || [itemName(item), item.purpose,
+        item.fingerprint, item.username, item.host, item.requester_kind, item.requester_profile_id,
+        ...(item.requested_capabilities || []), ...(item.granted_capabilities || [])]
+        .some(value => String(value || '').toLocaleLowerCase().includes(needle))));
+    };
+    const renderDetail = item => {
+      sshAccessDetail.replaceChildren();
+      if (!item) {
+        const empty = document.createElement('div');
+        const title = document.createElement('h2'); title.textContent = records.length ? 'No matching access record' : 'No access records yet';
+        const text = document.createElement('p'); text.className = 'muted';
+        text.textContent = records.length ? 'Change the search or status filter to see other records.' : 'When a request is submitted, review it in Approvals. Granted access appears here.';
+        empty.append(title, text); sshAccessDetail.append(empty); return;
       }
-      await refresh();
+      const header = document.createElement('header'); header.className = 'ssh-detail-header';
+      const heading = document.createElement('div');
+      const title = document.createElement('h2'); title.textContent = itemName(item);
+      const purpose = document.createElement('p'); purpose.className = 'muted'; purpose.textContent = item.purpose || 'No purpose supplied';
+      heading.append(title, purpose);
+      const badge = document.createElement('span'); badge.className = `status-pill ${item.status === 'active' ? 'status-healthy' : item.status === 'pending' ? '' : 'status-unavailable'}`;
+      badge.textContent = statusLabel(item.status); header.append(heading, badge); sshAccessDetail.append(header);
+
+      const facts = document.createElement('dl'); facts.className = 'ssh-facts';
+      facts.append(makeFact('Public key fingerprint', item.fingerprint),
+        makeFact('Requester', `${item.requester_kind || 'Unknown'} · ${item.requester_profile_id || 'Unknown profile'}`),
+        makeFact(item.status === 'active' ? 'Expires' : 'Requested duration', item.status === 'active' ? formatTime(item.expires_at_unix) : `${item.requested_duration_seconds || 0} seconds`),
+        makeFact('Requested access', (item.requested_capabilities || []).join(', ') || 'Shell only'));
+      if (item.granted_duration_seconds != null) {
+        facts.append(makeFact('Granted duration', `${item.granted_duration_seconds} seconds`),
+          makeFact('Granted capabilities', (item.granted_capabilities || []).join(', ') || 'Shell only'));
+      }
+      if (item.username && item.host) facts.append(makeFact('Connection', `${item.username}@${item.host}:22`));
+      sshAccessDetail.append(facts);
+      if (item.detail) { const detail = document.createElement('p'); detail.className = 'muted'; detail.textContent = item.detail; sshAccessDetail.append(detail); }
+
+      if (item.status === 'pending') {
+        const notice = document.createElement('div'); notice.className = 'ssh-pending-note';
+        notice.textContent = 'This request has not been granted. Review and decide it in the Approvals inbox.';
+        const link = document.createElement('a'); link.href = '/admin/approvals#pending-ssh-approvals'; link.textContent = 'Open pending SSH approvals';
+        notice.append(document.createTextNode(' '), link); sshAccessDetail.append(notice);
+      } else if (item.status === 'active' || item.status === 'failed') {
+        const action = document.createElement('div'); action.className = 'ssh-action-row';
+        const label = document.createElement('label'); const confirm = document.createElement('input');
+        confirm.type = 'checkbox'; confirm.setAttribute('aria-label', item.status === 'failed' ? 'Confirm cleanup of partial SSH account' : 'Confirm revoking this SSH grant');
+        label.append(confirm, document.createTextNode(item.status === 'failed' ? ' Clean up any partial account' : ' Confirm revoke'));
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = item.status === 'failed' ? 'Clean up grant' : 'Revoke access';
+        button.addEventListener('click', async () => {
+          if (!confirm.checked) return;
+          button.disabled = true;
+          const result = await fetch(`/api/admin/ssh-access/grants/${encodeURIComponent(item.id)}/revoke`, {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ expected_version: item.version, confirmed: true })
+          }).catch(() => null);
+          if (!result) feedback.textContent = 'No response received. Refresh to verify whether access was revoked.';
+          else if (!result.ok) feedback.textContent = await responseFailure(result, 'Could not revoke SSH access');
+          else { feedback.textContent = 'Access change saved.'; selectedId = item.id; }
+          await refresh();
+        });
+        action.append(label, button); sshAccessDetail.append(action);
+      }
+
+      const history = document.createElement('section'); history.className = 'ssh-history';
+      const toggle = document.createElement('button'); toggle.type = 'button'; toggle.setAttribute('aria-expanded', 'false'); toggle.textContent = 'Show request history';
+      const historyBody = document.createElement('div'); historyBody.className = 'ssh-history-list'; historyBody.hidden = true;
+      let historyLoaded = false;
+      toggle.addEventListener('click', async () => {
+        const open = historyBody.hidden; historyBody.hidden = !open; toggle.setAttribute('aria-expanded', String(open));
+        toggle.textContent = open ? 'Hide request history' : 'Show request history';
+        if (!open || historyLoaded) return;
+        historyBody.textContent = 'Loading history…';
+        const response = await fetch(`/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/events`, { credentials: 'same-origin', cache: 'no-store' }).catch(() => null);
+        if (!response) { historyBody.textContent = 'Could not contact the temporary SSH service.'; return; }
+        if (!response.ok) { await showResponseFailure(historyBody, response, 'Could not load request history'); return; }
+        const events = await response.json().catch(() => null);
+        if (!Array.isArray(events)) { historyBody.textContent = 'The SSH service returned invalid history.'; return; }
+        historyBody.replaceChildren();
+        if (!events.length) historyBody.textContent = 'No access history recorded.';
+        for (const event of events) {
+          const line = document.createElement('p');
+          const transition = event.from_status ? `${event.from_status} → ${event.to_status}` : event.to_status;
+          line.textContent = `${formatTime(event.at_unix)} · ${transition} · ${event.actor_kind || 'actor'} · ${event.actor_label || event.actor_profile_id || 'unknown'}`;
+          historyBody.append(line);
+        }
+        historyLoaded = true;
+      });
+      history.append(toggle, historyBody); sshAccessDetail.append(history);
+    };
+    const renderList = () => {
+      const visible = visibleRecords();
+      const active = records.filter(item => item.status === 'active').length;
+      const pending = records.filter(item => item.status === 'pending').length;
+      count.textContent = `${visible.length} shown · ${active} active · ${pending} pending`;
+      sshAccessList.replaceChildren();
+      if (!visible.length) {
+        const row = document.createElement('li'); row.className = 'muted';
+        row.textContent = records.length ? 'No records match this view.' : 'No SSH access records were returned.';
+        sshAccessList.append(row); renderDetail(null); return;
+      }
+      if (!visible.some(item => item.id === selectedId)) selectedId = visible[0].id;
+      for (const item of visible) {
+        const row = document.createElement('li'); const button = document.createElement('button');
+        button.type = 'button'; button.className = 'ssh-record'; button.setAttribute('aria-current', String(item.id === selectedId));
+        const name = document.createElement('strong'); name.textContent = itemName(item);
+        const state = document.createElement('span'); state.className = 'ssh-record-state'; state.textContent = `${statusLabel(item.status)} · ${item.fingerprint || 'fingerprint unavailable'}`;
+        const meta = document.createElement('span'); meta.textContent = item.username && item.host ? `${item.username}@${item.host}` : (item.purpose || 'No purpose supplied');
+        button.append(name, state, meta); button.addEventListener('click', () => { selectedId = item.id; renderList(); });
+        row.append(button); sshAccessList.append(row);
+      }
+      renderDetail(visible.find(item => item.id === selectedId));
     };
     const refresh = async () => {
+      if (refreshButton) refreshButton.disabled = true;
       let response;
-      let items;
-      try {
-        response = await fetch('/api/admin/ssh-access/requests?limit=200', { credentials: 'same-origin', cache: 'no-store' });
-      } catch (_) { sshAccess.textContent = 'Could not contact the temporary SSH service.'; return; }
-      sshAccess.replaceChildren();
-      if (!response.ok) {
-        await showResponseFailure(sshAccess, response, 'Could not load temporary SSH requests');
-        return;
+      try { response = await fetch('/api/admin/ssh-access/requests?limit=200', { credentials: 'same-origin', cache: 'no-store' }); }
+      catch (_) {
+        sshAccessList.innerHTML = '<li class="error">Could not contact the temporary SSH service.</li>';
+        if (refreshButton) refreshButton.disabled = false; return;
       }
+      if (!response.ok) { await showResponseFailure(sshAccessList, response, 'Could not load SSH access records'); if (refreshButton) refreshButton.disabled = false; return; }
       const body = await response.json().catch(() => null);
-      items = Array.isArray(body) ? body : body?.items;
-      if (!Array.isArray(items)) { sshAccess.textContent = 'The temporary SSH service returned an invalid response.'; return; }
-      if (!items.length) { sshAccess.textContent = 'No temporary SSH requests.'; return; }
-      for (const item of items) {
-        const card = document.createElement('article'); card.className = 'card';
-        const title = document.createElement('h3'); title.textContent = `${item.status} · ${item.fingerprint}`;
-        const purpose = document.createElement('p'); purpose.textContent = item.purpose;
-        const requester = document.createElement('p'); requester.className = 'muted';
-        requester.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
-        const scope = document.createElement('p'); scope.className = 'muted';
-        scope.textContent = `Requested: ${item.requested_capabilities.join(', ') || 'shell only'} · ${item.requested_duration_seconds}s`;
-        card.append(title, purpose, requester, scope);
-        if (actionFeedback.has(item.id)) {
-          const feedback = document.createElement('p');
-          feedback.className = 'error';
-          feedback.setAttribute('role', 'alert');
-          feedback.textContent = actionFeedback.get(item.id);
-          card.append(feedback);
-        }
-        if (item.detail) {
-          const detail = document.createElement('p'); detail.className = 'muted'; detail.textContent = item.detail;
-          card.append(detail);
-        }
-        if (item.expires_at_unix) {
-          const expiry = document.createElement('p'); expiry.className = 'muted';
-          expiry.textContent = `${item.status === 'active' ? 'Expires' : 'Approved expiry'}: ${new Date(item.expires_at_unix * 1000).toLocaleString()}`;
-          card.append(expiry);
-        }
-        const history = document.createElement('details');
-        const historyLabel = document.createElement('summary'); historyLabel.textContent = 'Access history';
-        const historyBody = document.createElement('div'); historyBody.className = 'muted';
-        history.append(historyLabel, historyBody);
-        history.addEventListener('toggle', async () => {
-          if (!history.open || history.dataset.loaded === 'true') return;
-          historyBody.textContent = 'Loading request history…';
-          try {
-            const eventsResponse = await fetch(`/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/events`, {
-              credentials: 'same-origin', cache: 'no-store'
-            });
-            if (!eventsResponse.ok) {
-              await showResponseFailure(historyBody, eventsResponse, 'Could not load request history');
-              return;
-            }
-            const events = await eventsResponse.json().catch(() => null);
-            if (!Array.isArray(events)) { historyBody.textContent = 'The SSH service returned an invalid history response.'; return; }
-            historyBody.replaceChildren();
-            if (!events.length) { historyBody.textContent = 'No access history recorded.'; }
-            for (const event of events) {
-              const line = document.createElement('p');
-              const transition = event.from_status ? `${event.from_status} → ${event.to_status}` : event.to_status;
-              const actor = `${event.actor_kind || 'actor'} · ${event.actor_label || event.actor_profile_id || 'unknown'}`;
-              const timestamp = Number.isFinite(event.at_unix) ? new Date(event.at_unix * 1000).toLocaleString() : 'unknown time';
-              line.textContent = `${timestamp} · ${transition} · ${actor}`;
-              historyBody.append(line);
-            }
-            history.dataset.loaded = 'true';
-          } catch (_) { historyBody.textContent = 'Could not contact the temporary SSH service.'; }
-        });
-        card.append(history);
-        if (item.status === 'active' && item.username) {
-          const login = document.createElement('p');
-          login.textContent = `SSH account: ${item.username}@${item.host} · port 22 · key ${item.fingerprint}`;
-          card.append(login);
-        }
-        if (item.granted_duration_seconds != null) {
-          const granted = document.createElement('p'); granted.className = 'muted';
-          granted.textContent = `Granted: ${item.granted_capabilities.join(', ') || 'shell only'} · ${item.granted_duration_seconds}s`;
-          card.append(granted);
-        }
-        if (item.status === 'pending') {
-          const review = document.createElement('p'); review.className = 'muted';
-          review.textContent = 'Pending requests can only be reviewed in Approvals.';
-          const link = document.createElement('a'); link.href = '/admin/approvals#pending-ssh-approvals';
-          link.textContent = 'Review this request in Approvals';
-          card.append(review, link);
-        } else if (item.status === 'active' || item.status === 'failed') {
-          const form = document.createElement('form'); const label = document.createElement('label');
-          const confirm = document.createElement('input'); confirm.type = 'checkbox'; confirm.required = true;
-          label.append(confirm, document.createTextNode(item.status === 'failed'
-            ? ' Clean up any partial account created by the failed grant'
-            : ' Revoke and terminate this account'));
-          const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'Revoke access'; form.append(label, button);
-          form.addEventListener('submit', async event => {
-            event.preventDefault(); if (!confirm.checked) return;
-            await submitSshAction(button, item.id,
-              `/api/admin/ssh-access/grants/${encodeURIComponent(item.id)}/revoke`,
-              { expected_version: item.version, confirmed: true }, 'Revocation failed');
-          });
-          card.append(form);
-        }
-        sshAccess.append(card);
-      }
+      records = Array.isArray(body) ? body : body?.items;
+      if (!Array.isArray(records)) { sshAccessList.innerHTML = '<li class="error">The SSH service returned an invalid response.</li>'; if (refreshButton) refreshButton.disabled = false; return; }
+      records.sort((a, b) => (b.created_at_unix || 0) - (a.created_at_unix || 0));
+      renderList(); if (refreshButton) refreshButton.disabled = false;
     };
-    refresh();
+    search.addEventListener('input', renderList); filter.addEventListener('change', renderList);
+    refreshButton?.addEventListener('click', refresh); refresh();
   }
 })();
 "#;
@@ -1478,39 +1565,49 @@ fn render_admin_navigation(current_path: &str) -> String {
     let mut html = String::from(
         "<nav aria-label=\"Platform administration\"><p class=\"brand\">Vapor Platform</p>",
     );
-    let mut current_group = "";
-    for section in MODULES {
-        if section.group != current_group {
-            current_group = section.group;
-            html.push_str(&format!(
-                "<p class=\"nav-group\">{}</p>",
-                escape_html(section.group)
-            ));
+    let group_order = ["Operate", "Ecosystem", "Accounts"];
+    for group in group_order {
+        let sections: Vec<_> = MODULES.iter().filter(|section| section.group == group).collect();
+        if sections.is_empty() {
+            continue;
         }
-        match (section.state, section.path) {
-            (SectionState::Implemented, Some(path)) => {
-                let current = if section_path_matches(path, current_path) {
-                    " aria-current=\"page\""
-                } else {
-                    ""
-                };
-                let services = section.service_ids.join(",");
-                html.push_str(&format!(
-                    "<a href=\"{}\" title=\"{}\" data-admin-services=\"{}\"{}><span>{}</span><small class=\"nav-status status-unknown\" data-nav-status>Checking</small></a>",
-                    escape_html(path),
+        let contains_current = sections.iter().any(|section| {
+            section
+                .path
+                .is_some_and(|path| section_path_matches(path, current_path))
+        });
+        html.push_str(&format!(
+            "<details class=\"nav-section\"{}><summary class=\"nav-group\">{}</summary>",
+            if contains_current { " open" } else { "" },
+            escape_html(group)
+        ));
+        for section in sections {
+            match (section.state, section.path) {
+                (SectionState::Implemented, Some(path)) => {
+                    let current = if section_path_matches(path, current_path) {
+                        " aria-current=\"page\""
+                    } else {
+                        ""
+                    };
+                    let services = section.service_ids.join(",");
+                    html.push_str(&format!(
+                        "<a href=\"{}\" title=\"{}\" data-admin-services=\"{}\"{}><span>{}</span><small class=\"nav-status status-unknown\" data-nav-status>Checking</small></a>",
+                        escape_html(path),
+                        escape_html(section.description),
+                        escape_html(&services),
+                        current,
+                        escape_html(section.name)
+                    ));
+                }
+                (SectionState::Planned, _) => html.push_str(&format!(
+                    "<span class=\"nav-disabled\" aria-disabled=\"true\"><span title=\"{}\">{}</span><small class=\"nav-status status-planned\">Planned</small></span>",
                     escape_html(section.description),
-                    escape_html(&services),
-                    current,
                     escape_html(section.name)
-                ));
+                )),
+                (SectionState::Implemented, None) => {}
             }
-            (SectionState::Planned, _) => html.push_str(&format!(
-                "<span class=\"nav-disabled\" aria-disabled=\"true\"><span title=\"{}\">{}</span><small class=\"nav-status status-planned\">Planned</small></span>",
-                escape_html(section.description),
-                escape_html(section.name)
-            )),
-            (SectionState::Implemented, None) => {}
         }
+        html.push_str("</details>");
     }
     html.push_str("</nav>");
     html
@@ -1592,20 +1689,33 @@ async fn operations_view(headers: axum::http::HeaderMap, view: OperationsView) -
     admin_page_response(StatusCode::OK, operations_page(view))
 }
 
+fn approvals_page_content() -> &'static str {
+    concat!(
+        "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Decision inbox</h2><p class=\"muted\">Only unanswered requests appear here. Each decision is recorded by the service that owns it; deployment execution is tracked separately.</p></div><button id=\"approvals-refresh\" type=\"button\">Refresh</button></div><p id=\"approvals-feedback\" role=\"status\" aria-live=\"polite\"></p></section>",
+        "<details class=\"approval-source\" open><summary>Deployments <span id=\"pending-deploy-count\" class=\"approval-source-count\">Loading…</span></summary><div class=\"approval-source-body\"><div id=\"pending-deploy-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading deployment approvals…</p></div><button id=\"approvals-more-deploy\" type=\"button\" hidden>Load older requests</button></div></details>",
+        "<details class=\"approval-source\"><summary>SSH access <span id=\"pending-ssh-count\" class=\"approval-source-count\">Loading…</span></summary><div class=\"approval-source-body\"><div id=\"pending-ssh-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading SSH access requests…</p></div><button id=\"approvals-more-ssh\" type=\"button\" hidden>Load older requests</button></div></details>",
+        "<details class=\"approval-source\"><summary>Identity permissions <span id=\"pending-identity-count\" class=\"approval-source-count\">Loading…</span></summary><div class=\"approval-source-body\"><p class=\"muted\">Identity list is currently limited to the newest 200 requests.</p><div id=\"pending-identity-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading Identity permission requests…</p></div></div></details>"
+    )
+}
+
 fn operations_page(view: OperationsView) -> String {
     let content = match view {
-        OperationsView::Approvals => "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Pending decisions</h2><p class=\"muted\">Review unanswered requests. Decisions are saved by Platform or Identity, the service that owns each request.</p></div><button id=\"approvals-refresh\" type=\"button\">Refresh</button></div><p id=\"approvals-feedback\" role=\"status\" aria-live=\"polite\"></p></section><section class=\"card\"><h2>Deployments</h2><div id=\"pending-deploy-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading deployment approvals…</p></div><button id=\"approvals-more-deploy\" type=\"button\" hidden>Load older requests</button></section><section class=\"card\"><h2>SSH access</h2><div id=\"pending-ssh-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading SSH access requests…</p></div><button id=\"approvals-more-ssh\" type=\"button\" hidden>Load older requests</button></section><section class=\"card\"><h2>Identity permissions</h2><p class=\"muted\">Identity list is currently limited to the newest 200 requests.</p><div id=\"pending-identity-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading Identity permission requests…</p></div></section>".to_owned(),
+        OperationsView::Approvals => approvals_page_content().to_owned(),
         OperationsView::Deployments => concat!(
-            "<section class=\"card\"><h2>Deployment requests</h2><p class=\"muted\">Review the exact tested revision, CI result, and pinned service revisions. Approving records your decision and attempts to queue that deployment; the request card reports both stages.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment requests…</p></div></section>",
+            "<section class=\"card\"><h2>Execution queue</h2><p class=\"muted\">This is the lifecycle after approval: pinned revisions, dispatch, worker progress, outcome, and eligible recovery actions. New decisions are made in <a href=\"/admin/approvals\">Approvals</a>.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment execution…</p></div></section>",
             "<section class=\"card\"><h2>Latest deploy or restore result</h2><p class=\"muted\">This is the current Platform status pointer. Historical requests are listed separately under History.</p><div id=\"latest-operation-status\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>"
         )
         .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
-        OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately. A host_admin grant connects through that temporary account and provides unrestricted sudo; it does not enable direct root SSH.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
+        OperationsView::TemporaryAccess => "<p class=\"eyebrow\">Operate · Access</p><div class=\"request-queue-header\"><div><h1>SSH access</h1><p class=\"muted\">Inspect temporary machine access, connection details, expiry, and grant history. Review new requests in <a href=\"/admin/approvals#pending-ssh-approvals\">Approvals</a>; this workspace manages grants after the decision.</p></div><button id=\"ssh-access-refresh\" type=\"button\">Refresh</button></div><section class=\"ssh-workbench\" aria-label=\"SSH access workbench\"><div class=\"ssh-list-panel\"><div class=\"ssh-list-toolbar\"><label for=\"ssh-access-search\">Find a request or grant<input id=\"ssh-access-search\" type=\"search\" placeholder=\"Name, purpose, fingerprint, account\" autocomplete=\"off\"></label><label for=\"ssh-access-filter\">Show<select id=\"ssh-access-filter\"><option value=\"active\">Active grants</option><option value=\"all\">All access records</option><option value=\"pending\">Pending review</option><option value=\"history\">Closed history</option></select></label><p id=\"ssh-access-count\" class=\"ssh-list-count\" aria-live=\"polite\">Loading access records…</p></div><ul id=\"ssh-access-list\" class=\"ssh-record-list\" aria-label=\"SSH access records\"><li class=\"muted\">Loading…</li></ul></div><section id=\"ssh-access-detail\" class=\"ssh-detail-panel\" aria-live=\"polite\"><p class=\"muted\">Choose a grant to inspect its details.</p></section></section>".to_owned(),
         OperationsView::History => "<section class=\"card\"><h2>Request and operation history</h2><p class=\"muted\">Read-only Platform deploy/restore outcomes and owner-sourced deployment, access, and Identity request records. Each owning service remains authoritative for its records and decisions; an unavailable source is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><div><button id=\"history-load-more\" type=\"button\" hidden>Load older records</button> <button id=\"history-refresh\" type=\"button\">Refresh records</button></div></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Platform operation</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>success</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option><option value=\"dispatch-claimed\">claimed by worker</option><option value=\"dispatch-completed\">worker completed</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading history sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading history…</p></div></section>".to_owned(),
     };
+    if view == OperationsView::TemporaryAccess {
+        return content;
+    }
     format!(
-        "<p class=\"eyebrow\">Platform · Operations</p><h1>{}</h1>{content}",
+        "<p class=\"eyebrow\">Platform · {}</p><h1>{}</h1>{content}",
+        view.area(),
         view.name(),
         content = content
     )
@@ -1686,6 +1796,13 @@ impl OperationsView {
             Self::Hosting => "Hosting",
             Self::TemporaryAccess => "SSH Access",
             Self::History => "History",
+        }
+    }
+
+    fn area(self) -> &'static str {
+        match self {
+            Self::Approvals | Self::Deployments | Self::Hosting | Self::TemporaryAccess => "Operate",
+            Self::History => "Records",
         }
     }
 }
@@ -2613,7 +2730,7 @@ mod tests {
         assert!(html.contains("id=\"approvals-more-deploy\""));
         assert!(html.contains("id=\"approvals-more-ssh\""));
         assert!(html.contains("Identity list is currently limited to the newest 200 requests"));
-        assert!(html.contains("Decisions are saved by Platform or Identity"));
+        assert!(html.contains("Each decision is recorded by the service that owns it"));
         assert!(html.contains("<h1>Approvals</h1>"));
         let nav = super::render_admin_navigation("/admin/approvals");
         let approvals_link = nav
@@ -2821,17 +2938,51 @@ mod tests {
             .contains("Sign in with an Identity root account to review temporary SSH requests."));
         assert!(script.contains("Your signed-in account does not have the Platform root role."));
         assert!(script.contains("const responseFailure = async (response, fallback) =>"));
-        assert!(script.contains("Review this request in Approvals"));
-        assert!(script
-            .contains("const submitSshAction = async (button, itemId, path, body, fallback) =>"));
-        assert!(script.contains("No response was received; the request may have completed."));
+        assert!(script.contains("Open pending SSH approvals"));
+        assert!(script.contains("const sshAccessList = document.querySelector('#ssh-access-list')"));
+        assert!(script.contains("const matchesFilter = item =>"));
+        assert!(script.contains("No response received. Refresh to verify whether access was revoked."));
         assert!(
             script.contains("/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/events")
         );
-        assert!(script.contains("Access history"));
+        assert!(script.contains("Show request history"));
         assert!(script.contains("if (item.granted_duration_seconds != null)"));
         assert!(script.contains("temporary account + unrestricted sudo"));
         assert!(script.contains("not direct root SSH"));
+    }
+
+    #[test]
+    fn ssh_access_page_is_a_list_and_detail_workbench() {
+        let page = super::operations_page(super::OperationsView::TemporaryAccess);
+        assert!(page.contains("id=\"ssh-access-search\""));
+        assert!(page.contains("id=\"ssh-access-filter\""));
+        assert!(page.contains("id=\"ssh-access-list\""));
+        assert!(page.contains("id=\"ssh-access-detail\""));
+        assert!(page.contains("Active grants"));
+        assert!(page.contains("SSH access workbench"));
+        assert!(!page.contains("Loading access requests and active grants…"));
+    }
+
+    #[test]
+    fn approvals_inbox_collapses_owner_queues_and_shows_live_counts() {
+        let page = super::approvals_page_content();
+        assert!(page.contains("Decision inbox"));
+        assert!(page.contains("class=\"approval-source\" open"));
+        assert!(page.contains("id=\"pending-deploy-count\""));
+        assert!(page.contains("id=\"pending-ssh-count\""));
+        assert!(page.contains("id=\"pending-identity-count\""));
+    }
+
+    #[test]
+    fn control_workflows_are_top_level_navigation_tasks() {
+        let nav = super::render_admin_navigation("/admin/ssh-access");
+        assert!(nav.contains("<summary class=\"nav-group\">Operate</summary>"));
+        assert!(nav.contains("<summary class=\"nav-group\">Ecosystem</summary>"));
+        assert!(nav.contains("<summary class=\"nav-group\">Accounts</summary>"));
+        assert!(nav.contains("href=\"/admin/approvals\""));
+        assert!(nav.contains("href=\"/admin/deployments\""));
+        assert!(nav.contains("href=\"/admin/ssh-access\""));
+        assert!(!nav.contains("class=\"nav-group\">Operations</p>"));
     }
 
     #[tokio::test]
@@ -2899,7 +3050,7 @@ mod tests {
             .split("const deployRequests = document.querySelector('#deploy-requests');")
             .nth(1)
             .unwrap()
-            .split("const sshAccess =")
+            .split("const sshAccessList =")
             .next()
             .unwrap();
         assert!(deployments.contains("item.status !== 'pending'"));
@@ -2909,13 +3060,13 @@ mod tests {
         assert!(deployments.contains("Retry deploy dispatch"));
 
         let ssh_access = script
-            .split("const sshAccess = document.querySelector('#ssh-access');")
+            .split("const sshAccessList = document.querySelector('#ssh-access-list');")
             .nth(1)
             .unwrap()
             .split("const operationHistory =")
             .next()
             .unwrap();
-        assert!(ssh_access.contains("Review this request in Approvals"));
+        assert!(ssh_access.contains("Open pending SSH approvals"));
         assert!(ssh_access.contains("/admin/approvals#pending-ssh-approvals"));
         assert!(!ssh_access.contains("/requests/${encodeURIComponent(item.id)}/approve"));
         assert!(!ssh_access.contains("/requests/${encodeURIComponent(item.id)}/reject"));
