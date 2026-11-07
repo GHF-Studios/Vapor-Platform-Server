@@ -154,6 +154,10 @@ pub(crate) fn router() -> Router {
             post(retry_dispatch),
         )
         .route(
+            "/api/admin/deploy-requests/{id}/retire",
+            post(retire_dispatch),
+        )
+        .route(
             "/api/admin/deploy-requests/{id}/reconcile",
             post(reconcile_execution),
         )
@@ -644,6 +648,69 @@ struct DispatchRequest {
     confirmed: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetireRequest {
+    expected_version: i64,
+    confirmed: bool,
+    reason: String,
+}
+
+async fn retire_dispatch(
+    State(state): State<DeployRequestState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<RetireRequest>,
+) -> Response {
+    let reason = request.reason.trim();
+    if !request.confirmed
+        || request.expected_version < 1
+        || !valid_uuid(&id)
+        || reason.is_empty()
+        || reason.len() > 500
+        || reason.chars().any(char::is_control)
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !same_origin(&state, &headers) {
+        return (StatusCode::FORBIDDEN, "same-origin request required\n").into_response();
+    }
+    let actor_profile_id = match require_root(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    match retire_failed_dispatch(
+        &state.pool,
+        &id,
+        request.expected_version,
+        &actor_profile_id,
+        reason,
+        unix_now(),
+    )
+    .await
+    {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "id": id,
+                "status": "failed",
+                "version": request.expected_version + 1,
+                "detail": "Failed dispatch closed; no deployment worker was queued."
+            })),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::CONFLICT,
+            "only the current approved request with a failed dispatch can be closed\n",
+        )
+            .into_response(),
+        Err(error) => {
+            eprintln!("deploy request {id}: stage=retire category=database_update_failed error={error}");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
+}
+
 async fn retry_dispatch(
     State(state): State<DeployRequestState>,
     headers: HeaderMap,
@@ -1095,11 +1162,44 @@ async fn finish_dispatch_attempt(
     Ok(result.rows_affected() == 1)
 }
 
+async fn retire_failed_dispatch(
+    pool: &SqlitePool,
+    id: &str,
+    expected_version: i64,
+    actor_profile_id: &str,
+    reason: &str,
+    now: i64,
+) -> Result<bool, sqlx::Error> {
+    let decision_reason = format!("Closed after failed dispatch: {reason}");
+    let result_detail = format!(
+        "Closed by the root operator before deployment. No deployment worker was queued. Reason: {reason}"
+    );
+    let result = sqlx::query(
+        "UPDATE platform_deploy_requests
+         SET status = 'failed', version = version + 1,
+             decided_by_profile_id = ?, decided_at_unix = ?, decision_reason = ?,
+             result_detail = ?, dispatch_detail = ?
+         WHERE id = ? AND status = 'approved' AND version = ?
+           AND dispatch_state = 'failed'",
+    )
+    .bind(actor_profile_id)
+    .bind(now)
+    .bind(decision_reason)
+    .bind(result_detail.clone())
+    .bind(result_detail)
+    .bind(id)
+    .bind(expected_version)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 #[cfg(test)]
 mod dispatch_tests {
     use super::{
         begin_dispatch_attempt, expire_requests, finish_dispatch_attempt,
-        normalize_stale_dispatches, retry_eligible, worker_has_progressed,
+        normalize_stale_dispatches, retire_failed_dispatch, retry_eligible,
+        worker_has_progressed,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Row;
@@ -1115,6 +1215,107 @@ mod dispatch_tests {
         sqlx::query("INSERT INTO platform_deploy_requests (id, status, version) VALUES ('r1', 'approved', 3)")
             .execute(&pool).await.unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn operator_can_retire_only_the_current_approved_failed_dispatch() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE platform_deploy_requests (
+                id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL,
+                dispatch_state TEXT NOT NULL, decided_by_profile_id TEXT,
+                decided_at_unix INTEGER, decision_reason TEXT, result_detail TEXT,
+                dispatch_detail TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO platform_deploy_requests
+             (id, status, version, dispatch_state)
+             VALUES ('failed-dispatch', 'approved', 3, 'failed'),
+                    ('uncertain', 'approved', 4, 'unknown'),
+                    ('running', 'executing', 5, 'claimed')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(retire_failed_dispatch(
+            &pool,
+            "failed-dispatch",
+            3,
+            "root-operator",
+            "Do not deploy this superseded revision",
+            1234,
+        )
+        .await
+        .unwrap());
+        assert!(!retire_failed_dispatch(
+            &pool,
+            "uncertain",
+            4,
+            "root-operator",
+            "Do not deploy this revision",
+            1234,
+        )
+        .await
+        .unwrap());
+        assert!(!retire_failed_dispatch(
+            &pool,
+            "running",
+            5,
+            "root-operator",
+            "Do not deploy this revision",
+            1234,
+        )
+        .await
+        .unwrap());
+        assert!(!retire_failed_dispatch(
+            &pool,
+            "failed-dispatch",
+            3,
+            "root-operator",
+            "Stale version must not retire the request",
+            1234,
+        )
+        .await
+        .unwrap());
+
+        let retired = sqlx::query(
+            "SELECT status, version, dispatch_state, decided_by_profile_id,
+                    decided_at_unix, decision_reason, result_detail
+             FROM platform_deploy_requests WHERE id='failed-dispatch'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(retired.get::<String, _>("status"), "failed");
+        assert_eq!(retired.get::<i64, _>("version"), 4);
+        assert_eq!(retired.get::<String, _>("dispatch_state"), "failed");
+        assert_eq!(
+            retired.get::<String, _>("decided_by_profile_id"),
+            "root-operator"
+        );
+        assert_eq!(retired.get::<i64, _>("decided_at_unix"), 1234);
+        assert_eq!(
+            retired.get::<String, _>("decision_reason"),
+            "Closed after failed dispatch: Do not deploy this superseded revision"
+        );
+        assert!(retired
+            .get::<String, _>("result_detail")
+            .contains("No deployment worker was queued"));
+        assert!(!retry_eligible(
+            retired.get("status"),
+            retired.get("dispatch_state"),
+            None,
+            1234,
+        ));
     }
 
     async fn pool_with_expiring_requests() -> sqlx::SqlitePool {

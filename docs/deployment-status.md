@@ -1,5 +1,25 @@
 # Vapor server deployment status
 
+## Failed-dispatch closure and bootstrap handoff (2026-11-07 12:34 UTC)
+
+- The root-console operator retired only request
+  `17e1b3ee-d991-412a-aa41-eb0021d1837d` after its dispatch failure and confirmed
+  there was no active deployment worker. The update was guarded by exact ID,
+  version, status, dispatch state, and commit. It did not start a deployment.
+- The workstation's approved key (`SHA256:rXxD/039aN25aOaqJIFBFveVlgTWd8grNcdJ9ofIg5c`)
+  was tested against both `root` and `leslieghf`; the VPS rejected both SSH
+  logins. No other credentials were tried. The corrected one-time bootstrap
+  still needs to be run from the operator's existing root shell.
+- Platform source now has a root-authorized, version-guarded “close failed
+  dispatch” operation and dashboard action. It is limited to approved requests
+  whose dispatch definitively failed, records the operator and reason, and
+  cannot close uncertain or executing work. This change is local and has not
+  been committed, pushed, or deployed.
+- The full `deploy/scripts/test.sh` completed on Windows via Git Bash, including
+  all Platform and service tests. The embedded admin script parsed with Node;
+  `git diff --check` passed. Existing dead-code warnings remain in shared
+  service crates.
+
 ## Live-surface and queue recheck (2026-11-07 10:49 UTC)
 
 - A fresh public GET probe confirms `/healthz`, `/`, `/api/build-cache/v1/status`,
@@ -56,6 +76,31 @@
   while the active service still runs the binary built at 02:11 UTC and started
   at 10:51 UTC. Source checkout and running runtime therefore differ; the
   current admin frontend has not reached the public site.
+
+## Fresh deploy request and renewed SSH failure (2026-11-07 11:51 UTC)
+
+- The push of Platform `6f6756d3ec6bd120b010f3486dba3b4f7cb069a2` passed
+  composed CI, and GitHub submitted a new full deployment request. The live
+  Platform API rejected it with HTTP 422 because its strict request DTO does
+  not recognize `deployment_scope`; this is consistent with the still-running
+  older server binary and establishes the bootstrap upgrade as the current
+  blocker.
+- The published `main` revision and all eight pinned submodule commits pass
+  `verify-deploy-source.py` locally. A read-only SSH preflight initially
+  succeeded and confirmed the host is healthy, the live checkout is clean at
+  `9b32a02`, Platform and Caddy are active, and 46 GiB remain available.
+- The next SSH connection using the same temporary key fingerprint
+  `SHA256:rXxD/039aN25aOaqJIFBFveVlgTWd8grNcdJ9ofIg5c` was rejected by
+  `sshd` before a session opened. No alternate key or account was tried. The
+  host-side grant row must be checked through the root-only typed helper before
+  continuing the deployment.
+- The operator's next guarded bootstrap stopped before making host changes
+  because request `17e1b3ee-d991-412a-aa41-eb0021d1837d` remained approved even
+  though its dispatch had failed. The operator then retired only that row with
+  an exact ID/version/state/commit guard, after confirming no deployment worker
+  was active. The row is terminally failed; its older commit
+  `12df53dabe6af0802047c646e3bb6f32ae10eff9` must not be retried. The current
+  bootstrap can now be retried against the already-published `6f6756d3` source.
 
 ## Recovery preflight and one approval surface (2026-11-07 09:34 UTC)
 

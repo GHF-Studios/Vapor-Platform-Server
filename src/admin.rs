@@ -1043,9 +1043,10 @@ const JS: &str = r#"
         const requester = document.createElement('p');
         requester.className = 'muted';
         requester.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
+        const retiredDispatch = item.status === 'failed' && item.dispatch_state === 'failed' && String(item.decision_reason || '').startsWith('Closed after failed dispatch:');
         const decisionStage = document.createElement('p');
         decisionStage.className = 'muted';
-        decisionStage.textContent = `Decision: ${item.status === 'pending' ? 'awaiting review' : item.status === 'rejected' ? 'rejected' : item.status === 'expired' ? 'expired' : 'approved and saved'}`;
+        decisionStage.textContent = `Decision: ${item.status === 'pending' ? 'awaiting review' : item.status === 'rejected' ? 'rejected' : item.status === 'expired' ? 'expired' : retiredDispatch ? 'closed before deployment' : item.status === 'failed' ? 'failed' : 'approved and saved'}`;
         const dispatchStage = document.createElement('p');
         dispatchStage.className = 'muted';
         const dispatchLabels = {
@@ -1060,6 +1061,8 @@ const JS: &str = r#"
         const lifecycleLabel = item.status === 'executing' ? 'worker claimed; deployment running' :
           item.status === 'succeeded' ? 'deployment succeeded' :
           item.status === 'failed' && item.dispatch_state === 'unknown' ? 'worker stopped; deployment outcome unknown' :
+          retiredDispatch ? 'closed by operator before deployment' :
+          item.status === 'failed' && item.dispatch_state === 'failed' ? 'dispatch failed before worker claim' :
           item.status === 'failed' ? 'deployment failed' :
           item.status === 'expired' ? 'expired before worker claim' : null;
         dispatchStage.textContent = `Deployment: ${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail && !lifecycleLabel ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
@@ -1101,28 +1104,44 @@ const JS: &str = r#"
         }
         details.append(summaryLabel, list);
         card.append(details);
-        for (const decision of (selectionValid && item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
+        const actions = [];
+        if (selectionValid && item.status === 'approved' && item.retry_eligible) actions.push('dispatch');
+        if (item.status === 'executing') actions.push('reconcile');
+        if (item.status === 'approved' && item.dispatch_state === 'failed') actions.push('retire');
+        for (const decision of actions) {
           const form = document.createElement('form');
           form.className = 'inline';
           const label = document.createElement('label');
           const confirmed = document.createElement('input');
           confirmed.type = 'checkbox';
           confirmed.required = true;
-          const wording = decision === 'dispatch' ? 'Queue this already-approved revision now' : 'I confirmed this worker is no longer running; mark this execution failed without retrying it';
+          const wording = decision === 'dispatch' ? 'Queue this already-approved revision now' : decision === 'reconcile' ? 'I confirmed this worker is no longer running; mark this execution failed without retrying it' : 'I confirmed dispatch failed before a worker was queued; close this request without deploying it';
           label.append(confirmed, document.createTextNode(` ${wording}`));
+          let reason;
+          if (decision === 'retire') {
+            reason = document.createElement('input');
+            reason.type = 'text';
+            reason.required = true;
+            reason.maxLength = 500;
+            reason.setAttribute('aria-label', 'Reason for closing the failed dispatch');
+            reason.placeholder = 'Reason for closing this request';
+          }
           const button = document.createElement('button');
           button.type = 'submit';
-          button.textContent = decision === 'dispatch' ? 'Retry deploy dispatch' : 'Reconcile stopped worker';
-          form.append(label, button);
+          button.textContent = decision === 'dispatch' ? 'Retry deploy dispatch' : decision === 'reconcile' ? 'Reconcile stopped worker' : 'Close failed dispatch';
+          form.append(label);
+          if (reason) form.append(reason);
+          form.append(button);
           form.addEventListener('submit', async event => {
             event.preventDefault();
             if (!confirmed.checked) return;
+            if (reason && !reason.value.trim()) return;
             button.disabled = true;
             try {
               const result = await fetch(`/api/admin/deploy-requests/${encodeURIComponent(item.id)}/${decision}`, {
                 method: 'POST', credentials: 'same-origin', cache: 'no-store',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ expected_version: item.version, confirmed: true })
+                body: JSON.stringify({ expected_version: item.version, confirmed: true, ...(reason ? { reason: reason.value.trim() } : {}) })
               });
               const body = await result.clone().json().catch(() => null);
               const plainText = body ? '' : await result.text().catch(() => '');
@@ -1132,7 +1151,7 @@ const JS: &str = r#"
               const savedStage = decisionSaved
                 ? `Approval saved, but ${dispatchState}: ${body.error.message || 'no further detail was reported.'}${body.error.retry_eligible ? ' A retry is available.' : ''}`
                 : '';
-              const message = savedStage || body?.error?.message || plainText.trim().slice(0, 240) || (result.ok ? 'Action completed.' : `Action failed (${result.status}).`);
+              const message = savedStage || body?.error?.message || body?.detail || plainText.trim().slice(0, 240) || (result.ok ? 'Action completed.' : `Action failed (${result.status}).`);
               actionFeedback.set(item.id, String(message).slice(0, 240));
             } catch (_) {
               actionFeedback.set(item.id, 'The response was lost. Reload the request to see whether the decision or dispatch stage was saved.');
@@ -2814,6 +2833,12 @@ mod tests {
         assert!(
             script.contains("selectionValid && item.status === 'approved' && item.retry_eligible")
         );
+        assert!(script.contains("item.status === 'approved' && item.dispatch_state === 'failed') actions.push('retire')"));
+        assert!(script.contains("Close failed dispatch"));
+        assert!(script.contains("reason: reason.value.trim()"));
+        assert!(script.contains("closed before deployment"));
+        assert!(script.contains("dispatch failed before worker claim"));
+        assert!(script.contains("body?.detail"));
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
     }

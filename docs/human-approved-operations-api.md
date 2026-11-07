@@ -61,6 +61,7 @@ All responses from the request API are `Cache-Control: no-store`.
 | `POST /api/admin/deploy-requests/{id}/approve` | Root browser session, same-origin, explicit confirmation, expected version | Approve one pending ticket |
 | `POST /api/admin/deploy-requests/{id}/reject` | Root browser session, same-origin, explicit confirmation, expected version | Reject one pending ticket |
 | `POST /api/admin/deploy-requests/{id}/dispatch` | Root browser session, same-origin, explicit confirmation, expected version | Retry dispatch only when approval is saved but the worker did not claim the ticket |
+| `POST /api/admin/deploy-requests/{id}/retire` | Root browser session, same-origin, explicit confirmation, expected version, non-empty reason | Close an approved ticket only when dispatch definitively failed before a worker was queued; uncertain or running work cannot be retired |
 | `POST /api/admin/deploy-requests/{id}/reconcile` | Root browser session, same-origin, explicit confirmation, expected version | Mark a claimed request failed only after its request-specific systemd worker is confirmed stopped; never retries it |
 
 The create payload is a strict DTO containing only repository, branch, full
