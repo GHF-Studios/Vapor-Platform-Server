@@ -1004,6 +1004,8 @@ const JS: &str = r#"
       const status = record.statusKey;
       const dispatch = record.dispatchStatusKey;
       if (['failed', 'rejected', 'expired', 'cancelled', 'revoked', 'expired-pending'].includes(status) || ['dispatch-failed', 'dispatch-unknown'].includes(dispatch)) return 'attention';
+      if (record.kind === 'Identity request' && status === 'approved') return 'complete';
+      if (record.kind === 'Temporary access' && status === 'active') return 'active';
       if (['pending', 'approved', 'executing', 'provisioning', 'stale'].includes(status) || ['dispatch-dispatching', 'dispatch-queued', 'dispatch-claimed'].includes(dispatch)) return 'active';
       return ['succeeded', 'success', 'active'].includes(status) || dispatch === 'dispatch-completed' ? 'complete' : 'other';
     };
@@ -3064,6 +3066,8 @@ mod tests {
         assert!(script.contains("className = 'history-workbench'"));
         assert!(script.contains("className = 'history-record-list'"));
         assert!(script.contains("const historyStatus = record =>"));
+        assert!(script.contains("record.kind === 'Identity request' && status === 'approved'"));
+        assert!(script.contains("record.kind === 'Temporary access' && status === 'active'"));
         assert!(script.contains("const isOpenHistoryRecord = (source, item) =>"));
         assert!(script.contains("source.kind !== 'Platform operation' && item.status === 'pending'"));
         assert!(script.contains("if (isOpenHistoryRecord(source, item))"));
