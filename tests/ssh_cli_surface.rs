@@ -14,6 +14,7 @@ fn ssh_help_is_available_on_every_build_host() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("ssh show <request-id>"));
+    assert!(stdout.contains("ssh verify <request-id>"));
     assert!(stdout.contains("ssh grant <request-id>"));
 }
 

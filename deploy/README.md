@@ -259,6 +259,7 @@ terminal for every mutation:
 ```text
 sudo /usr/local/libexec/vapor-platform-ops ssh list
 sudo /usr/local/libexec/vapor-platform-ops ssh show <request-id>
+sudo /usr/local/libexec/vapor-platform-ops ssh verify <request-id>
 sudo /usr/local/libexec/vapor-platform-ops ssh grant <request-id> --capability vapor_deploy --capability vapor_service_control --duration 8h
 sudo /usr/local/libexec/vapor-platform-ops ssh revoke <request-id>
 sudo /usr/local/libexec/vapor-platform-ops ssh reconfigure <request-id>
@@ -268,5 +269,7 @@ Grant prints the fingerprint, purpose, requested and selected scope, and expiry;
 the operator must type the fingerprint exactly. `host_admin` is exclusive and
 requires a second `UNRESTRICTED ROOT` confirmation. Revoke requires typing
 `YES`. Reconfigure explains the revoke-and-new-request process and makes no
-change. Local mutations appear as `local-root` in the SSH audit trail; web
+change. `verify` is read-only and compares an active grant with its managed
+account, authorized key, sudo policy, and expiry timer; it never prints key
+material. Local mutations appear as `local-root` in the SSH audit trail; web
 approvals remain attributed to the Identity profile.

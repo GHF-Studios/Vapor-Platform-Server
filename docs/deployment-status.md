@@ -95,6 +95,28 @@ and must not be read as current host status.
   VPS files or services were changed. The last verified live revision remains
   the one recorded above until a new host check succeeds.
 
+## Main candidate approval and host-key recheck (2026-11-07 16:17 UTC)
+
+- Platform `b1e2d3c874aca2cc9093d77db779238e907a063c` is on `main`; composed
+  `root-ci`, Windows recovery tests, and the deploy-request submission all
+  succeeded in Actions run `42388201962`. The submission job explicitly reports
+  `Pending root approval request created.` This is a pending approval, not a
+  deployment. The live root page still serves the old `<title>Vapor</title>`
+  link page; `/downloads` is current, `/healthz` is healthy, and the protected
+  approval/deployment/SSH pages correctly return `401` without an owner session.
+- The same designated key was offered explicitly to both `root` and the
+  temporary account `vpsssh_240aab1d`; the SSH server rejected both. Its local
+  public fingerprint matches the owner-reported active grant fingerprint.
+  The earlier root-shell `getent` check found that temporary account absent.
+  Repeating a read-only login check at 16:17 UTC with the same identity and
+  `root` was also rejected. This confirms a host/grant mismatch; local key
+  presence and a Platform `active` row do not prove SSH login works. No
+  alternate identity was tried.
+- Do not rerun the older cutover command that rewrites the candidate to
+  `6f6756d`; that revision predates the current approved main candidate. The
+  current deployment path is the owner-approved request for `b1e2d3c`, or a
+  newly reviewed bootstrap pinned to that exact revision.
+
 ## Failed-dispatch closure and bootstrap handoff (2026-11-07 12:46 UTC)
 
 Historical: this section records the state before direct root SSH access and

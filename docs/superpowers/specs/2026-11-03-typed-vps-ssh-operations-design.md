@@ -37,6 +37,11 @@ session token.
 - A local command such as `vapor-platform-ops ssh show <request-id>` displays
   status, fingerprint, purpose, requested/granted capabilities, duration,
   expiry, and computed account name without exposing private material.
+- `... ssh verify <request-id>` is read-only. For an active grant it checks the
+  managed account, exact authorized-key match, expected valid sudo policy,
+  installed/enabled expiry units, and future expiry. It returns an explicit
+  inconsistent result when the database says active but host artifacts do not
+  match; key bytes are never printed.
 - `... ssh grant <request-id> --capability ... --duration ...` accepts only a
   pending, unexpired request, displays the exact key fingerprint and grant
   scope, and requires an explicit confirmation before provisioning. Pending
@@ -91,6 +96,9 @@ session token.
   confirming its exact fingerprint, duration, and selected capabilities.
 - The command reports the resulting account name, host, granted scope, and
   expiry; SSH accepts the dedicated local key.
+- `ssh verify` reports a healthy active grant only when every required host
+  artifact exists and matches the stored grant; otherwise it identifies the
+  host-state mismatch and exits unsuccessfully without changing state.
 - Revoke and expiry remove the managed account, key, sudo policy, timer, and
   active sessions; repeated cleanup is safe.
 - Identity-approved web operations remain supported and audit attribution is

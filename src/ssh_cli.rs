@@ -10,6 +10,9 @@ pub enum SshCommand {
     Show {
         request_id: String,
     },
+    Verify {
+        request_id: String,
+    },
     Grant {
         request_id: String,
         capabilities: Vec<String>,
@@ -35,7 +38,7 @@ impl fmt::Display for CliParseError {
 impl std::error::Error for CliParseError {}
 
 pub fn usage() -> &'static str {
-    "Usage:\n  vapor-platform-ops ssh list\n  vapor-platform-ops ssh show <request-id>\n  vapor-platform-ops ssh grant <request-id> --capability <name> [--capability <name> ...] --duration <1..8h>\n  vapor-platform-ops ssh revoke <request-id>\n  vapor-platform-ops ssh reconfigure <request-id>\n\nCapabilities: vapor_deploy, vapor_service_control, host_admin (exclusive)\nDurations accept seconds, minutes, or hours (for example: 1800, 30m, 8h).\nMutations require root and an interactive confirmation. Grants require typing the displayed fingerprint. Reconfigure requires revoke and a new request."
+    "Usage:\n  vapor-platform-ops ssh list\n  vapor-platform-ops ssh show <request-id>\n  vapor-platform-ops ssh verify <request-id>\n  vapor-platform-ops ssh grant <request-id> --capability <name> [--capability <name> ...] --duration <1..8h>\n  vapor-platform-ops ssh revoke <request-id>\n  vapor-platform-ops ssh reconfigure <request-id>\n\nCapabilities: vapor_deploy, vapor_service_control, host_admin (exclusive)\nDurations accept seconds, minutes, or hours (for example: 1800, 30m, 8h).\nMutations require root and an interactive confirmation. Grants require typing the displayed fingerprint. Reconfigure requires revoke and a new request."
 }
 
 pub fn parse_ssh_args(args: &[String]) -> Result<SshCommand, CliParseError> {
@@ -50,6 +53,9 @@ pub fn parse_ssh_args(args: &[String]) -> Result<SshCommand, CliParseError> {
         "show" if args.len() == 2 => Ok(SshCommand::Show {
             request_id: parse_request_id(&args[1])?,
         }),
+        "verify" if args.len() == 2 => Ok(SshCommand::Verify {
+            request_id: parse_request_id(&args[1])?,
+        }),
         "grant" => parse_grant_args(&args[1..]),
         "revoke" if args.len() == 2 => Ok(SshCommand::Revoke {
             request_id: parse_request_id(&args[1])?,
@@ -57,7 +63,7 @@ pub fn parse_ssh_args(args: &[String]) -> Result<SshCommand, CliParseError> {
         "reconfigure" if args.len() == 2 => Ok(SshCommand::Reconfigure {
             request_id: parse_request_id(&args[1])?,
         }),
-        "list" | "show" | "revoke" | "reconfigure" => {
+        "list" | "show" | "verify" | "revoke" | "reconfigure" => {
             Err(CliParseError("unexpected or missing argument".to_owned()))
         }
         _ => Err(CliParseError("unknown SSH operation".to_owned())),
@@ -236,6 +242,10 @@ mod tests {
             SshCommand::Show {
                 request_id: REQUEST_ID.to_owned()
             }
+        );
+        assert_eq!(
+            format!("{:?}", parse_ssh_args(&args(&["verify", REQUEST_ID]))),
+            format!("Ok(Verify {{ request_id: {REQUEST_ID:?} }})")
         );
         assert_eq!(
             parse_ssh_args(&args(&["revoke", REQUEST_ID])).unwrap(),

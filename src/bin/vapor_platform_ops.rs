@@ -12,6 +12,37 @@ fn valid_deployment_target(value: Option<&str>) -> bool {
 }
 
 #[cfg_attr(not(unix), allow(dead_code))]
+#[derive(Clone, Copy)]
+struct SshGrantHostState {
+    account_present: bool,
+    key_matches: bool,
+    fingerprint_matches: bool,
+    sudo_policy_matches: bool,
+    sudo_policy_valid: bool,
+    timer_unit_present: bool,
+    expiry_service_present: bool,
+    timer_active: bool,
+    timer_enabled: bool,
+    expires_at_unix: Option<i64>,
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn active_ssh_grant_host_state_is_consistent(state: SshGrantHostState, now_unix: i64) -> bool {
+    state.account_present
+        && state.key_matches
+        && state.fingerprint_matches
+        && state.sudo_policy_matches
+        && state.sudo_policy_valid
+        && state.timer_unit_present
+        && state.expiry_service_present
+        && state.timer_active
+        && state.timer_enabled
+        && state
+            .expires_at_unix
+            .is_some_and(|expires| expires > now_unix)
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(serde::Deserialize)]
 struct IdentityAuthorizationDecision {
     allowed: bool,
@@ -204,6 +235,7 @@ mod unix_impl {
             &command,
             super::ssh_cli::SshCommand::List
                 | super::ssh_cli::SshCommand::Show { .. }
+                | super::ssh_cli::SshCommand::Verify { .. }
                 | super::ssh_cli::SshCommand::Reconfigure { .. }
         );
         let pool = SqlitePoolOptions::new()
@@ -249,6 +281,10 @@ mod unix_impl {
             super::ssh_cli::SshCommand::Show { request_id } => {
                 let row = ssh_request_row(&pool, &request_id).await?;
                 print_ssh_request(&row);
+            }
+            super::ssh_cli::SshCommand::Verify { request_id } => {
+                let row = ssh_request_row(&pool, &request_id).await?;
+                verify_ssh_host_state(&row).await?;
             }
             super::ssh_cli::SshCommand::Grant {
                 request_id,
@@ -373,9 +409,141 @@ mod unix_impl {
         pool: &SqlitePool,
         id: &str,
     ) -> Result<sqlx::sqlite::SqliteRow, String> {
-        sqlx::query("SELECT id, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json, requested_duration_seconds, granted_duration_seconds, status, version, created_at_unix, expires_at_unix, operation_detail FROM platform_ssh_access_requests WHERE id=?")
+        sqlx::query("SELECT id, public_key, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json, requested_duration_seconds, granted_duration_seconds, status, version, created_at_unix, expires_at_unix, operation_detail FROM platform_ssh_access_requests WHERE id=?")
             .bind(id).fetch_optional(pool).await.map_err(|_| "could not read SSH request".to_owned())?
             .ok_or_else(|| "SSH request does not exist".to_owned())
+    }
+
+    async fn verify_ssh_host_state(row: &sqlx::sqlite::SqliteRow) -> Result<(), String> {
+        let id: String = row.get("id");
+        let status: String = row.get("status");
+        let username = ssh_username(&id);
+        let host = ssh_access_host();
+        println!("SSH host verification: {username}@{host}");
+        println!("Record status: {status}");
+        if status != "active" {
+            println!("Host provisioning checks apply to active grants only; no changes made.");
+            return Err("SSH host verification requires an active grant".to_owned());
+        }
+
+        let public_key: String = row.get("public_key");
+        let stored_fingerprint: String = row.get("fingerprint");
+        let fingerprint_matches =
+            ssh_ed25519_fingerprint(&public_key).is_some_and(|actual| actual == stored_fingerprint);
+        let granted_capabilities_json: String = row.get("granted_capabilities_json");
+        let capabilities: Vec<String> = serde_json::from_str(&granted_capabilities_json)
+            .map_err(|_| "active grant has invalid capability data".to_owned())?;
+        let account_present = account_exists(&username);
+        let key_path = format!("/home/{username}/.ssh/authorized_keys");
+        let key_matches = std::fs::read_to_string(&key_path)
+            .ok()
+            .is_some_and(|contents| {
+                contents
+                    .lines()
+                    .any(|line| line.trim() == public_key.trim())
+            });
+
+        let sudoers_path = format!("/etc/sudoers.d/vapor-ssh-{id}");
+        let expected_sudoers = sudoers_contents(&username, &capabilities);
+        let sudo_policy_matches = std::fs::read_to_string(&sudoers_path)
+            .is_ok_and(|contents| contents == expected_sudoers);
+        let sudo_policy_valid = sudo_policy_matches
+            && run_command("/usr/sbin/visudo", &["-cf", &sudoers_path])
+                .await
+                .is_ok();
+
+        let timer_name = format!("vapor-ssh-expire-{id}.timer");
+        let timer_path = format!("/etc/systemd/system/{timer_name}");
+        let service_path = format!("/etc/systemd/system/vapor-ssh-expire-{id}.service");
+        let timer_unit_present = managed_path_exists(&timer_path).await.unwrap_or(false);
+        let expiry_service_present = managed_path_exists(&service_path).await.unwrap_or(false);
+        let timer_active = command_output(
+            "/usr/bin/systemctl",
+            &[
+                "show",
+                "--property=ActiveState",
+                "--value",
+                timer_name.as_str(),
+            ],
+        )
+        .await
+        .is_ok_and(|state| state == "active");
+        let timer_enabled = command_output(
+            "/usr/bin/systemctl",
+            &[
+                "show",
+                "--property=UnitFileState",
+                "--value",
+                timer_name.as_str(),
+            ],
+        )
+        .await
+        .is_ok_and(|state| state == "enabled");
+        let expires_at_unix: Option<i64> = row.get("expires_at_unix");
+        let now = unix_now();
+        let consistent = super::active_ssh_grant_host_state_is_consistent(
+            super::SshGrantHostState {
+                account_present,
+                key_matches,
+                fingerprint_matches,
+                sudo_policy_matches,
+                sudo_policy_valid,
+                timer_unit_present,
+                expiry_service_present,
+                timer_active,
+                timer_enabled,
+                expires_at_unix,
+            },
+            now,
+        );
+        println!("Account: {}", state_label(account_present));
+        println!("Authorized key: {}", state_label(key_matches));
+        println!(
+            "Stored key fingerprint: {}",
+            state_label(fingerprint_matches)
+        );
+        println!(
+            "Sudo policy: {}",
+            if sudo_policy_valid {
+                "valid"
+            } else {
+                "missing, mismatched, or invalid"
+            }
+        );
+        println!(
+            "Expiry timer: unit {}, service {}, active {}, enabled {}",
+            state_label(timer_unit_present),
+            state_label(expiry_service_present),
+            state_label(timer_active),
+            state_label(timer_enabled)
+        );
+        println!(
+            "Expiry: {}",
+            expires_at_unix
+                .and_then(chrono_free_iso)
+                .unwrap_or_else(|| "missing or invalid".to_owned())
+        );
+        println!(
+            "Host state: {}",
+            if consistent {
+                "consistent"
+            } else {
+                "INCONSISTENT"
+            }
+        );
+        if consistent {
+            Ok(())
+        } else {
+            Err("active SSH grant does not match its managed host artifacts".to_owned())
+        }
+    }
+
+    fn state_label(value: bool) -> &'static str {
+        if value {
+            "present"
+        } else {
+            "missing"
+        }
     }
 
     async fn expire_pending_request(
@@ -1491,10 +1659,63 @@ fn main() {
 #[cfg(test)]
 mod endpoint_tests {
     use super::{
-        record_stopped_deploy_failure, valid_deployment_target, valid_identity_authz_endpoint,
+        active_ssh_grant_host_state_is_consistent, record_stopped_deploy_failure,
+        valid_deployment_target, valid_identity_authz_endpoint, SshGrantHostState,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Row;
+
+    #[test]
+    fn active_ssh_grant_requires_all_host_artifacts_and_a_future_expiry() {
+        let complete = SshGrantHostState {
+            account_present: true,
+            key_matches: true,
+            fingerprint_matches: true,
+            sudo_policy_matches: true,
+            sudo_policy_valid: true,
+            timer_unit_present: true,
+            expiry_service_present: true,
+            timer_active: true,
+            timer_enabled: true,
+            expires_at_unix: Some(200),
+        };
+        assert!(active_ssh_grant_host_state_is_consistent(complete, 100));
+        assert!(!active_ssh_grant_host_state_is_consistent(
+            SshGrantHostState {
+                account_present: false,
+                ..complete
+            },
+            100
+        ));
+        assert!(!active_ssh_grant_host_state_is_consistent(
+            SshGrantHostState {
+                key_matches: false,
+                ..complete
+            },
+            100
+        ));
+        assert!(!active_ssh_grant_host_state_is_consistent(
+            SshGrantHostState {
+                fingerprint_matches: false,
+                ..complete
+            },
+            100
+        ));
+        assert!(!active_ssh_grant_host_state_is_consistent(
+            SshGrantHostState {
+                timer_enabled: false,
+                ..complete
+            },
+            100
+        ));
+        assert!(!active_ssh_grant_host_state_is_consistent(
+            SshGrantHostState {
+                expires_at_unix: Some(100),
+                ..complete
+            },
+            100
+        ));
+    }
 
     #[tokio::test]
     async fn reconciliation_closes_the_dispatch_lifecycle() {
