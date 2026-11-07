@@ -857,3 +857,36 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   This did not modify the separate `/root/.ssh/authorized_keys` recovery key.
 - CI for the current source branch through `e969970` is green. No application
   deployment or service restart was performed during this host diagnosis.
+
+## Follow-up: expired operator group and deploy queue (2026-11-07, 17:25 UTC)
+
+- The failed transient cleanup was for the separate `leslieghf` membership in
+  `vapor-temp-ssh`. That group still had a passwordless policy for the typed
+  deploy and service-control wrappers. Root removed only `leslieghf` from that
+  group with `gpasswd`; the account's normal login and `sudo` group membership
+  remain. The shared group and its policy remain for temporary grant accounts.
+  The failed transient service state was reset. This does not affect the
+  independent root recovery key.
+- The `vpsssh_240aab1d` account last ran read-only commands successfully at
+  11:49:17 UTC; its SSH login was rejected as an invalid user 35 seconds later.
+  The root-owned `/etc/passwd` timestamp still shows only the 11:06:20 UTC
+  creation time. No auditd event is available, so the disappearance mechanism
+  remains unknown rather than attributable to the group cleanup.
+- Two old approved deployment attempts explain prior service failures. Request
+  `bdf86cf7-f6b5-4681-bc9d-ee644d2ca5a3` reached the server but Platform failed
+  to start because its SQLite audit-trigger migration tried to create an
+  already-existing trigger; restart attempts then encountered a read-only
+  filesystem. Request `7df36dcf-20cb-4d44-a027-09f48c4143f5` failed before
+  deployment because it was a legacy request without an explicit
+  `deployment_scope`; the worker reported a topology/argument mismatch. Neither
+  request is currently active, and the Platform service now runs normally.
+- The live queue currently contains four pending full-services requests for
+  main revisions, including the latest `b1e2d3c`. The older requests are
+  superseded by descendants and should not be approved as rollback targets.
+  The live Platform revision remains `12192d8`; `b1e2d3c` contains later
+  homepage, admin-card, and recovery-retention changes and is the current
+  candidate for owner review. No deployment was queued or started during this
+  inspection.
+- GitHub Actions reports success for the current documentation branch through
+  `a2b78b4` in CI run `42395734773`. This run succeeded. The deployment-status
+  update in this section is documentation-only and was added after that run.
