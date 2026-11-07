@@ -1169,6 +1169,7 @@ const JS: &str = r#"
 
   const deployRequests = document.querySelector('#deploy-requests');
   if (deployRequests) {
+    const isCurrentDeployment = item => ['approved', 'executing'].includes(item.status);
     const actionFeedback = new Map();
     const refreshDeployRequests = async () => {
       let response;
@@ -1188,13 +1189,17 @@ const JS: &str = r#"
         return;
       }
       const items = (Array.isArray(requests) ? requests : (Array.isArray(requests?.items) ? requests.items : []))
-        .filter(item => item && item.status !== 'pending');
+        .filter(item => item && isCurrentDeployment(item));
       if (!items.length) {
-        const link = document.createElement('a'); link.href = '/admin/approvals#pending-deploy-approvals';
-        link.textContent = 'Approvals';
+        const approvalsLink = document.createElement('a'); approvalsLink.href = '/admin/approvals#pending-deploy-approvals';
+        approvalsLink.textContent = 'Approvals';
+        const historyLink = document.createElement('a'); historyLink.href = '/admin/history';
+        historyLink.textContent = 'History';
         deployRequests.replaceChildren(
-          document.createTextNode('No deployment lifecycle records. Pending requests are in '),
-          link,
+          document.createTextNode('No active deployments. Pending approvals are in '),
+          approvalsLink,
+          document.createTextNode('; completed and closed runs are in '),
+          historyLink,
           document.createTextNode('.')
         );
         return;
@@ -3170,6 +3175,9 @@ mod tests {
             "const link = document.createElement('a'); link.href = '/admin/deployments';"
         ));
         assert!(script.contains("const validDeploymentSelection = item =>"));
+        assert!(script.contains("const isCurrentDeployment = item => ['approved', 'executing'].includes(item.status);"));
+        assert!(script.contains(".filter(item => item && isCurrentDeployment(item))"));
+        assert!(script.contains("No active deployments."));
         assert!(script.contains("serviceDeployTargets.has(item.service_target)"));
         assert!(script.contains("document.querySelector('[data-deployment-targets]')"));
         assert!(script.contains("Target: ${deploymentSelectionLabel(item)}"));
@@ -3206,7 +3214,7 @@ mod tests {
             .split("const sshAccessList =")
             .next()
             .unwrap();
-        assert!(deployments.contains("item.status !== 'pending'"));
+        assert!(deployments.contains(".filter(item => item && isCurrentDeployment(item))"));
         assert!(deployments.contains("/admin/approvals#pending-deploy-approvals"));
         assert!(!deployments.contains("Approve deploy"));
         assert!(!deployments.contains("Reject"));
