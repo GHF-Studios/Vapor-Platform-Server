@@ -1,24 +1,26 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-07 22:03 UTC)
+## Current verified state (2026-11-07 22:21 UTC)
 
-- Platform `9db3858dfa66a3177e1bed30a297cc11ef8eee32` is live in `services`
+- Platform `739debf5c136badc8e65e3fd681bea63a8bca77c` is live in `services`
   mode. Caddy, the seven owner services, and the Platform admin gateway all
   report active; `/healthz` returns HTTP 200. This snapshot was checked over
   the designated root SSH identity after the deployment completed.
 - The latest live admin bundle contains the recent Operations changes: terminal
   deployments are routed to History, pending requests are omitted from History,
   and approved Identity requests and active SSH grants use owner-specific
-  status meanings.
-- The enabled `vapor-state-export.timer` is active. Its latest pointer names
-  `vapor-platform-recovery-20261107T210817Z-099af75dac0a.tar.gz` (4,831,329
-  bytes); the archive SHA-256 matches the pointer, and the archive contains its
-  manifest and fresh-host recovery entrypoint. It is pinned to `099af75`, so it
-  predates the subsequent Platform admin deployments; the next hourly export
-  is scheduled for 22:11 UTC.
-- The workstation currently has no removable recovery drive mounted, no
-  `%LOCALAPPDATA%\Vapor\Recovery` directory, and no Vapor recovery-sync
-  scheduled task. The owner-held USB copy and clean-host restore therefore
+  status meanings. `/docs` redirects to `/docs/`, and both the redirect and
+  docs page return successfully.
+- The enabled `vapor-state-export.timer` is active. I also ran its existing
+  one-shot service after deployment so the current pointer now names
+  `vapor-platform-recovery-20261107T222127Z-739debf5c136.tar.gz` (4,878,515
+  bytes), pinned to this exact live Platform revision. Its SHA-256 matches the
+  pointer, the manifest declares services mode and includes the recovery kit,
+  and all nine Caddy/Platform/service units were active after the export.
+- The workstation still has no mounted removable drive, no
+  `%LOCALAPPDATA%\Vapor\Recovery` directory, and no Vapor recovery-sync task.
+  Its `D:` volume is a 1 GiB FAT32 fixed volume, so it is not being treated as
+  the owner's 128 GB USB drive. The owner-held USB copy and clean-host restore
   remain unverified; VPS archive generation alone is not a completed recovery
   path.
 - The Platform repo’s production-topology description is corrected in this
