@@ -122,6 +122,11 @@ for smoke testing only; the intended public endpoint remains
   `deploy/tests/test_backup_to_usb.ps1` exercises catch-up, pointer rejection,
   corrupt downloads, and overlapping runs using local fixtures. VPS checksums
   detect corruption, not a compromised VPS replacing both the archive and index.
+  For new archives, it also verifies and extracts the source-pinned recovery
+  kit into `Recovery-Kit/<root-commit>/`, then atomically writes
+  `Recovery-Kit/latest.json`. Its report marks when an older archive has no
+  embedded kit. The kit contains the exact fresh-host entrypoint, its bootstrap
+  metadata reader, matching checksums, and concise run instructions.
 - `scripts/install-usb-backup-task.ps1`: register an hourly current-user
   Task Scheduler job plus a logon catch-up trigger once the USB and SSH key
   paths are known. The job runs while that Windows account is signed in;
@@ -164,10 +169,10 @@ for smoke testing only; the intended public endpoint remains
   site running but keeps a recovery marker until the owner signs in with Steam
   and GitHub and verifies the owner dashboard; then rerun with
   `--resume --confirm-provider-checks`. Exit code `3` means the restore is
-  complete and waiting for those owner checks. Keep a trusted matching copy of
-  `recover-fresh-host.sh` and `recovery_bundle_metadata.py` on the recovery
-  drive: the USB sync copies archives only. Get both files from the same pinned
-  root commit named in the archive. A failed post-restore recovery
+  complete and waiting for those owner checks. The Windows sync places the
+  matching entrypoint and metadata reader in `Recovery-Kit/<root-commit>/`,
+  alongside its README and file checksums; use that kit folder and archive
+  together. A failed post-restore recovery
   disables and stops the newly deployed Vapor services, the export timer, and
   Caddy, and preserves its marker for review. This
   source path has not yet been exercised on a clean VPS; a successful local

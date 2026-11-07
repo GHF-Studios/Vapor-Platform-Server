@@ -30,12 +30,46 @@ $scpCommand = if ([string]::IsNullOrWhiteSpace($env:VAPOR_USB_TEST_SCP_EXECUTABL
 } else {
     Get-Command -Name $env:VAPOR_USB_TEST_SCP_EXECUTABLE -CommandType Application, ExternalScript -ErrorAction Stop
 }
+$tarCommand = Get-Command tar.exe -CommandType Application -ErrorAction Stop
 $ssh = $sshCommand.Source
 $scp = $scpCommand.Source
+$tar = $tarCommand.Source
 if ([string]::IsNullOrWhiteSpace($ssh) -or [string]::IsNullOrWhiteSpace($scp)) {
     throw 'SSH and SCP must resolve to executable commands or script paths.'
 }
 $keyPath = (Resolve-Path -LiteralPath $SshKey).Path
+
+function Publish-RecoveryKitPointer {
+    param(
+        [string]$KitRoot,
+        [string]$IncomingPath,
+        [object]$Manifest
+    )
+    if (-not (Test-Path -LiteralPath $KitRoot)) {
+        New-Item -ItemType Directory -Path $KitRoot | Out-Null
+    }
+    $rootItem = Get-Item -LiteralPath $KitRoot
+    if (-not $rootItem.PSIsContainer -or
+        ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'USB recovery-kit destination is not a safe directory.'
+    }
+    $pointerPath = Join-Path $KitRoot 'latest.json'
+    if (Test-Path -LiteralPath $pointerPath) {
+        $pointerItem = Get-Item -LiteralPath $pointerPath
+        if ($pointerItem.PSIsContainer -or
+            ($pointerItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $pointerItem.Length -gt 4096) {
+            throw 'Existing USB recovery-kit pointer is not a safe file.'
+        }
+    }
+    $pointerTemp = Join-Path $IncomingPath 'latest-kit.json.partial'
+    [System.IO.File]::WriteAllText(
+        $pointerTemp,
+        ($Manifest | ConvertTo-Json -Depth 4 -Compress) + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    Move-Item -LiteralPath $pointerTemp -Destination $pointerPath -Force
+}
 
 $driveRoot = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($UsbPath))
 if ([string]::IsNullOrWhiteSpace($driveRoot)) {
@@ -80,6 +114,8 @@ $incoming = Join-Path $destination '.incoming'
 New-Item -ItemType Directory -Path $incoming -Force | Out-Null
 Get-ChildItem -LiteralPath $incoming -File -Filter '*.partial' -ErrorAction SilentlyContinue |
     Remove-Item -Force
+Get-ChildItem -LiteralPath $incoming -Directory -Filter '*.partial' -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force
 $sshOptions = @('-i', $keyPath, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10')
 $latestText = & $ssh @sshOptions $target "cat $remoteRoot/latest.json"
 if ($LASTEXITCODE -ne 0) {
@@ -112,6 +148,11 @@ if ($latestPointer.schema_version -ne 1 -or
     [long]$latestPointer.size_bytes -le 0) {
     throw 'The VPS latest-generation pointer has an unsupported or invalid schema.'
 }
+$latestDeclaresRecoveryKit = $latestPointer.PSObject.Properties.Name -contains 'recovery_kit_included'
+if ($latestDeclaresRecoveryKit -and $latestPointer.recovery_kit_included -isnot [bool]) {
+    throw 'The VPS latest-generation pointer has an invalid recovery-kit declaration.'
+}
+$latestHasRecoveryKit = $latestDeclaresRecoveryKit -and $latestPointer.recovery_kit_included
 
 $entriesByName = @{}
 foreach ($entry in $index.archives) {
@@ -247,6 +288,134 @@ foreach ($entry in $index.archives) {
     $copied++
 }
 
+# Materialize the exact recovery entrypoint and its metadata reader from the
+# newest verified bundle. Older generations created before this feature may
+# not carry the kit; keep archive catch-up working and report that explicitly.
+$recoveryKitAvailable = $false
+$recoveryKitCommit = $null
+$latestBundlePath = Join-Path $destination $latestArchive
+$kitStage = Join-Path $incoming ($latestArchive + '.kit.partial')
+if ($latestHasRecoveryKit) {
+    if (Test-Path -LiteralPath $kitStage) {
+        Remove-Item -LiteralPath $kitStage -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $kitStage | Out-Null
+    $kitMembers = @(
+        'vapor-platform-recovery/source/root-commit.txt',
+        'vapor-platform-recovery/source/recovery-kit/README.txt',
+        'vapor-platform-recovery/source/recovery-kit/recover-fresh-host.sh',
+        'vapor-platform-recovery/source/recovery-kit/recovery_bundle_metadata.py',
+        'vapor-platform-recovery/source/recovery-kit/SHA256SUMS'
+    )
+    & $tar -xzf $latestBundlePath -C $kitStage @kitMembers 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The latest generation declares a recovery kit, but its files could not be extracted.'
+    }
+    $kitSource = Join-Path $kitStage 'vapor-platform-recovery\source'
+    $sourceCommitPath = Join-Path $kitSource 'root-commit.txt'
+    $kitSourceDir = Join-Path $kitSource 'recovery-kit'
+    $expectedKitNames = @('README.txt', 'recover-fresh-host.sh', 'recovery_bundle_metadata.py')
+    $checksumPath = Join-Path $kitSourceDir 'SHA256SUMS'
+    if ((Test-Path -LiteralPath $sourceCommitPath -PathType Leaf) -and
+        (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
+        $commitItem = Get-Item -LiteralPath $sourceCommitPath
+        $checksumItem = Get-Item -LiteralPath $checksumPath
+        if (($commitItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            ($checksumItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $commitItem.Length -gt 128 -or $checksumItem.Length -gt 4096) {
+            throw 'Latest recovery archive contains unsafe recovery-kit metadata.'
+        }
+        $recoveryKitCommit = (Get-Content -LiteralPath $sourceCommitPath -Raw).Trim()
+        if ($recoveryKitCommit -notmatch '^[0-9a-f]{40}$') {
+            throw 'Latest recovery archive has an invalid recovery-kit source revision.'
+        }
+        $checksumText = Get-Content -LiteralPath $checksumPath -Raw
+        $expectedHashes = @{}
+        foreach ($line in ($checksumText -split '\r?\n' | Where-Object { $_ -ne '' })) {
+            if ($line -notmatch '^([0-9a-f]{64})  ([A-Za-z0-9_.-]+)$' -or
+                $expectedHashes.ContainsKey($Matches[2])) {
+                throw 'Latest recovery archive has a malformed recovery-kit checksum list.'
+            }
+            $expectedHashes[$Matches[2]] = $Matches[1]
+        }
+        if (@($expectedHashes.Keys | Sort-Object) -join ',' -cne (@($expectedKitNames | Sort-Object) -join ',')) {
+            throw 'Latest recovery archive has an incomplete recovery-kit checksum list.'
+        }
+        $kitHashes = @{}
+        foreach ($name in $expectedKitNames) {
+            $filePath = Join-Path $kitSourceDir $name
+            if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+                throw 'Latest recovery archive is missing a recovery-kit file.'
+            }
+            $file = Get-Item -LiteralPath $filePath
+            if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or $file.Length -gt 1MB) {
+                throw 'Latest recovery archive contains an unsafe or oversized recovery-kit file.'
+            }
+            $actualHash = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualHash -cne $expectedHashes[$name]) {
+                throw 'Latest recovery-kit file failed its embedded checksum.'
+            }
+            $kitHashes[$name] = $actualHash
+        }
+        $kitHashes['SHA256SUMS'] = (Get-FileHash -LiteralPath $checksumPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+        $kitRoot = Join-Path $destination 'Recovery-Kit'
+        if (-not (Test-Path -LiteralPath $kitRoot)) {
+            New-Item -ItemType Directory -Path $kitRoot | Out-Null
+        }
+        if (-not (Test-Path -LiteralPath $kitRoot -PathType Container) -or
+            ((Get-Item -LiteralPath $kitRoot).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'USB recovery-kit destination is not a safe directory.'
+        }
+        $finalKit = Join-Path $kitRoot $recoveryKitCommit
+        if (Test-Path -LiteralPath $finalKit) {
+            if (-not (Test-Path -LiteralPath $finalKit -PathType Container) -or
+                ((Get-Item -LiteralPath $finalKit).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Existing source-pinned recovery kit path is not a safe directory.'
+            }
+            $kitEntries = @(Get-ChildItem -LiteralPath $finalKit -Force)
+            $expectedEntryNames = @($expectedKitNames + 'SHA256SUMS' | Sort-Object)
+            if (@($kitEntries.Name | Sort-Object) -join ',' -cne ($expectedEntryNames -join ',') -or
+                @($kitEntries | Where-Object { $_.PSIsContainer -or ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0) {
+                throw 'Existing source-pinned recovery kit has unexpected entries.'
+            }
+            foreach ($name in $expectedEntryNames) {
+                $existingKitFile = Join-Path $finalKit $name
+                if (-not (Test-Path -LiteralPath $existingKitFile -PathType Leaf) -or
+                    (Get-FileHash -LiteralPath $existingKitFile -Algorithm SHA256).Hash.ToLowerInvariant() -cne $kitHashes[$name]) {
+                    throw 'Existing source-pinned recovery kit differs from the verified archive.'
+                }
+            }
+        } else {
+            Move-Item -LiteralPath $kitSourceDir -Destination $finalKit
+        }
+
+        $kitManifest = [ordered]@{
+            schema_version = 1
+            available = $true
+            source_commit = $recoveryKitCommit
+            archive = $latestArchive
+            archive_sha256 = [string]$latestPointer.sha256
+            files = $kitHashes
+        }
+        Publish-RecoveryKitPointer -KitRoot $kitRoot -IncomingPath $incoming -Manifest $kitManifest
+        $recoveryKitAvailable = $true
+    } else {
+        throw 'The latest generation declares a recovery kit, but required kit metadata is missing.'
+    }
+    Remove-Item -LiteralPath $kitStage -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    $kitManifest = [ordered]@{
+        schema_version = 1
+        available = $false
+        source_commit = $null
+        archive = $latestArchive
+        archive_sha256 = [string]$latestPointer.sha256
+        files = @{}
+    }
+    Publish-RecoveryKitPointer -KitRoot (Join-Path $destination 'Recovery-Kit') -IncomingPath $incoming -Manifest $kitManifest
+}
+
 if ($historicalEntries.Count -gt 0) {
     $auditStateTemp = Join-Path $incoming '.vapor-usb-audit.json.partial'
     [ordered]@{
@@ -355,6 +524,8 @@ $report = [ordered]@{
         Measure-Object -Property Length -Sum).Sum)
     unverified_archives = $unverifiedArchives.Count
     latest_rehashed = $true
+    recovery_kit_available = $recoveryKitAvailable
+    recovery_kit_source_commit = $recoveryKitCommit
     verification_policy = 'latest and one rotating historical archive each sync; all indexed candidates rehashed before pruning'
 }
 $reportTemp = Join-Path $incoming 'last-sync.json.partial'

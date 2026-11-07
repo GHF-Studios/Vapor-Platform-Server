@@ -128,6 +128,7 @@ mkdir -m 0700 "${BUNDLE_ROOT}/state" "${BUNDLE_ROOT}/config" \
   "${BUNDLE_ROOT}/host" "${BUNDLE_ROOT}/source"
 mkdir -m 0700 "${BUNDLE_ROOT}/config/vapor-server" \
   "${BUNDLE_ROOT}/host/caddy" "${BUNDLE_ROOT}/host/systemd"
+mkdir -m 0700 "${BUNDLE_ROOT}/source/recovery-kit"
 
 for service in "${STATEFUL_SERVICES[@]}"; do
   if systemctl is-active --quiet "${service}"; then
@@ -190,6 +191,17 @@ if grep -Eq '^[-+U]' "${BUNDLE_ROOT}/source/submodules.txt"; then
   exit 1
 fi
 
+RECOVERY_KIT_DIR="${BUNDLE_ROOT}/source/recovery-kit"
+for recovery_file in recover-fresh-host.sh recovery_bundle_metadata.py README.txt; do
+  source_path="${SCRIPT_DIR}/${recovery_file}"
+  [ -f "${source_path}" ] && [ ! -L "${source_path}" ] \
+    || { echo "error: required recovery kit source file is missing" >&2; exit 1; }
+  install -o root -g root -m 0600 "${source_path}" "${RECOVERY_KIT_DIR}/${recovery_file}"
+done
+(cd "${RECOVERY_KIT_DIR}" && sha256sum README.txt recover-fresh-host.sh recovery_bundle_metadata.py) \
+  > "${RECOVERY_KIT_DIR}/SHA256SUMS"
+chmod 0600 "${RECOVERY_KIT_DIR}/SHA256SUMS"
+
 export VAPOR_RECOVERY_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 export VAPOR_RECOVERY_DEPLOY_COMMIT="${DEPLOY_COMMIT}"
 export VAPOR_RECOVERY_BRANCH="${VAPOR_BRANCH:-unknown}"
@@ -227,6 +239,7 @@ manifest = {
     "build_outputs_excluded": "true",
     "source_pins_included": "true",
     "config_included": "true",
+    "recovery_kit_included": "true",
     "host_routing_included": "true",
     "included_categories": '["state", "config", "host", "source"]',
 }
@@ -325,6 +338,7 @@ with open(path, "w", encoding="utf-8", newline="\n") as output:
         "sha256": digest,
         "size_bytes": int(size),
         "created_at_utc": created_at,
+        "recovery_kit_included": True,
     }, output, separators=(",", ":"))
     output.write("\n")
 PY

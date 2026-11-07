@@ -128,6 +128,20 @@
 - [x] Add regression checks for staging-before-restore and disabled pre-restore activation.
 - [ ] Run a clean-host restore drill to validate real systemd/package behavior.
 
+## Follow-up Task 8: Carry an exact recovery entrypoint on the USB
+
+- [x] Export the fresh-host coordinator, its pre-checkout metadata reader,
+  a concise operator README, and a SHA-256 list from the same pinned source
+  commit as the archive.
+- [x] Validate kit completeness and file hashes while continuing to accept
+  legacy schema-v2 archives that predate the optional kit.
+- [x] Extract the kit from the latest content-verified archive into a
+  root-commit-specific USB directory and atomically publish its pointer.
+- [x] Cover normal extraction, repeated sync, invalid kit hashes, and legacy
+  archives without a kit in the Windows fixture suite.
+- [ ] Verify the kit on the owner's removable drive and run a clean-host
+  recovery drill.
+
 ## Execution Notes
 
 - The user authorized the unencrypted archive contents and ordinary root SSH access. This does not authorize deleting historical server archives, changing root keys, deploying, or running a destructive restore.
@@ -143,6 +157,10 @@
   the exact recorded root and submodule revisions before it mutates host state.
   It preserves prior state/configuration and reports rollback completion in
   stderr/systemd journal output.
+- New exports include the exact recovery entrypoint, metadata reader, operator
+  README, and embedded SHA-256 list. The Windows sync extracts these into a
+  root-commit-specific folder only after verifying their hashes and writes an
+  atomic current-kit pointer. Older archives without a kit remain copyable.
 - The Windows pull/task scripts exist, but no scheduled task has been registered
   on the owner's PC and no USB copy has been exercised.
 - The Windows fixture suite uses fake SSH/SCP commands and passed locally on

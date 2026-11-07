@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import re
 import sys
@@ -19,6 +20,12 @@ class ValidationError(RuntimeError):
 
 ROOT = "vapor-platform-recovery"
 REQUIRED_CATEGORIES = {"state", "config", "host", "source"}
+RECOVERY_KIT_FILES = {
+    "recover-fresh-host.sh",
+    "recovery_bundle_metadata.py",
+    "README.txt",
+    "SHA256SUMS",
+}
 
 
 def normalized_parts(name: str) -> tuple[str, ...]:
@@ -65,6 +72,8 @@ def validate_manifest_text(
         raise ValidationError("bundle does not declare source pins included")
     if manifest.get("config_included") is not True:
         raise ValidationError("bundle does not declare configuration included")
+    if manifest.get("recovery_kit_included") not in {None, True}:
+        raise ValidationError("bundle recovery kit declaration is invalid")
     categories = manifest.get("included_categories")
     if not isinstance(categories, list) or not all(isinstance(item, str) for item in categories):
         raise ValidationError("bundle category declaration is invalid")
@@ -111,6 +120,7 @@ def validate_bundle(path: pathlib.Path) -> None:
     saw_caddyfile = False
     service_units: set[str] = set()
     deployed_sources_member: tarfile.TarInfo | None = None
+    recovery_kit_members: dict[str, tarfile.TarInfo] = {}
 
     try:
         with tarfile.open(path, "r:gz") as archive:
@@ -139,6 +149,9 @@ def validate_bundle(path: pathlib.Path) -> None:
                 if normalized_name == f"{ROOT}/source/submodules.txt" and member.isfile():
                     saw_submodule_pins = True
                     submodule_member = member
+                kit_prefix = f"{ROOT}/source/recovery-kit/"
+                if normalized_name.startswith(kit_prefix) and member.isfile():
+                    recovery_kit_members[normalized_name[len(kit_prefix):]] = member
                 if normalized_name == f"{ROOT}/host/caddy/Caddyfile" and member.isfile():
                     saw_caddyfile = True
                 if (
@@ -166,6 +179,36 @@ def validate_bundle(path: pathlib.Path) -> None:
             declared_categories, runtime_mode, declared_root_commit, declared_toolchain = validate_manifest_text(
                 manifest_file.read(64 * 1024).decode("utf-8", errors="strict")
             )
+            manifest_stream = archive.extractfile(manifest_member)
+            assert manifest_stream is not None
+            manifest_values = tomllib.loads(manifest_stream.read(64 * 1024).decode("utf-8", errors="strict"))
+
+            if recovery_kit_members or manifest_values.get("recovery_kit_included") is True:
+                if manifest_values.get("recovery_kit_included") is not True:
+                    raise ValidationError("bundle contains an undeclared recovery kit")
+                if set(recovery_kit_members) != RECOVERY_KIT_FILES:
+                    raise ValidationError("bundle recovery kit is incomplete")
+                checksums_member = recovery_kit_members["SHA256SUMS"]
+                checksums_stream = archive.extractfile(checksums_member)
+                if checksums_stream is None or checksums_member.size > 4096:
+                    raise ValidationError("bundle recovery kit checksum file is invalid")
+                checksums_text = checksums_stream.read(4097).decode("ascii", errors="strict")
+                checksums: dict[str, str] = {}
+                for line in checksums_text.splitlines():
+                    match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
+                    if match is None or match.group(2) in checksums:
+                        raise ValidationError("bundle recovery kit checksum file is malformed")
+                    checksums[match.group(2)] = match.group(1)
+                expected_kit_files = RECOVERY_KIT_FILES - {"SHA256SUMS"}
+                if set(checksums) != expected_kit_files:
+                    raise ValidationError("bundle recovery kit checksum list is incomplete")
+                for name in expected_kit_files:
+                    member = recovery_kit_members[name]
+                    if member.size > 1024 * 1024:
+                        raise ValidationError("bundle recovery kit file exceeds its size limit")
+                    stream = archive.extractfile(member)
+                    if stream is None or hashlib.sha256(stream.read(1024 * 1024 + 1)).hexdigest() != checksums[name]:
+                        raise ValidationError("bundle recovery kit checksum does not match")
 
             if not REQUIRED_CATEGORIES.issubset(categories_seen):
                 raise ValidationError("bundle is missing a required recovery category")

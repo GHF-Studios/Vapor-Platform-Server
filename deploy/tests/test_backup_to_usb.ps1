@@ -10,8 +10,49 @@ function Assert-True {
     if (-not $Condition) { throw "ASSERT: $Message" }
 }
 
+function New-RecoveryArchive {
+    param([string]$Root, [string]$ArchiveName, [string]$Payload, [switch]$CorruptKit, [switch]$WithoutKit, [switch]$IncompleteKit)
+
+    $stage = Join-Path $Root ($ArchiveName + '.stage')
+    $recovery = Join-Path $stage 'vapor-platform-recovery'
+    $kit = Join-Path $recovery 'source\recovery-kit'
+    New-Item -ItemType Directory -Path $kit -Force | Out-Null
+    $commit = '0123456789abcdef0123456789abcdef01234567'
+    $files = [ordered]@{
+        'recover-fresh-host.sh' = "#!/usr/bin/env bash`necho recovery`n"
+        'recovery_bundle_metadata.py' = "#!/usr/bin/env python3`nprint('metadata')`n"
+        'README.txt' = "Recovery instructions`n"
+    }
+    [System.IO.File]::WriteAllText((Join-Path $recovery 'source\root-commit.txt'), "$commit`n", [System.Text.UTF8Encoding]::new($false))
+    foreach ($name in $files.Keys) {
+        [System.IO.File]::WriteAllText((Join-Path $kit $name), $files[$name], [System.Text.UTF8Encoding]::new($false))
+    }
+    $hashLines = foreach ($name in $files.Keys) {
+        $digest = (Get-FileHash -LiteralPath (Join-Path $kit $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$digest  $name"
+    }
+    [System.IO.File]::WriteAllText((Join-Path $kit 'SHA256SUMS'), (($hashLines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $recovery 'payload.txt'), $Payload, [System.Text.UTF8Encoding]::new($false))
+    if ($CorruptKit.IsPresent) {
+        $sumPath = Join-Path $kit 'SHA256SUMS'
+        $sumLines = [System.IO.File]::ReadAllLines($sumPath)
+        $sumLines[0] = ('0' * 64) + '  ' + ($sumLines[0].Substring(66))
+        [System.IO.File]::WriteAllLines($sumPath, $sumLines, [System.Text.UTF8Encoding]::new($false))
+    }
+    if ($WithoutKit.IsPresent) {
+        Remove-Item -LiteralPath $kit -Recurse -Force
+    } elseif ($IncompleteKit.IsPresent) {
+        Remove-Item -LiteralPath (Join-Path $kit 'recovery_bundle_metadata.py') -Force
+    }
+    $archivePath = Join-Path $Root $ArchiveName
+    $tar = (Get-Command tar.exe -CommandType Application -ErrorAction Stop).Source
+    & $tar -czf $archivePath -C $stage 'vapor-platform-recovery'
+    if ($LASTEXITCODE -ne 0) { throw "Could not create recovery fixture archive (tar exit $LASTEXITCODE)." }
+    return [System.IO.File]::ReadAllBytes($archivePath)
+}
+
 function New-Fixture {
-    param([string]$Name, [switch]$CorruptLatest)
+    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive)
 
     $root = Join-Path $scratch $Name
     $remote = Join-Path $root 'remote'
@@ -20,8 +61,11 @@ function New-Fixture {
 
     $olderName = 'vapor-platform-recovery-20261106T120000Z-111111111111.tar.gz'
     $latestName = 'vapor-platform-recovery-20261107T120000Z-222222222222.tar.gz'
-    $olderBytes = [System.Text.Encoding]::UTF8.GetBytes("known-good-$Name")
-    $latestBytes = [System.Text.Encoding]::UTF8.GetBytes("latest-good-$Name")
+    $olderBytes = New-RecoveryArchive -Root $remote -ArchiveName $olderName -Payload "known-good-$Name" -WithoutKit:$WithoutRecoveryKit
+    $latestBytes = New-RecoveryArchive -Root $remote -ArchiveName $latestName -Payload "latest-good-$Name" -CorruptKit:$CorruptKit -WithoutKit:$WithoutRecoveryKit -IncompleteKit:$IncompleteKit
+    if ($TruncateLatestArchive.IsPresent) {
+        [Array]::Resize([ref]$latestBytes, [Math]::Max(1, $latestBytes.Length - 32))
+    }
     $wireBytes = if ($CorruptLatest.IsPresent) { [System.Text.Encoding]::UTF8.GetBytes("corrupt-$Name") } else { $latestBytes }
     [System.IO.File]::WriteAllBytes((Join-Path $remote $olderName), $olderBytes)
     [System.IO.File]::WriteAllBytes((Join-Path $remote $latestName), $wireBytes)
@@ -33,6 +77,7 @@ function New-Fixture {
         [ordered]@{ archive = $latestName; sha256 = $latestHash; size_bytes = $latestSize }
     ) }
     $pointer = [ordered]@{ schema_version = 1; archive = $latestName; sha256 = $latestHash; size_bytes = $latestSize }
+    if (-not $WithoutRecoveryKit.IsPresent) { $pointer.recovery_kit_included = $true }
     $index | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $remote 'index.json') -Encoding utf8
     $pointer | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $remote 'latest.json') -Encoding utf8
 
@@ -106,10 +151,61 @@ try {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $incoming 'old.partial'))) 'stale partial file was not cleaned'
     $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
     Assert-True ($report.copied_this_run -eq 2) 'first run should copy both indexed archives'
+    $kitCommit = '0123456789abcdef0123456789abcdef01234567'
+    $kitRoot = Join-Path $fixture.Destination (Join-Path 'Recovery-Kit' $kitCommit)
+    Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'recover-fresh-host.sh') -PathType Leaf) 'fresh-host recovery script was not extracted'
+    Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'recovery_bundle_metadata.py') -PathType Leaf) 'matching metadata helper was not extracted'
+    Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'README.txt') -PathType Leaf) 'recovery instructions were not extracted'
+    Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'SHA256SUMS') -PathType Leaf) 'recovery-kit checksum file was not extracted'
+    $kitPointer = Get-Content -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json') -Raw | ConvertFrom-Json
+    Assert-True ($kitPointer.source_commit -ceq $kitCommit) 'recovery kit pointer does not match the archive source revision'
+    Assert-True ($kitPointer.archive -ceq $fixture.LatestName) 'recovery kit pointer does not identify the latest archive'
+    Assert-True ($kitPointer.files.'recover-fresh-host.sh' -eq (Get-FileHash -LiteralPath (Join-Path $kitRoot 'recover-fresh-host.sh') -Algorithm SHA256).Hash.ToLowerInvariant()) 'recovery kit pointer does not bind the launcher hash'
 
     Invoke-Sync $fixture | Out-Null
     $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
     Assert-True ($report.copied_this_run -eq 0) 'second run should only verify existing archives'
+
+    $legacyPointer = [ordered]@{
+        schema_version = 1
+        archive = $fixture.OlderName
+        sha256 = $fixture.OlderHash
+        size_bytes = $fixture.OlderBytes.Length
+    }
+    $legacyPointer | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $fixture.Remote 'latest.json') -Encoding utf8
+    Invoke-Sync $fixture | Out-Null
+    $kitPointer = Get-Content -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json') -Raw | ConvertFrom-Json
+    Assert-True (-not $kitPointer.available) 'legacy sync did not clear the stale recovery-kit ready state'
+    Assert-True ($kitPointer.archive -ceq $fixture.OlderName) 'legacy recovery-kit status points at the prior source archive'
+    $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
+    Assert-True (-not $report.recovery_kit_available) 'legacy transition still reports a usable recovery kit'
+
+    $fixture = New-Fixture -Name 'corrupt-kit' -CorruptKit
+    $rejected = $false
+    try { Invoke-Sync $fixture | Out-Null } catch { $rejected = $_.Exception.Message -like '*embedded checksum*' }
+    Assert-True $rejected 'a recovery kit with an invalid embedded checksum must be rejected'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json'))) 'invalid kit was published as current'
+
+    $fixture = New-Fixture -Name 'partial-kit' -IncompleteKit
+    $rejected = $false
+    $kitFailure = ''
+    try { Invoke-Sync $fixture | Out-Null } catch { $kitFailure = $_.Exception.Message; $rejected = $kitFailure -like '*declares a recovery kit*' }
+    Assert-True $rejected "a partially present kit declared by the archive pointer must fail sync ($kitFailure)"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Destination 'last-sync.json'))) 'partial kit produced a successful sync report'
+
+    $fixture = New-Fixture -Name 'truncated-kit-archive' -TruncateLatestArchive
+    $rejected = $false
+    $kitFailure = ''
+    try { Invoke-Sync $fixture | Out-Null } catch { $kitFailure = $_.Exception.Message; $rejected = $kitFailure -like '*declares a recovery kit*' }
+    Assert-True $rejected "a truncated archive declared to contain a kit must fail sync ($kitFailure)"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Destination 'last-sync.json'))) 'truncated archive produced a successful sync report'
+
+    $fixture = New-Fixture -Name 'legacy-without-kit' -WithoutRecoveryKit
+    Invoke-Sync $fixture | Out-Null
+    $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
+    Assert-True (-not $report.recovery_kit_available) 'legacy archive without an embedded kit was reported as kit-ready'
+    $kitPointer = Get-Content -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json') -Raw | ConvertFrom-Json
+    Assert-True (-not $kitPointer.available) 'legacy archive without an embedded kit published a ready pointer'
 
     $fixture = New-Fixture -Name 'invalid-pointer'
     $badPointer = [ordered]@{ schema_version = 1; archive = $fixture.LatestName; sha256 = ('0' * 64); size_bytes = 1 }
@@ -178,7 +274,7 @@ try {
             -ErrorAction SilentlyContinue
     }
 
-    Write-Output 'USB recovery sync tests passed (4 scenarios).'
+    Write-Output 'USB recovery sync tests passed (8 scenarios).'
 } finally {
     Remove-Item Env:\VAPOR_USB_TEST_REMOTE -ErrorAction SilentlyContinue
     Remove-Item Env:\VAPOR_USB_TEST_SSH_EXECUTABLE, Env:\VAPOR_USB_TEST_SCP_EXECUTABLE -ErrorAction SilentlyContinue

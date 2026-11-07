@@ -205,17 +205,18 @@ bundle digest and source revision; an interrupted run may be resumed only with
 `--resume` and the same bundle. Resume rechecks the source checkout and replays
 staging and restore. It never cleans unrelated paths.
 
-The USB catch-up currently copies recovery archives, not the two bootstrap
-files (`recover-fresh-host.sh` and `recovery_bundle_metadata.py`) needed to
-start a clean-host recovery. Keep a trusted copy of those files on the recovery
-drive as an explicit operator step. To seed/update that copy, read the pinned
-root commit from `vapor-platform-recovery/source/root-commit.txt` in the
-archive, fetch that exact commit from the canonical GitHub repository on a
-trusted workstation, and copy both files from that checkout together. Do not
-mix bootstrap files from different commits. The coordinator then validates
-the archive and checks out its pinned source/submodules before using the
-archive's validator. A clean-host exercise remains necessary to verify this
-entire chain end to end.
+New recovery exports carry a source-pinned recovery kit inside the archive:
+recover-fresh-host.sh, recovery_bundle_metadata.py, a short operator README,
+and SHA-256 entries for those files. The Windows USB sync extracts the kit
+from the latest content-verified archive into Recovery-Kit/<root-commit>/ and
+atomically updates Recovery-Kit/latest.json only after checking the embedded
+hashes. Its sync report states whether the latest archive supplied a usable
+kit. Older generations without the kit remain copyable but do not produce a
+ready kit pointer. The owner can move the matching kit folder, archive, and
+sidecar to a fresh host without independently finding or downloading bootstrap
+files. The coordinator then checks out the exact recorded source/submodules
+before using the archive validator. A clean-host exercise remains necessary
+to verify this chain end to end.
 
 The final machine check requires Identity to report Steam identity, GitHub
 browser login, and dashboard as configured and ready. These booleans verify

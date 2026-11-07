@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import io
 import pathlib
 import tarfile
@@ -64,7 +65,17 @@ source_pins_included = true
 config_included = true
 host_routing_included = true
 included_categories = ["state", "config", "host", "source"]
+recovery_kit_included = true
 """.encode()
+
+KIT_FILES = {
+    "recover-fresh-host.sh": b"#!/usr/bin/env bash\necho recovery\n",
+    "recovery_bundle_metadata.py": b"#!/usr/bin/env python3\nprint('metadata')\n",
+    "README.txt": b"Recovery instructions\n",
+}
+KIT_SUMS = "".join(
+    f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in KIT_FILES.items()
+).encode()
 
 
 def valid_members() -> list[tuple[str, str | None, bytes | None]]:
@@ -79,6 +90,9 @@ def valid_members() -> list[tuple[str, str | None, bytes | None]]:
         (f"{ROOT}/source", "dir", None),
         (f"{ROOT}/source/root-commit.txt", "file", (REVISION + "\n").encode()),
         (f"{ROOT}/source/submodules.txt", "file", b""),
+        (f"{ROOT}/source/recovery-kit", "dir", None),
+        *[(f"{ROOT}/source/recovery-kit/{name}", "file", payload) for name, payload in KIT_FILES.items()],
+        (f"{ROOT}/source/recovery-kit/SHA256SUMS", "file", KIT_SUMS),
         (f"{ROOT}/host", "dir", None),
         (f"{ROOT}/host/caddy", "dir", None),
         (f"{ROOT}/host/caddy/Caddyfile", "file", b"vapor.example.test {}\n"),
@@ -142,6 +156,20 @@ class StateBundleValidationTests(unittest.TestCase):
         bundle = make_bundle(members)
         with self.assertRaises(validator.ValidationError):
             validator.validate_bundle(bundle)
+
+    def test_rejects_recovery_kit_hash_mismatch(self) -> None:
+        members = valid_members()
+        members = [
+            (name, kind, b"tampered\n" if name.endswith("recovery-kit/README.txt") else payload)
+            for name, kind, payload in members
+        ]
+        with self.assertRaisesRegex(validator.ValidationError, "recovery kit checksum"):
+            validator.validate_bundle(make_bundle(members))
+
+    def test_rejects_partial_recovery_kit(self) -> None:
+        members = [entry for entry in valid_members() if not entry[0].endswith("recovery-kit/README.txt")]
+        with self.assertRaisesRegex(validator.ValidationError, "recovery kit"):
+            validator.validate_bundle(make_bundle(members))
 
 
 if __name__ == "__main__":
