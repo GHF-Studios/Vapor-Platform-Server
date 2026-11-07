@@ -6,7 +6,7 @@ umask 077
 # This script is intentionally pinned to the reviewed Platform/Identity commits.
 readonly ROOT=/opt/vapor-platform-server
 readonly REPOSITORY=https://github.com/GHF-Studios/Vapor-Platform-Server.git
-readonly TARGET_COMMIT=96e650f26ac83c86014ad14c2b934dbaf3c87ee5
+readonly TARGET_COMMIT=12192d85348432ee24d1ce7c02ff2dab6eeded84
 readonly TARGET_IDENTITY=8e1b52790fc47ba94d952175882eff1ea0565952
 readonly STATE_ROOT=/var/lib/vapor-server
 readonly CONFIG_ROOT=/etc/vapor-server
@@ -369,6 +369,10 @@ ssh_route="$(curl --silent --show-error --connect-timeout 3 --max-time 10 -o /de
   -H 'content-type: application/json' --data '{}' \
   https://vapor.ghf-studios.site/api/identity/v1/cli/ssh-authorization/start)"
 [[ "${ssh_route}" =~ ^(400|422)$ ]] || fail ssh_authorization_route_not_ready
+ssh_page_route="$(curl --silent --show-error --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
+  --resolve vapor.ghf-studios.site:443:127.0.0.1 \
+  https://vapor.ghf-studios.site/cli/ssh/authorize)"
+[ "${ssh_page_route}" = 400 ] || fail ssh_authorization_page_route_not_ready
 ops_route="$(curl --silent --show-error --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
   --resolve vapor.ghf-studios.site:443:127.0.0.1 https://vapor.ghf-studios.site/admin/operations)"
 [[ "${ops_route}" =~ ^(200|301|302|401|403)$ ]] || fail public_operations_route_not_ready
@@ -377,6 +381,7 @@ if [ "${state_timer_was_active}" -eq 1 ]; then systemctl start vapor-state-expor
 systemctl is-active --quiet vapor-deploy.timer && fail deploy_timer_unexpectedly_active
 line local_health "${local_health}"
 line ssh_authorization_route_status "${ssh_route}"
+line ssh_authorization_page_route_status "${ssh_page_route}"
 line public_operations_route_status "${ops_route}"
 result=succeeded
 detail=platform_and_identity_ssh_routes_ready
