@@ -109,6 +109,23 @@ class DeployServiceTests(unittest.TestCase):
             DEPLOY.set_runtime_owner_group(pathlib.Path("candidate"), "vapor")
         self.assertEqual(calls, [(pathlib.Path("candidate"), 0, 4242)])
 
+    def test_atomic_copy_assigns_runtime_ownership_only_for_live_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source = root / "source"
+            source.write_bytes(b"binary")
+            backup = root / "backup"
+            runtime = root / "runtime"
+            with mock.patch.object(DEPLOY, "set_runtime_owner_group") as set_owner:
+                DEPLOY.atomic_copy(source, backup)
+                DEPLOY.atomic_copy(source, runtime, runtime_owner=True)
+            self.assertEqual(backup.read_bytes(), b"binary")
+            self.assertEqual(runtime.read_bytes(), b"binary")
+            self.assertEqual(set_owner.call_count, 1)
+            owner_target = set_owner.call_args.args[0]
+            self.assertEqual(owner_target.parent, runtime.parent)
+            self.assertTrue(owner_target.name.startswith(".runtime."))
+
     def test_state_snapshot_and_restore_preserve_file_ownership_on_posix(self) -> None:
         if os.name != "posix" or not hasattr(os, "chown"):
             self.skipTest("POSIX ownership metadata is unavailable")

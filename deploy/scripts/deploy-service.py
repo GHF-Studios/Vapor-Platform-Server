@@ -166,7 +166,13 @@ def set_runtime_owner_group(path: pathlib.Path, group_name: str) -> None:
         raise DeploymentError("could not assign the runtime executable to the service group") from error
 
 
-def atomic_copy(source: pathlib.Path, destination: pathlib.Path, mode: int = 0o750) -> None:
+def atomic_copy(
+    source: pathlib.Path,
+    destination: pathlib.Path,
+    mode: int = 0o750,
+    *,
+    runtime_owner: bool = False,
+) -> None:
     if source.is_symlink() or not source.is_file():
         raise DeploymentError("staged executable is missing or unsafe")
     ensure_parent_directory(destination.parent)
@@ -176,7 +182,8 @@ def atomic_copy(source: pathlib.Path, destination: pathlib.Path, mode: int = 0o7
     try:
         shutil.copy2(source, temporary)
         os.chmod(temporary, mode)
-        set_runtime_owner_group(temporary, os.environ.get("VAPOR_GROUP", "vapor"))
+        if runtime_owner:
+            set_runtime_owner_group(temporary, os.environ.get("VAPOR_GROUP", "vapor"))
         os.replace(temporary, destination)
     finally:
         if temporary.exists():
@@ -350,7 +357,7 @@ def deploy_service(args: argparse.Namespace, runner: CommandRunner | None = None
                 raise DeploymentError("deployed-source manifest path is unsafe")
             shutil.copy2(manifest, backup / "previous-manifest.json")
             previous_manifest = backup / "previous-manifest.json"
-        atomic_copy(built, binary_path)
+        atomic_copy(built, binary_path, runtime_owner=True)
         mutation_started = True
         run_checked(runner, ["systemctl", "start", target["unit"]])
         check_health(runner, target, env.get("VAPOR_DOMAIN", "vapor.ghf-studios.site"))
@@ -370,7 +377,7 @@ def deploy_service(args: argparse.Namespace, runner: CommandRunner | None = None
         try:
             if binary_path is None:
                 raise DeploymentError("previous binary path was not recorded")
-            atomic_copy(backup / "previous-binary", binary_path)
+            atomic_copy(backup / "previous-binary", binary_path, runtime_owner=True)
         except Exception as rollback_error:
             rollback_errors.append(f"binary restore failed: {rollback_error}")
         try:
