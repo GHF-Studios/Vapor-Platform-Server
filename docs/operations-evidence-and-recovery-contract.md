@@ -83,7 +83,12 @@ not release distribution or audit storage.
 Build Cache's service-owned metadata is included, while target snapshots and
 temporary candidate staging are excluded as reproducible build output. All
 active state-writing services are quiesced during archive copying, including
-Registry and Artifact. Credentials/signing keys in the config directory are
+Registry and Artifact. Platform is stopped before its temporary SSH expiry
+timers; the exporter stops those timers and waits for already-queued expiry
+helpers to finish before copying SQLite state. It resumes the services and
+previously active timers after the state copy, and aborts rather than publish a
+snapshot if systemd state cannot be inspected or drained. Credentials/signing
+keys in the config directory are
 part of the intentionally unencrypted recovery archive; logs, manifests,
 dashboard responses, and Git never print their values.
 
@@ -187,10 +192,12 @@ Restore remains a root-only operation. It:
    the bundle, and assumes service binaries have already been built from those
    revisions, before mutation;
 3. takes the deploy/state lock and extracts into a temporary directory;
-4. stops stateful services and the export timer;
+4. stops stateful services, then stops and drains temporary SSH expiry work and
+   the state-export timer before replacing SQLite state;
 5. stages and backs up existing state and configuration;
 6. installs state, `/etc/vapor-server`, Caddy config, and recorded Vapor units;
-7. reapplies ownership/modes, reloads systemd/Caddy, and runs local readiness;
+7. reapplies ownership/modes, reloads systemd/Caddy, restores active-grant expiry
+   timers where applicable, and runs local readiness;
 8. attempts to roll state/configuration back before restarting services if a
    step fails, and stops short if it cannot stop the old services safely;
 9. records restore success/failure and writes the rollback outcome to
@@ -218,6 +225,16 @@ an existing Caddyfile on a new run. It creates a root-owned marker bound to the
 bundle digest and source revision; an interrupted run may be resumed only with
 `--resume` and the same bundle. Resume rechecks the source checkout and replays
 staging and restore. It never cleans unrelated paths.
+
+Temporary SSH accounts, authorized keys, and sudoers fragments are host-local
+and are not copied into a recovery archive. Same-host restore stops and drains
+expiry work before replacing state, then re-arms expiry timers for active grants
+in the restored database. A fresh-host restore marks previously active,
+provisioning, or failed temporary grants as revoked with a `system_recovery`
+audit event, clears their stored public keys and granted scopes, and omits their
+expiry units. Pending requests remain available for a new owner decision. The
+fresh host therefore requires new SSH requests and approvals; it never presents
+an untransferred grant as active access.
 
 New recovery exports carry a source-pinned recovery kit inside the archive:
 recover-fresh-host.sh, recovery_bundle_metadata.py, state-bundle-validate.py,

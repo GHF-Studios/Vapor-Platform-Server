@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "${SCRIPT_DIR}/lib.sh"
+source "${SCRIPT_DIR}/ssh-expiry-quiescence.sh"
 
 require_root
 
@@ -20,6 +21,7 @@ BUNDLE_NAME="vapor-platform-recovery-${TIMESTAMP}-${DEPLOY_COMMIT:0:12}"
 BUNDLE_PATH="${1:-${BACKUP_ROOT}/${BUNDLE_NAME}.tar.gz}"
 BUNDLE_DIR="$(dirname -- "${BUNDLE_PATH}")"
 ACTIVE_SERVICES=()
+ACTIVE_SSH_EXPIRY_TIMERS=()
 
 if [ "${BUNDLE_DIR}" != "${BACKUP_ROOT}" ]; then
   echo "error: recovery archives must be published directly under VAPOR_BACKUP_ROOT" >&2
@@ -119,6 +121,7 @@ finish() {
   trap - EXIT
   set +e
   restart_services
+  restart_temporary_ssh_expiry
   cleanup
   exit "${status}"
 }
@@ -136,6 +139,7 @@ for service in "${STATEFUL_SERVICES[@]}"; do
     systemctl stop "${service}"
   fi
 done
+pause_temporary_ssh_expiry
 
 if [ -d "${VAPOR_STATE_ROOT}" ]; then
   tar \
@@ -256,7 +260,12 @@ if ! restart_services; then
   echo "error: archive copied, but one or more services did not return after quiescing" >&2
   exit 1
 fi
+if ! restart_temporary_ssh_expiry; then
+  echo "error: archive copied, but one or more temporary SSH expiry timers did not return" >&2
+  exit 1
+fi
 ACTIVE_SERVICES=()
+ACTIVE_SSH_EXPIRY_TIMERS=()
 
 ARCHIVE_TMP="${TMP_DIR}/bundle.tar.gz"
 tar -C "${TMP_DIR}" -czf "${ARCHIVE_TMP}" vapor-platform-recovery

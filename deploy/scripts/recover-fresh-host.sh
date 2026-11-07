@@ -381,7 +381,7 @@ export VAPOR_PLATFORM_REVISION="${REVISION}"
 HOST_MUTATION_STARTED=true
 VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_RECOVERY_STAGING=1 \
   bash "${DEPLOY_ROOT}/deploy/scripts/deploy.sh" --approved "${REVISION}"
-bash "${DEPLOY_ROOT}/deploy/scripts/restore-state.sh" --bundle "${BUNDLE}" --yes
+bash "${DEPLOY_ROOT}/deploy/scripts/restore-state.sh" --bundle "${BUNDLE}" --yes --fresh-host
 
 MARKER_TMP="$(mktemp "${RECOVERY_MARKER_ROOT}/fresh-host.pin.XXXXXX")"
 printf 'bundle_sha256=%s\nroot_commit=%s\nphase=awaiting_provider_checks\n' "${BUNDLE_SHA256}" "${REVISION}" > "${MARKER_TMP}"

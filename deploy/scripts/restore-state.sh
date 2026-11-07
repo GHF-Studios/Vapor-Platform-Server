@@ -4,14 +4,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "${SCRIPT_DIR}/lib.sh"
+source "${SCRIPT_DIR}/ssh-expiry-quiescence.sh"
 
 require_root
 
 BACKUP_ROOT="${VAPOR_BACKUP_ROOT:-/var/backups/vapor-server}"
 BUNDLE_PATH=""
 CONFIRMED="false"
+FRESH_HOST_RESTORE="false"
 ACTIVE_SERVICES=()
 ENABLED_SERVICES=()
+ACTIVE_SSH_EXPIRY_TIMERS=()
+PRE_RESTORE_ACTIVE_SSH_EXPIRY_TIMERS=()
+SSH_EXPIRY_QUIESCED="false"
 STATEFUL_SERVICES=(
   vapor-homepage.service vapor-docs.service vapor-identity.service
   vapor-diagnostics.service vapor-registry.service vapor-artifact.service
@@ -42,11 +47,12 @@ RESTORE_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD 2>/dev/null || 
 
 usage() {
   cat >&2 <<'USAGE'
-usage: restore-state.sh --bundle PATH --yes
+usage: restore-state.sh --bundle PATH --yes [--fresh-host]
 
 Restores a schema-v2 Vapor full-platform recovery bundle. It replaces service
 state, server configuration, the Caddyfile, and Vapor systemd units. It keeps
-the previous state/configuration under /var/backups/vapor-server/pre-restore-*.
+the previous state/configuration under /var/backups/vapor-server/pre-restore-*. Use
+--fresh-host when the old host's temporary SSH accounts and keys are not present.
 USAGE
 }
 
@@ -95,6 +101,32 @@ restore_enabled_state_if_loaded() {
   esac
 }
 
+activate_restored_ssh_expiry() {
+  local timer
+  local units
+  local database="${VAPOR_PLATFORM_DB:-${VAPOR_PLATFORM_STATE:-${VAPOR_STATE_ROOT}/platform}/platform.sqlite3}"
+  units="$(python3 "${SCRIPT_DIR}/restored_ssh_expiry_units.py" \
+    "${database}" /etc/systemd/system)" || return 1
+  while IFS= read -r timer; do
+    [ -n "${timer}" ] || continue
+    systemctl enable --now "${timer}" || return 1
+  done <<< "${units}"
+}
+
+restart_previous_ssh_expiry() {
+  local timer
+  local failed=0
+  for timer in "${ACTIVE_SSH_EXPIRY_TIMERS[@]}"; do
+    if [ -f "/etc/systemd/system/${timer}" ] && \
+      [ ! -L "/etc/systemd/system/${timer}" ] && \
+      ! systemctl enable --now "${timer}"; then
+      echo "recovery-restore: could not restart a pre-restore SSH expiry timer" >&2
+      failed=1
+    fi
+  done
+  return "${failed}"
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --bundle)
@@ -104,6 +136,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --yes)
       CONFIRMED="true"
+      shift
+      ;;
+    --fresh-host)
+      FRESH_HOST_RESTORE="true"
       shift
       ;;
     -h|--help)
@@ -235,6 +271,11 @@ chmod 0700 "${PRE_RESTORE_PATH}"
 tar -xzf "${BUNDLE_PATH}" -C "${TMP_DIR}"
 BUNDLE_ROOT="${TMP_DIR}/vapor-platform-recovery"
 
+if [ "${FRESH_HOST_RESTORE}" = "true" ]; then
+  python3 "${SCRIPT_DIR}/reconcile-fresh-host-ssh.py" \
+    "${BUNDLE_ROOT}/state/platform/platform.sqlite3"
+fi
+
 for service in "${STATEFUL_SERVICES[@]}"; do
   if systemctl is-active --quiet "${service}"; then
     ACTIVE_SERVICES+=("${service}")
@@ -280,6 +321,7 @@ rollback() {
   local enabled
   local was_enabled
   local rollback_failed=0
+  local -a previous_timers=()
   set +e
   if [ "${MUTATION_STARTED}" != "true" ]; then return; fi
   ROLLBACK_RESULT="incomplete"
@@ -290,6 +332,16 @@ rollback() {
     echo "recovery-restore: rollback incomplete; could not stop every service" >&2
     return 1
   fi
+  previous_timers=("${PRE_RESTORE_ACTIVE_SSH_EXPIRY_TIMERS[@]}")
+  ACTIVE_SSH_EXPIRY_TIMERS=()
+  if ! pause_temporary_ssh_expiry; then
+    echo "recovery-restore: rollback stopped before state replacement because SSH expiry work could not be quiesced" >&2
+    return 1
+  fi
+  if [ "${SSH_EXPIRY_QUIESCED}" != "true" ]; then
+    previous_timers+=("${ACTIVE_SSH_EXPIRY_TIMERS[@]}")
+  fi
+  ACTIVE_SSH_EXPIRY_TIMERS=("${previous_timers[@]}")
   if [ "${STATE_INSTALLED}" = "true" ] && [ -e "${VAPOR_STATE_ROOT}" ]; then
     rm -rf -- "${VAPOR_STATE_ROOT}" || rollback_failed=1
   fi
@@ -336,6 +388,9 @@ rollback() {
   for service in "${ACTIVE_SERVICES[@]}"; do systemctl start "${service}" || rollback_failed=1; done
   if [ "${CADDY_WAS_ACTIVE}" = "true" ]; then systemctl start caddy.service || rollback_failed=1; fi
   if [ "${rollback_failed}" -eq 0 ]; then
+    restart_previous_ssh_expiry || rollback_failed=1
+  fi
+  if [ "${rollback_failed}" -eq 0 ]; then
     ROLLBACK_RESULT="complete"
     echo "recovery-restore: rollback completed" >&2
   else
@@ -372,6 +427,9 @@ systemctl disable vapor-deploy.timer >/dev/null 2>&1 || true
 stop_if_loaded vapor-deploy.service
 stop_if_loaded vapor-state-export.timer
 for service in "${STATEFUL_SERVICES[@]}"; do stop_if_loaded "${service}"; done
+pause_temporary_ssh_expiry
+PRE_RESTORE_ACTIVE_SSH_EXPIRY_TIMERS=("${ACTIVE_SSH_EXPIRY_TIMERS[@]}")
+SSH_EXPIRY_QUIESCED="true"
 
 mkdir -p "${PRE_RESTORE_PATH}/host/caddy" "${PRE_RESTORE_PATH}/host/systemd" \
   "${PRE_RESTORE_PATH}/config"
@@ -413,7 +471,16 @@ find /etc/systemd/system -maxdepth 1 \( -type f -o -type l \) \
   \( -name 'vapor-*.service' -o -name 'vapor-*.timer' \) -delete
 for unit in "${BUNDLE_ROOT}"/host/systemd/vapor-*; do
   [ -f "${unit}" ] || continue
+  if [ "${FRESH_HOST_RESTORE}" = "true" ]; then
+    case "$(basename -- "${unit}")" in
+      vapor-ssh-expire-*.service|vapor-ssh-expire-*.timer) continue ;;
+    esac
+  fi
   install -D -o root -g root -m 0644 "${unit}" "/etc/systemd/system/$(basename -- "${unit}")"
+done
+for link in /etc/systemd/system/timers.target.wants/vapor-ssh-expire-*.timer; do
+  [ -L "${link}" ] || continue
+  rm -- "${link}"
 done
 
 systemctl daemon-reload
@@ -427,6 +494,9 @@ done
 for service in "${TARGET_SERVICES[@]}"; do
   systemctl enable --now "${service}"
 done
+if [ "${FRESH_HOST_RESTORE}" != "true" ]; then
+  activate_restored_ssh_expiry
+fi
 systemctl enable --now vapor-state-export.timer
 systemctl reload caddy.service
 
