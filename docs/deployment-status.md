@@ -1,5 +1,26 @@
 # Vapor server deployment status
 
+## Latest follow-up (2026-11-07 03:24 UTC)
+
+- The temporary SSH expiry unit `vapor-codex-access-expire.service` is failed
+  since 00:44:16 UTC. Its transient `ExecStart` is
+  `/usr/sbin/deluser leslieghf vapor-temp-ssh`, and its main process exited
+  with status 255. Read-only host checks confirmed `leslieghf` remains a member
+  of `vapor-temp-ssh` and the temporary public key remains in that account's
+  `authorized_keys`; expiry therefore did not complete. The current SSH
+  operator cannot read the system journal or perform root cleanup without
+  interactive authentication, and the workstation's root key is rejected.
+  Root-side journal inspection and revocation are required before treating this
+  grant as expired.
+- The failed transient unit is not created by the tracked per-grant SSH helper
+  or persistent grant-expiry units described in the current design. It is an
+  out-of-band account/group expiry path; reconcile it with the tracked grant
+  lifecycle rather than treating its failure as a regression in the current
+  helper.
+- CI run `42333623616` for branch commit `9255757` completed successfully,
+  including `root-ci`. The dispatcher ID-reporting change is source-only and
+  is not deployed.
+
 ## Directly verified live state (2026-11-07)
 
 This section supersedes earlier status summaries below. The host was inspected
