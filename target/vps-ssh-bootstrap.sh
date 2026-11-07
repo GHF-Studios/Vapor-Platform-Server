@@ -6,7 +6,7 @@ umask 077
 # This script is intentionally pinned to the reviewed Platform/Identity commits.
 readonly ROOT=/opt/vapor-platform-server
 readonly REPOSITORY=https://github.com/GHF-Studios/Vapor-Platform-Server.git
-readonly TARGET_COMMIT=6f6756d3ec6bd120b010f3486dba3b4f7cb069a2
+readonly TARGET_COMMIT=7d075905c49cdc769fc079eebbc97ceace52ba51
 readonly TARGET_IDENTITY=8e1b52790fc47ba94d952175882eff1ea0565952
 readonly STATE_ROOT=/var/lib/vapor-server
 readonly CONFIG_ROOT=/etc/vapor-server
@@ -63,7 +63,8 @@ set_server_mode() {
 }
 
 restore_directory() {
-  local source="$1" destination="$2" failed_copy="${destination}.ssh-bootstrap-failed-${stamp}"
+  local source="$1" destination="$2" failed_copy
+  failed_copy="${destination}.ssh-bootstrap-failed-${stamp}"
   if [ ! -d "${source}" ] || [ -L "${source}" ]; then return 1; fi
   if [ -e "${destination}" ] || [ -L "${destination}" ]; then
     if [ -e "${failed_copy}" ] || [ -L "${failed_copy}" ]; then return 1; fi
