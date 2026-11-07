@@ -6,8 +6,8 @@ umask 077
 # This script is intentionally pinned to the reviewed Platform/Identity commits.
 readonly ROOT=/opt/vapor-platform-server
 readonly REPOSITORY=https://github.com/GHF-Studios/Vapor-Platform-Server.git
-readonly TARGET_COMMIT=45e875acd4c825c30dfe2ab8423a2527dbcc3eb0
-readonly TARGET_IDENTITY=c92ea9e0206dface4a18563d9feb428a0c66c74d
+readonly TARGET_COMMIT=6f6756d3ec6bd120b010f3486dba3b4f7cb069a2
+readonly TARGET_IDENTITY=8e1b52790fc47ba94d952175882eff1ea0565952
 readonly STATE_ROOT=/var/lib/vapor-server
 readonly CONFIG_ROOT=/etc/vapor-server
 readonly BACKUP_ROOT=/var/backups/vapor-server
@@ -69,7 +69,7 @@ rollback() {
   fi
 
   if [ -d "${ROOT}/.git" ] && [ "${old_commit}" != unknown ]; then
-    if ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE=monolith VAPOR_BRANCH=main \
+    if ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE=services VAPOR_BRANCH=main \
       VAPOR_REPO_URL="${REPOSITORY}" CARGO_BUILD_JOBS=1 \
       bash "${ROOT}/deploy/scripts/deploy.sh" --approved "${old_commit}"; then
       rollback_failed=1
@@ -180,7 +180,7 @@ finish() {
 }
 trap finish EXIT
 
-report="$(mktemp /tmp/vapor-ssh-bootstrap.XXXXXX)"
+report="$(mktemp /tmp/vapor-platform-bootstrap.XXXXXX)"
 chmod 0600 "${report}"
 line started_at_utc "${stamp}"
 
@@ -301,7 +301,7 @@ candidate_identity="$(git -C "${candidate}/Vapor-Identity-Server" rev-parse HEAD
 line preflight passed
 line target_on_main yes
 line source_ci verified_previously_for_exact_commit
-line platform_mode monolith
+line platform_mode services
 line state_timer_was_active "${state_timer_was_active}"
 applying=1
 mv -- "${ROOT}" "${legacy}" || fail could_not_preserve_existing_checkout
@@ -309,7 +309,7 @@ old_root_moved=1
 mv -- "${candidate}" "${ROOT}" || fail could_not_install_candidate_checkout
 new_root_installed=1
 
-if ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE=monolith VAPOR_BRANCH=main \
+if ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE=services VAPOR_BRANCH=main \
   VAPOR_REPO_URL="${REPOSITORY}" CARGO_BUILD_JOBS=1 \
   bash "${ROOT}/deploy/scripts/deploy.sh" --approved "${TARGET_COMMIT}"; then
   detail=deployment_command_failed
