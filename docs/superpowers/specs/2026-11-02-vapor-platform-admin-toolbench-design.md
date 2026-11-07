@@ -24,8 +24,9 @@ authority, or release/cache decisions.
 - Registry has public catalog reads but no administration UI yet.
 - Artifact serves signed Vapor application-release downloads; it has no
   administration UI.
-- Build-cache orchestration is a planned separate service concern, not part of
-  the existing Artifact service.
+- Build Cache is a separate service with signed current target snapshots and a
+  root-authorized, read-only inventory. It owns snapshot state; Platform only
+  composes its API and admin routes.
 - Existing platform-boundary notes classify a cross-service admin UI as future
   work. This design supersedes that status for the toolbench direction only;
   service boundaries remain in force.
@@ -39,7 +40,8 @@ authority, or release/cache decisions.
   - Workshop and catalog records, bindings, and publishing status.
   - Identity, linked accounts, roles, sessions/readiness, and audit.
   - Vapor application releases and their manifests/channels.
-  - Build-cache target snapshots and builder status when that service exists.
+  - Build-cache target snapshots, current lock identity, stale-snapshot state,
+    and the latest successful promotion metadata.
 - Keep each section's business rules, state, APIs, and audit records in its
   owning service.
 - Replace routine CLI wizard work with discoverable web workflows while
@@ -286,11 +288,22 @@ complete admin product.
   contract. Platform deploy/restore outcomes are retained in the
   Platform-owned operation-history table and shown as a separately paginated
   History source; this does not create a cross-service request ledger.
-- An Identity request can pass its expiry timestamp while its persisted status
-  remains `pending`; the current expiry transition happens when an approval is
-  attempted. The dashboard may show this as expired-by-time, but must not
-  present it as an active approval or mutate Identity state. Identity still
-  needs to decide and implement its durable expiry transition/audit behavior.
+- Identity owns a background expiry sweep for pending permission requests. It
+  starts immediately after router construction, runs at most 10 batches of 100
+  requests per pass, and waits 60 seconds between passes. It transitions
+  overdue requests to `expired`, increments their version, records the decision
+  timestamp, and writes one `permission_request_expired` audit event per
+  request in the same transaction. Large backlogs continue on later passes.
+  The sweep is idempotent and never changes already-decided requests; the
+  dashboard only displays Identity's persisted result.
+- Build Cache serves only a signed snapshot that exactly matches the active
+  client, lock, toolchain, recipe, and builder-environment configuration. Its
+  admin inventory may label a structurally valid, correctly signed snapshot
+  as stale when its identity no longer matches current configuration; stale
+  snapshots remain unavailable through client download routes. The `current`
+  pointer is the authoritative latest-success record and includes the builder
+  operation ID and promotion time; this is intentionally not presented as a
+  historical audit log.
 
 ### Acceptance bar
 

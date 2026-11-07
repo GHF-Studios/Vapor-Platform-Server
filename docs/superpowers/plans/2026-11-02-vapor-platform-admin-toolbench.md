@@ -149,14 +149,14 @@
 - Test: Build Cache admin-handler tests
 
 **Interfaces:**
-- `GET /admin/build-cache` shows one current snapshot per target, its lock identities/digest, last builder outcome, and whether a target is available.
+- `GET /admin/build-cache` shows each target as current, absent, stale, or unavailable; verified stale metadata is visible for diagnosis but never served to clients. It shows the latest successful promotion ID/time. Builder liveness and failed-run history remain unreported until the builder owns a status contract.
 - The initial Build Cache section is read-only; only the VPS builder pipeline can replace the current snapshot.
 
-- [ ] **Step 1: Add failing tests** `build_cache_admin_shows_current_per_target`, `build_cache_admin_marks_stale_lock`, `build_cache_admin_requires_root`, and `snapshot_promotion_records_audit`.
-- [ ] **Step 2: Run the focused Build Cache tests** and confirm the admin section is missing.
-- [ ] **Step 3: Implement the section against service-owned APIs/state**; do not read snapshot storage from Platform Server.
-- [ ] **Step 4: Confirm no browser route can replace the current snapshot or accept arbitrary user archives**; replacement remains builder-pipeline-only.
-- [ ] **Step 5: Run Build Cache and Platform composition validation**.
+- [x] **Step 1: Add regression/contract tests** for current and stale target state, root authorization, latest promotion outcome metadata, and the lack of browser mutation routes.
+- [x] **Step 2: Run focused Build Cache tests**; the stale-lock regression failed against the old behavior before implementation.
+- [x] **Step 3: Implement the section against Build Cache-owned snapshot state**; Platform does not read snapshot storage.
+- [x] **Step 4: Confirm no browser route can replace the current snapshot or accept arbitrary user archives**; replacement remains builder-pipeline-only.
+- [x] **Step 5: Run Build Cache and Platform composition validation**; builder liveness and failure history remain explicitly deferred until an owner-service status contract exists.
 
 ### Task 7: Add a read-only Platform operations overview
 
@@ -272,8 +272,11 @@ truth for this pass.
   access APIs, and let History load older Platform-owned records on demand.
 - [x] Add durable multi-entry deploy/restore operation history, owned by
   Platform. Do not create a cross-service request ledger.
-- [ ] Identity must define a durable expiry sweep and audit event for pending
-  permission requests that pass their TTL.
+- [x] Identity starts a background expiry sweep with router construction,
+  processes up to 10 batches of 100 per pass, and waits 60 seconds between
+  passes. Each transition increments the version and writes its expiry audit
+  event atomically; large backlogs continue on later passes and already-decided
+  requests are untouched.
 
 ### Phase C: finish service-owned workbenches
 

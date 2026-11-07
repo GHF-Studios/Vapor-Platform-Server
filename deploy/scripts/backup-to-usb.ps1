@@ -39,6 +39,35 @@ if ([string]::IsNullOrWhiteSpace($ssh) -or [string]::IsNullOrWhiteSpace($scp)) {
 }
 $keyPath = (Resolve-Path -LiteralPath $SshKey).Path
 
+function Assert-NoReparsePathComponents {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Description
+    )
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetPathRoot($fullPath)
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        throw "$Description must resolve to a local drive path."
+    }
+    $current = $root
+    $parts = $fullPath.Substring($root.Length).Split([char[]]@('\', '/'), [System.StringSplitOptions]::RemoveEmptyEntries)
+    for ($index = 0; $index -lt $parts.Length; $index++) {
+        $current = Join-Path $current $parts[$index]
+        if (-not (Test-Path -LiteralPath $current)) {
+            break
+        }
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Description contains a reparse point: $current"
+        }
+        if ($index -lt ($parts.Length - 1) -and -not $item.PSIsContainer) {
+            throw "$Description contains a non-directory path component: $current"
+        }
+    }
+}
+
 function Publish-RecoveryKitPointer {
     param(
         [string]$KitRoot,
@@ -71,21 +100,31 @@ function Publish-RecoveryKitPointer {
     Move-Item -LiteralPath $pointerTemp -Destination $pointerPath -Force
 }
 
-$driveRoot = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($UsbPath))
-if ([string]::IsNullOrWhiteSpace($driveRoot)) {
+$fullUsbPath = [System.IO.Path]::GetFullPath($UsbPath)
+if ($fullUsbPath -notmatch '^[A-Za-z]:\\') {
     throw 'USB destination must resolve to a local drive path.'
 }
+$driveRoot = [System.IO.Path]::GetPathRoot($fullUsbPath)
 $drive = [System.IO.DriveInfo]::new($driveRoot)
 if (-not $drive.IsReady) {
     throw 'USB destination drive is not ready.'
 }
-if ($drive.DriveType -ne [System.IO.DriveType]::Removable -and -not $AllowFixedDrive) {
+if ($drive.DriveType -notin @([System.IO.DriveType]::Removable, [System.IO.DriveType]::Fixed)) {
+    throw 'USB destination must be on a local removable or fixed drive.'
+}
+if ($drive.DriveType -eq [System.IO.DriveType]::Fixed -and -not $AllowFixedDrive) {
     throw 'Destination is not reported as a removable drive. Use -AllowFixedDrive only after confirming the USB drive letter.'
 }
-if (-not (Test-Path -LiteralPath $UsbPath -PathType Container)) {
-    New-Item -ItemType Directory -Path $UsbPath -Force | Out-Null
+Assert-NoReparsePathComponents -Path $fullUsbPath -Description 'USB destination path'
+if (-not (Test-Path -LiteralPath $fullUsbPath -PathType Container)) {
+    New-Item -ItemType Directory -Path $fullUsbPath | Out-Null
 }
-$destination = (Resolve-Path -LiteralPath $UsbPath).Path
+Assert-NoReparsePathComponents -Path $fullUsbPath -Description 'USB destination path'
+$destination = (Resolve-Path -LiteralPath $fullUsbPath).Path
+$resolvedDestinationRoot = [System.IO.Path]::GetPathRoot($destination)
+if (-not [string]::Equals($resolvedDestinationRoot, $driveRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Resolved USB destination escaped its selected drive.'
+}
 
 $canonicalDestination = $destination.TrimEnd([char[]]@('\', '/')).ToUpperInvariant()
 $pathHash = [Security.Cryptography.SHA256]::Create()
@@ -111,7 +150,16 @@ if (-not $mutexAcquired) {
 
 try {
 $incoming = Join-Path $destination '.incoming'
-New-Item -ItemType Directory -Path $incoming -Force | Out-Null
+Assert-NoReparsePathComponents -Path $incoming -Description 'USB incoming directory'
+if (-not (Test-Path -LiteralPath $incoming -PathType Container)) {
+    New-Item -ItemType Directory -Path $incoming | Out-Null
+}
+Assert-NoReparsePathComponents -Path $incoming -Description 'USB incoming directory'
+foreach ($incomingItem in Get-ChildItem -LiteralPath $incoming -Force -Recurse) {
+    if (($incomingItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "USB incoming directory contains a reparse point: $($incomingItem.Name)"
+    }
+}
 Get-ChildItem -LiteralPath $incoming -File -Filter '*.partial' -ErrorAction SilentlyContinue |
     Remove-Item -Force
 Get-ChildItem -LiteralPath $incoming -Directory -Filter '*.partial' -ErrorAction SilentlyContinue |

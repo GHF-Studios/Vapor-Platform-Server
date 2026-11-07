@@ -140,6 +140,41 @@ function Invoke-Sync {
 }
 
 try {
+    $fixture = New-Fixture -Name 'destination-junction'
+    $outside = Join-Path $fixture.Root 'redirected-destination'
+    $redirect = Join-Path $fixture.Root 'usb-junction'
+    New-Item -ItemType Directory -Path $outside | Out-Null
+    New-Item -ItemType Junction -Path $redirect -Target $outside | Out-Null
+    $fixture.Destination = $redirect
+    $rejected = $false
+    try { Invoke-Sync $fixture | Out-Null } catch { $rejected = $_.Exception.Message -like '*reparse point*' }
+    Assert-True $rejected 'a USB destination routed through a junction must be rejected'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $outside $fixture.LatestName))) 'destination junction wrote a recovery archive outside the USB path'
+
+    $fixture = New-Fixture -Name 'incoming-junction'
+    $outside = Join-Path $fixture.Root 'redirected-incoming'
+    $incoming = Join-Path $fixture.Destination '.incoming'
+    New-Item -ItemType Directory -Path $outside | Out-Null
+    $sentinelPartial = Join-Path $outside 'outside.partial'
+    Set-Content -LiteralPath $sentinelPartial -Value 'must remain untouched'
+    New-Item -ItemType Junction -Path $incoming -Target $outside | Out-Null
+    $rejected = $false
+    try { Invoke-Sync $fixture | Out-Null } catch { $rejected = $_.Exception.Message -like '*reparse point*' }
+    Assert-True $rejected 'a reparse-point .incoming directory must be rejected'
+    Assert-True (Test-Path -LiteralPath $sentinelPartial) 'incoming junction cleanup deleted a file outside the USB path'
+
+    $fixture = New-Fixture -Name 'nested-incoming-junction'
+    $outside = Join-Path $fixture.Root 'redirected-nested-incoming'
+    $partialDirectory = Join-Path $fixture.Destination '.incoming\stale.partial'
+    New-Item -ItemType Directory -Path $outside, $partialDirectory | Out-Null
+    $sentinelPartial = Join-Path $outside 'outside.partial'
+    Set-Content -LiteralPath $sentinelPartial -Value 'must remain untouched'
+    New-Item -ItemType Junction -Path (Join-Path $partialDirectory 'outside') -Target $outside | Out-Null
+    $rejected = $false
+    try { Invoke-Sync $fixture | Out-Null } catch { $rejected = $_.Exception.Message -like '*reparse point*' }
+    Assert-True $rejected 'a nested partial-directory reparse point must be rejected before cleanup'
+    Assert-True (Test-Path -LiteralPath $sentinelPartial) 'nested incoming junction cleanup modified a file outside the USB path'
+
     $fixture = New-Fixture -Name 'successful-copy'
     $incoming = Join-Path $fixture.Destination '.incoming'
     New-Item -ItemType Directory -Path $incoming | Out-Null
@@ -274,7 +309,7 @@ try {
             -ErrorAction SilentlyContinue
     }
 
-    Write-Output 'USB recovery sync tests passed (8 scenarios).'
+    Write-Output 'USB recovery sync tests passed (11 scenarios).'
 } finally {
     Remove-Item Env:\VAPOR_USB_TEST_REMOTE -ErrorAction SilentlyContinue
     Remove-Item Env:\VAPOR_USB_TEST_SSH_EXECUTABLE, Env:\VAPOR_USB_TEST_SCP_EXECUTABLE -ErrorAction SilentlyContinue
