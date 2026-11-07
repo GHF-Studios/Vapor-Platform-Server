@@ -1,7 +1,37 @@
 # Vapor server deployment status
 
-Last verified: 2026-07-25 Europe/Berlin via GitHub Actions deploy run
-`30139280612` and CI run `30139280620`.
+## Directly verified live state (2026-11-07)
+
+This section supersedes earlier status summaries below. The host was inspected
+over root SSH, and public routes were probed directly.
+
+- The live Platform checkout is `/opt/vapor-platform-server` at
+  `6df33ec06ed1b604ce1ea49510f9b13ddd91162c`, in `monolith` mode. The current
+  approved source candidate `a8462945af4b16befd9e94964917cad15e33cfd6` is not
+  deployed.
+- `vapor-platform-server`, `caddy`, and `vapor-state-export.timer` are active.
+  Platform listens on loopback port `7110`; `/healthz` returns HTTP 200 locally
+  and through `https://vapor.ghf-studios.site/healthz`. The public homepage
+  returns HTTP 200. `/health` returns 404; `/healthz` is the health route.
+- The latest operation record reports a successful monolith deploy of
+  `6df33ec` on 2026-11-06. Two older request-scoped deploy units remain failed;
+  they are historical failures, not currently running workers.
+- Platform's deployment database has request
+  `bdf86cf7-f6b5-4681-bc9d-ee644d2ca5a3` pending for `a846294`. Its dispatch
+  state is `not_attempted`; it has not been approved or dispatched.
+- GitHub Actions run `42319756537` for `main` completed successfully: composed
+  Platform CI passed and the pending approval request was created. The earlier
+  CI failure on `d5e01da` was a recursive-checkout failure because the pinned
+  Identity commit was not fetchable from its remote at that time. The later
+  successful recursive checkout proves that pin is now published and fetchable.
+- The VPS contains retained `.tar.gz` state archives, but the live backup
+  directory does not currently contain the new export's checksum sidecars,
+  `index.json`, or `latest.json`. The new index/verification behavior is source
+  only until the candidate is approved and deployed. The owner's USB was not
+  connected during this check, so USB sync and restore remain unverified.
+
+Last verified legacy baseline: 2026-07-25 Europe/Berlin via GitHub Actions
+deploy run `30139280612` and CI run `30139280620`.
 
 This records the last verified live VPS state, not the current source tree.
 Changes made after that deployment are not considered deployed until a later
