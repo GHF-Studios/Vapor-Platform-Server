@@ -26,15 +26,30 @@ over root SSH, and local and public health checks were run after recovery.
 - The request record is `status=succeeded`, while its dispatch substate remains
   `failed` because the dashboard helper did not queue it; the direct root start
   was not represented in that substate. This is a known record/presentation
-  inconsistency, not a failed deployment. The helper's structured failure
-  detail is currently discarded by the deployed Platform binary, so its exact
-  cause is not yet established.
+  inconsistency, not a failed deployment. The older binary discarded the
+  helper's structured failure detail. The deployed `072c87c` binary now logs a
+  bounded structured helper failure reason for future dispatch attempts.
 - A follow-up request workflow for Platform commit `f78f236` passed its full
   composed Platform CI job, then failed while submitting the new request:
   the live API returned HTTP 422 because its deployed request schema does not
   recognize `server_mode`. This confirms the host is still running the older
   request contract and cannot yet accept the target-pinned deployment request.
   No request for `f78f236` was created by that workflow.
+- The next workflow for `072c87c` also passed composed CI and failed at request
+  creation with the same HTTP 422. Its submission occurred at 02:08 UTC, before
+  the bootstrap deployment below completed; it is not evidence that the updated
+  server still rejects the new request shape.
+- After that workflow failed, the exact CI-tested `072c87c` root commit was
+  installed through the owner-authorized bootstrap path, retaining `monolith`
+  mode. The deployment completed and recorded a successful operation. The live
+  checkout is at that commit with its pinned submodules; the Platform service
+  is active, local and public `/healthz` returned `ok`, public `/admin` returned
+  HTTP 200, and the SQLite integrity check returned `ok`. No services-mode
+  topology change was performed.
+- The deployed API now contains the target-aware request schema. A new main CI
+  run is needed to verify that it accepts `server_mode` and creates the pending
+  services-mode approval request. Such a request must remain pending for owner
+  review; this bootstrap did not approve or dispatch the topology switch.
 - A pre-repair SQLite backup is retained at
   `/var/backups/vapor-server/platform-pre-repair-20261107T010500Z.sqlite3`;
   the failed candidate binary is retained under
@@ -158,14 +173,11 @@ The current source pins the deployment topology (`services` or
 `monolith`) inside each immutable approval request. New CI requests target the
 approved independent-services architecture; the dashboard displays the target
 and refuses approval of legacy requests without one; the worker verifies and
-deploys only the recorded target. The fixed helper failure reason is also
-recorded in Platform logs when the helper returns a bounded structured error.
-Commit `f78f236` is pushed to `main`; its composed Platform CI test job passed,
-but the follow-up request job failed with the live-schema mismatch documented
-above. This source is therefore pushed but not deployed. Local follow-up edits
-also prevent retrying targetless legacy requests in the API and dashboard, and
-make the root helper enforce an explicit supported target. Those follow-up
-edits are not yet committed or pushed.
+deploys only the recorded target. The targetless-retry guards in the API and
+dashboard and the explicit target check in the root helper are included in
+`072c87c`. That exact commit is now deployed in `monolith` mode after the old
+API rejected `server_mode`; the 02:08 UTC CI failure predated that installation.
+The next CI submission is the verification point for the updated API contract.
 
 ## Verified deployed source
 
