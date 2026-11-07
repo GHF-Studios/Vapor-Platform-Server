@@ -75,6 +75,7 @@ class RestoredSshExpiryUnitsTests(unittest.TestCase):
         failed_revoke_id = "e304fa3d-6d3d-44c9-9680-c97f6538de57"
         interrupted_id = "bf915d54-655f-4144-9abc-07f6916a378b"
         incomplete_grant_id = "da10fd21-ab4f-41c5-acdc-78c77e5a3124"
+        unknown_failure_id = "3d0cd537-4046-44dc-bcd2-8ef4384459ef"
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             database = root / "platform.sqlite3"
@@ -89,10 +90,11 @@ class RestoredSshExpiryUnitsTests(unittest.TestCase):
                     "INSERT INTO platform_ssh_access_requests VALUES (?,?,?,?)",
                     [
                         (active_id, "active", 500, None),
-                        (clean_grant_id, "failed", 500, "grant helper failed: could not create temporary account"),
+                        (clean_grant_id, "failed", 500, "grant helper failed: helper reported failure: could not create temporary account"),
                         (failed_revoke_id, "failed", 500, "revocation helper failed; access may remain active"),
                         (interrupted_id, "provisioning", 500, "granting"),
                         (incomplete_grant_id, "failed", 500, "grant helper failed: grant setup failed and rollback was incomplete; access artifacts may remain"),
+                        (unknown_failure_id, "failed", 500, "grant helper failed: privileged helper timed out"),
                     ],
                 )
                 connection.commit()
@@ -106,11 +108,23 @@ class RestoredSshExpiryUnitsTests(unittest.TestCase):
                 text=True,
                 check=False,
             )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("missing its managed expiry unit", result.stderr)
+            for suffix in ("timer", "service"):
+                (unit_directory / f"vapor-ssh-expire-{unknown_failure_id}.{suffix}").write_text("[Unit]\n")
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), str(database), str(unit_directory)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
                 result.stdout.strip().splitlines(),
                 [
                     f"vapor-ssh-expire-{active_id}.timer",
+                    f"vapor-ssh-expire-{unknown_failure_id}.timer",
                     f"vapor-ssh-expire-{interrupted_id}.timer",
                     f"vapor-ssh-expire-{incomplete_grant_id}.timer",
                     f"vapor-ssh-expire-{failed_revoke_id}.timer",

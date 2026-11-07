@@ -145,7 +145,7 @@ fn parse_root_operation_output(
     if result.ok {
         Ok(())
     } else {
-        Err(result.detail)
+        Err(format!("helper reported failure: {}", result.detail))
     }
 }
 
@@ -1054,7 +1054,7 @@ mod tests {
         let failure = br#"{"ok":false,"operation_id":"request-1","state":"failed","detail":"rollback incomplete"}"#;
         assert_eq!(
             parse_root_operation_output(false, failure, expected_id, "active"),
-            Err("rollback incomplete".to_owned())
+            Err("helper reported failure: rollback incomplete".to_owned())
         );
 
         let mismatched_id =

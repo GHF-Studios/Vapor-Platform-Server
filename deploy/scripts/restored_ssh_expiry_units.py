@@ -32,7 +32,7 @@ def restored_ssh_expiry_timer_units(database: pathlib.Path, unit_directory: path
         if (
             status == "failed"
             and isinstance(operation_detail, str)
-            and operation_detail.startswith("grant helper failed:")
+            and operation_detail.startswith("grant helper failed: helper reported failure: ")
             and "rollback was incomplete" not in operation_detail.lower()
         ):
             continue
