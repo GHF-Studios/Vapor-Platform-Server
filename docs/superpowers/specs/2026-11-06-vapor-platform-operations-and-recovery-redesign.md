@@ -298,6 +298,17 @@ pagination/history.
   typed, bounded view data. It must not parse and rewrite arbitrary service
   HTML. If a service renders its own page, it does so within an explicit shared
   layout contract, not by an HTML marker plus whole-body buffering.
+- The first HTML-fragment contract is
+  `application/vnd.vapor.admin-page.v1+html; charset=utf-8`: the owner returns
+  only the contents of the page's `<main>` region, while Platform supplies the
+  document, navigation, heading/status frame, CSS, and JavaScript. Platform
+  accepts this media type only for a known implemented module path, applies the
+  8 MiB bound, preserves the owner's status, and forces `private, no-store`.
+  The owner remains responsible for authentication, authorization, auditing,
+  and safe HTML encoding. Legacy full documents may use the old wrapper only
+  while their service is being migrated; they are not the new contract.
+- For independently deployed services, deploy the Platform contract consumer
+  before an owner begins returning v1 fragments. Roll back in reverse order.
 - Browser session/authentication is shared-origin and protected against CSRF;
   owner services re-check authorization on every mutation. A hidden/disabled
   button is not security.

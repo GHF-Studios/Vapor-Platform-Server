@@ -17,6 +17,7 @@ const DEFAULT_IDENTITY_AUTHZ_URL: &str =
     "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check";
 
 const MAX_ADMIN_PAGE_BYTES: usize = 8 * 1024 * 1024;
+const ADMIN_PAGE_FRAGMENT_CONTENT_TYPE: &str = "application/vnd.vapor.admin-page.v1+html";
 
 struct AdminSection {
     group: &'static str,
@@ -1284,7 +1285,55 @@ pub async fn shell_middleware(request: Request, next: Next) -> Response {
     let is_admin_document = request.method() == axum::http::Method::GET
         && (path == "/admin" || path.starts_with("/admin/"))
         && !path.starts_with("/admin/assets/");
-    let response = next.run(request).await;
+    let mut response = next.run(request).await;
+    let is_admin_fragment = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim() == ADMIN_PAGE_FRAGMENT_CONTENT_TYPE);
+    if is_admin_document && is_admin_fragment {
+        if response.status() == StatusCode::NO_CONTENT
+            || response.status() == StatusCode::NOT_MODIFIED
+        {
+            response.headers_mut().remove(CONTENT_TYPE);
+            response
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+            return response;
+        }
+        let (parts, body) = response.into_parts();
+        let bytes = match to_bytes(body, MAX_ADMIN_PAGE_BYTES).await {
+            Ok(bytes) => bytes,
+            Err(_) => return admin_shell_error(StatusCode::BAD_GATEWAY, &path),
+        };
+        let Ok(fragment) = String::from_utf8(bytes.to_vec()) else {
+            return admin_shell_error(StatusCode::BAD_GATEWAY, &path);
+        };
+        let Some(page) = render_admin_fragment_document(&fragment, &path) else {
+            return admin_shell_error(StatusCode::BAD_GATEWAY, &path);
+        };
+        let mut response = Response::from_parts(parts, Body::from(page));
+        response.headers_mut().remove(CONTENT_LENGTH);
+        response.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        for header in [
+            "content-encoding",
+            "content-range",
+            "accept-ranges",
+            "etag",
+            "last-modified",
+            "content-disposition",
+        ] {
+            response.headers_mut().remove(header);
+        }
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+        return response;
+    }
     if !is_admin_document
         || !response
             .headers()
@@ -1318,6 +1367,42 @@ pub async fn shell_middleware(request: Request, next: Next) -> Response {
         .headers
         .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
     Response::from_parts(parts, Body::from(wrapped))
+}
+
+fn render_admin_fragment_document(fragment: &str, current_path: &str) -> Option<String> {
+    let section = MODULES
+        .iter()
+        .find(|section| section.path == Some(current_path))?;
+    if !matches!(section.state, SectionState::Implemented) {
+        return None;
+    }
+    let mut html = String::with_capacity(fragment.len() + 1800);
+    html.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>");
+    html.push_str(&escape_html(section.name));
+    html.push_str(" · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><a class=\"skip-link\" href=\"#admin-content\">Skip to content</a><div class=\"shell\">");
+    html.push_str(&render_admin_navigation(current_path));
+    html.push_str("<div class=\"admin-workspace\">");
+    html.push_str(&render_admin_header(current_path));
+    html.push_str("<main id=\"admin-content\">");
+    html.push_str(fragment);
+    html.push_str("</main></div></div></body></html>");
+    Some(html)
+}
+
+fn admin_shell_error(status: StatusCode, current_path: &str) -> Response {
+    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Admin page unavailable</h1><p class=\"error\">The service returned an invalid or oversized page fragment.</p>";
+    let body = render_admin_fragment_document(fragment, current_path).unwrap_or_else(|| {
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Admin page unavailable</title><body><main><h1>Admin page unavailable</h1><p>The service returned an invalid or oversized page fragment.</p></main></body></html>".to_owned()
+    });
+    let mut response = (status, body).into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    response
 }
 
 fn wrap_admin_document(html: &str, current_path: &str) -> Option<String> {
@@ -2113,6 +2198,123 @@ mod tests {
         ] {
             assert!(html.contains(&format!("href=\"{route}\"")));
         }
+    }
+
+    #[tokio::test]
+    async fn shared_shell_composes_explicit_owner_page_fragment_without_html_parsing() {
+        use axum::http::header::CONTENT_TYPE;
+        use axum::routing::get;
+
+        let owner = Router::new().route(
+            "/admin/build-cache",
+            get(|| async {
+                let mut response =
+                    (StatusCode::OK, "<h1>Owner-rendered snapshot table</h1>").into_response();
+                response.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/vnd.vapor.admin-page.v1+html"),
+                );
+                response
+                    .headers_mut()
+                    .insert("content-encoding", HeaderValue::from_static("gzip"));
+                response
+                    .headers_mut()
+                    .insert("etag", HeaderValue::from_static("\"fragment-v1\""));
+                response.headers_mut().insert(
+                    "content-disposition",
+                    HeaderValue::from_static("attachment; filename=fragment.html"),
+                );
+                response
+            }),
+        );
+        let response = owner
+            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .oneshot(
+                Request::get("/admin/build-cache")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "private, no-store");
+        assert!(!response.headers().contains_key("content-encoding"));
+        assert!(!response.headers().contains_key("etag"));
+        assert!(!response.headers().contains_key("content-disposition"));
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let html = std::str::from_utf8(&body).unwrap();
+        assert!(html.contains("<title>Build Cache · Vapor Admin</title>"));
+        assert!(html.contains("<nav aria-label=\"Platform administration\">"));
+        assert!(html.contains("<main id=\"admin-content\">"));
+        assert!(html.contains("<h1>Owner-rendered snapshot table</h1>"));
+        assert_eq!(html.matches("<body>").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn shared_shell_wraps_owner_fragment_errors_without_changing_status() {
+        use axum::http::header::CONTENT_TYPE;
+        use axum::routing::get;
+
+        let owner = Router::new().route(
+            "/admin/build-cache",
+            get(|| async {
+                let mut response =
+                    (StatusCode::FORBIDDEN, "<p>Root access is required.</p>").into_response();
+                response.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/vnd.vapor.admin-page.v1+html"),
+                );
+                response
+            }),
+        );
+        let response = owner
+            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .oneshot(
+                Request::get("/admin/build-cache")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(std::str::from_utf8(&body)
+            .unwrap()
+            .contains("Root access is required."));
+    }
+
+    #[tokio::test]
+    async fn shared_shell_does_not_add_a_document_body_to_no_content_responses() {
+        use axum::http::header::CONTENT_TYPE;
+        use axum::routing::get;
+
+        let owner = Router::new().route(
+            "/admin/build-cache",
+            get(|| async {
+                let mut response = StatusCode::NO_CONTENT.into_response();
+                response.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/vnd.vapor.admin-page.v1+html"),
+                );
+                response
+            }),
+        );
+        let response = owner
+            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .oneshot(
+                Request::get("/admin/build-cache")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(!response.headers().contains_key(CONTENT_TYPE));
+        assert_eq!(response.headers()["cache-control"], "private, no-store");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(body.is_empty());
     }
 
     #[tokio::test]

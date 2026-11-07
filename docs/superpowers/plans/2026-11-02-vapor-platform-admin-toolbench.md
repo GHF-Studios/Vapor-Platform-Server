@@ -236,6 +236,18 @@ truth for this pass.
 - Review keyboard navigation, accessible names, focus order, narrow viewport
   layout, safe output encoding, and private/no-store behavior.
 
+#### Phase A implementation checkpoint (2026-11-07)
+
+- [x] Define the v1 owner-rendered HTML fragment media type and document its
+  bounded shared-shell behavior and independent-service rollout order.
+- [x] Migrate Build Cache's page and authorization errors to fragments; Platform
+  now composes the full document for this contract without parsing the owner's
+  HTML and preserves owner status codes.
+- [ ] Migrate the remaining owner pages and remove the temporary legacy
+  whole-document wrapper after all owners implement the contract.
+- [ ] Centralize route/navigation metadata and complete accessibility and
+  responsive-layout review.
+
 ### Phase B: make Overview and Operations useful
 
 - Overview: service health and feature readiness, active deployment/build
