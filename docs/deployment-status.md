@@ -1,6 +1,41 @@
 # Vapor server deployment status
 
+## Current live state (2026-11-07 15:00 UTC)
+
+This is the newest verified state; older entries below are historical snapshots
+and must not be read as current host status.
+
+- The VPS is running Platform commit
+  `12192d85348432ee24d1ce7c02ff2dab6eeded84` in `services` mode. The independent
+  Homepage, Docs, Identity, Diagnostics, Registry, Artifact, and Build Cache
+  services, the Platform gateway, and Caddy are active. Local health checks on
+  ports 7110–7117 returned HTTP 200; the state-export timer is active and the
+  retired deploy polling timer remains inactive.
+- Caddy routes `/cli/ssh/*` to Identity. The SSH authorization API returns
+  `422` for an empty request body and the authorization page returns `400`
+  without its required query string; these expected validation responses
+  confirm both requests reach Identity. The unauthenticated Operations page
+  returns `401` as expected.
+- A root-only recovery archive was created at
+  `/var/backups/vapor-server/vapor-platform-recovery-20261107T143242Z-6f6756d3ec6b.tar.gz`.
+  The successful bootstrap report confirms services-mode health and that the
+  periodic deploy timer was not started.
+- The three pending full-deploy requests for commits `7d07590`, `96e650f`, and
+  `12192d8` are visible in the Platform database. The first two are superseded
+  by the live `12192d8` deployment; the request for `12192d8` was also created
+  automatically after the direct, owner-authorized recovery deploy. No request
+  was approved by that direct deployment. Leave the two older pending requests
+  unapproved; reject/close them through the authenticated Operations interface
+  when available. The current request queue is not yet reconciled with this
+  out-of-band deployment.
+- The reusable SSH bootstrap branch has been updated to pin `12192d8` and to
+  check the `/cli/ssh/authorize` route as well as the API route. It is a future
+  recovery artifact; the current VPS is already cut over.
+
 ## Failed-dispatch closure and bootstrap handoff (2026-11-07 12:46 UTC)
+
+Historical: this section records the state before direct root SSH access and
+the successful services-mode cutover described above.
 
 - The root-console operator retired only request
   `17e1b3ee-d991-412a-aa41-eb0021d1837d` after its dispatch failure and confirmed
