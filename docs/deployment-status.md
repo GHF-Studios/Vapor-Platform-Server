@@ -29,7 +29,8 @@
   branch and is pinned by the Platform worktree.
 - Local service tests passed: Build Cache 8 unit + 7 contract, Artifact 4,
   Registry 5, Identity 38. Platform CI runs `42360322183` and `42360410112`
-  passed both jobs for the current Platform changes.
+  passed both jobs for the preceding approval-surface changes. Final responsive
+  commit `5e1d089` passed both jobs in CI run `42361324829`.
 - This closes the static wide-table accessibility gap. A hands-on narrow
   viewport and assistive-technology review remains outstanding. No VPS
   deployment was performed.
