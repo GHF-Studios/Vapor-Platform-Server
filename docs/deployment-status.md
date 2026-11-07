@@ -967,3 +967,22 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - These source changes remain on the review branch and have not been deployed.
   The live pending main candidate still contains the legacy installer behavior
   and must not be dispatched; no approval or deployment was performed.
+
+## Effective temporary sudo scope check (2026-11-07, 18:24 UTC)
+
+- The helper now asks sudo for the account's resolved command list after it
+  writes a temporary grant, and again during `ssh verify`. It compares that
+  effective list with the exact capability-derived commands. If another rule
+  adds commands (including `ALL`), grant setup fails and rolls back; a mismatch
+  also makes verification fail. The explicit `host_admin` capability remains
+  intentionally unrestricted and is separately confirmed during grant setup.
+- The parser regression test covers an exact two-command grant, an injected
+  `ALL` command, a no-sudo account, and an unexpected command on a no-sudo
+  grant. The VPS's actual sudo list output was checked read-only for the normal
+  `vapor` account and matches the format being parsed; no account or policy was
+  changed.
+- CI run `42400917506` for `11840ff` passed both the Linux Platform recipe and
+  Windows recovery tests. Local Windows helper tests (12), deployment Python
+  tests (91, 10 platform skips), Bash syntax, and whitespace checks also pass.
+- The implementation is still only on the review branch. The VPS remains on
+  `12192d8`, and no pending deployment was approved or dispatched.
