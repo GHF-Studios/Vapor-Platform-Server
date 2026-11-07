@@ -162,7 +162,7 @@ They must not expose internal profile ids as operator-facing authority.
 /var/lib/vapor-server/updates        immutable application releases
 /var/lib/vapor-server/build-cache   current target snapshots and candidate staging
 /var/lib/vapor-server/operations     latest deploy/restore status pointer
-/etc/vapor-server                    server-local env/secrets; not exported
+/etc/vapor-server                    server-local env/secrets; included only in the new, intentionally unencrypted recovery-bundle design
 ```
 
 State must be recoverable through:
@@ -174,16 +174,17 @@ State must be recoverable through:
 Whole-system export/import is composed in `Vapor-Platform-Server`; service-specific
 formats should become explicit service contracts over time.
 
-The VPS also runs a root-owned automatic state-export timer. It creates
-`vapor-server-state-*.tar.gz` bundles under `/var/backups/vapor-server`, excludes
-`/etc/vapor-server` secrets, and prunes old automatically named bundles by
-`VAPOR_BACKUP_RETENTION_COUNT` so backups do not grow without bound.
+The deployed-slice backup statements below describe the earlier state-only
+bundle and are superseded by the recovery contract in
+`docs/operations-evidence-and-recovery-contract.md`. The current source change
+introduces schema-v2 full-platform bundles that include server configuration
+and credentials in plaintext, selected host files, and source pins. This new
+format is not yet deployed or proven by a clean-host restore drill.
 
-Restore runs a structural validator before extraction or service shutdown. The
-validator rejects path traversal, absolute paths, links/special files,
-unsupported manifest versions, duplicate entries, and any manifest that does not
-assert `secrets_included = false`. See
-`docs/operations-evidence-and-recovery-contract.md`.
+The schema-v2 validator rejects path traversal, absolute paths, links/special
+files, unsupported manifest versions, duplicate entries, incomplete source
+pins, and any manifest that does not explicitly declare plaintext credentials.
+See `docs/operations-evidence-and-recovery-contract.md`.
 
 Diagnostics source now defines the current report contract for structured,
 explicit opt-in JSON uploads. The storage shape is:

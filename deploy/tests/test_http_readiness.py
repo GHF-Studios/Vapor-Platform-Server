@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shlex
 import subprocess
 import tempfile
 import unittest
+
+from shell_test_support import bash_executable, posix_path, shell_path_list
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -43,7 +46,7 @@ class HttpReadinessTests(unittest.TestCase):
         environment = os.environ.copy()
         environment.update(
             {
-                "PATH": f"{fake_bin}:{environment['PATH']}",
+                "PATH": shell_path_list(fake_bin, environment["PATH"]),
                 "VAPOR_CONFIG_DIR": str(root / "no-config"),
                 "VAPOR_HEALTH_CHECK_ATTEMPTS": str(attempts),
                 "VAPOR_HEALTH_CHECK_INTERVAL_SECONDS": "0",
@@ -55,9 +58,9 @@ class HttpReadinessTests(unittest.TestCase):
         )
         result = subprocess.run(
             [
-                "bash",
+                bash_executable(),
                 "-c",
-                f"source {LIB!s}; wait_for_http 'test service' test.service http://127.0.0.1:7115/healthz --resolve test:443:127.0.0.1",
+                f"source {shlex.quote(posix_path(LIB))}; wait_for_http 'test service' test.service http://127.0.0.1:7115/healthz --resolve test:443:127.0.0.1",
             ],
             check=False,
             env=environment,

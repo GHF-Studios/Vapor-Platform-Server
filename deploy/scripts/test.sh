@@ -24,6 +24,9 @@ bash -n "${SCRIPT_DIR}"/*.sh
 echo "test: Python helper syntax"
 python3 -m py_compile \
   "${SCRIPT_DIR}/state-bundle-validate.py" \
+  "${SCRIPT_DIR}/recovery_bundle_metadata.py" \
+  "${SCRIPT_DIR}/plan_recovery_retention.py" \
+  "${SCRIPT_DIR}/restore_host_preflight.py" \
   "${SCRIPT_DIR}/deploy-request-queue.py" \
   "${SCRIPT_DIR}/verify-deploy-source.py"
 rm -rf -- "${SCRIPT_DIR}/__pycache__"

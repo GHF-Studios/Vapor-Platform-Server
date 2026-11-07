@@ -22,6 +22,21 @@ source "${SCRIPT_DIR}/lib.sh"
 # shellcheck source=http-contract-checks.sh
 source "${SCRIPT_DIR}/http-contract-checks.sh"
 
+check_admin_gateway_route() {
+  local path="$1"
+  local status
+  status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
+    --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
+    --output /dev/null --write-out '%{http_code}' "https://${VAPOR_DOMAIN}${path}")"
+  case "${status}" in
+    2??|3??|401|403) ;;
+    *)
+      echo "error: Platform admin gateway route ${path} returned HTTP ${status}" >&2
+      return 1
+      ;;
+  esac
+}
+
 if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
   wait_for_http "Vapor Platform Server" vapor-platform-server.service http://127.0.0.1:7110/healthz
   curl --fail --silent --show-error http://127.0.0.1:7110/docs/status >/dev/null
@@ -38,6 +53,7 @@ if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
     --identity-base http://127.0.0.1:7110/api/identity \
     --diagnostics-base http://127.0.0.1:7110/api/diagnostics
 else
+  wait_for_http "Vapor Platform Admin Gateway" vapor-platform-server.service http://127.0.0.1:7110/healthz
   wait_for_http "Vapor Homepage" vapor-homepage.service http://127.0.0.1:7111/healthz
 
   wait_for_http "Vapor Docs" vapor-docs.service http://127.0.0.1:7112/healthz
@@ -57,6 +73,15 @@ else
   wait_for_http "Vapor Artifact" vapor-artifact.service http://127.0.0.1:7116/healthz
   wait_for_http "Vapor Build Cache" vapor-build-cache.service http://127.0.0.1:7117/healthz
   curl --fail --silent --show-error http://127.0.0.1:7117/v1/status >/dev/null
+
+  # Service health does not prove that Caddy's shared admin gateway can reach
+  # each owner page. Check the fixed routes end-to-end through local Caddy after
+  # all owner services are ready; login redirects and normal authorization
+  # results are valid responses, while 404/5xx indicate a broken mapping.
+  check_admin_gateway_route /admin/identity
+  check_admin_gateway_route /admin/workshop
+  check_admin_gateway_route /admin/artifacts
+  check_admin_gateway_route /admin/build-cache
 
   check_unauthenticated_http_contracts \
     --homepage-base http://127.0.0.1:7111 \

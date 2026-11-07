@@ -8,6 +8,8 @@ import tempfile
 import textwrap
 import unittest
 
+from shell_test_support import bash_executable, posix_path, shell_path_list, write_python3_shim
+
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 UPLOADER = REPO_ROOT / "deploy" / "scripts" / "upload-docs-via-ssh.sh"
@@ -51,13 +53,15 @@ class UploadDocsViaSshTests(unittest.TestCase):
             )
             for executable in (fake_bin / "ssh", fake_bin / "scp"):
                 executable.chmod(0o755)
+            write_python3_shim(fake_bin)
 
             environment = os.environ.copy()
-            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            environment["PATH"] = shell_path_list(fake_bin, environment["PATH"])
             environment["MOCK_CAPTURE"] = str(capture)
             result = subprocess.run(
                 [
-                    str(UPLOADER),
+                    bash_executable(),
+                    posix_path(UPLOADER),
                     "--bundle",
                     str(bundle),
                     "--host",

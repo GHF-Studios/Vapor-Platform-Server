@@ -49,60 +49,70 @@ def make_bundle(members: list[tuple[str, str | None, bytes | None]]) -> pathlib.
     return bundle
 
 
-VALID_MANIFEST = b"""schema_version = 1
-created_at_utc = "2026-07-25T00:00:00Z"
-secrets_included = false
-"""
+ROOT = "vapor-platform-recovery"
+REVISION = "a" * 40
+VALID_MANIFEST = f"""schema_version = 2
+created_at_utc = "2026-11-01T00:00:00Z"
+runtime_mode = "monolith"
+deploy_root_commit = "{REVISION}"
+operating_system = "Ubuntu 24.04.3 LTS"
+architecture = "x86_64"
+secrets_included = true
+archive_encryption = "none"
+build_outputs_excluded = true
+source_pins_included = true
+config_included = true
+host_routing_included = true
+included_categories = ["state", "config", "host", "source"]
+""".encode()
+
+
+def valid_members() -> list[tuple[str, str | None, bytes | None]]:
+    return [
+        (ROOT, "dir", None),
+        (f"{ROOT}/state", "dir", None),
+        (f"{ROOT}/manifest.toml", "file", VALID_MANIFEST),
+        (f"{ROOT}/state/docs/current.txt", "file", b"release\n"),
+        (f"{ROOT}/config", "dir", None),
+        (f"{ROOT}/config/vapor-server", "dir", None),
+        (f"{ROOT}/config/vapor-server/platform.env", "file", b"VAPOR_DOMAIN=vapor.example.test\n"),
+        (f"{ROOT}/source", "dir", None),
+        (f"{ROOT}/source/root-commit.txt", "file", (REVISION + "\n").encode()),
+        (f"{ROOT}/source/submodules.txt", "file", b""),
+        (f"{ROOT}/host", "dir", None),
+        (f"{ROOT}/host/caddy", "dir", None),
+        (f"{ROOT}/host/caddy/Caddyfile", "file", b"vapor.example.test {}\n"),
+        (f"{ROOT}/host/systemd", "dir", None),
+        (f"{ROOT}/host/systemd/vapor-platform-server.service", "file", b"[Service]\n"),
+    ]
 
 
 class StateBundleValidationTests(unittest.TestCase):
     def test_accepts_valid_bundle(self) -> None:
-        bundle = make_bundle(
-            [
-                ("vapor-server-state", "dir", None),
-                ("vapor-server-state/state", "dir", None),
-                ("vapor-server-state/manifest.toml", "file", VALID_MANIFEST),
-                ("vapor-server-state/state/docs/current.txt", "file", b"release\n"),
-            ]
-        )
+        bundle = make_bundle(valid_members())
         validator.validate_bundle(bundle)
 
     def test_rejects_parent_directory_escape(self) -> None:
-        bundle = make_bundle(
-            [
-                ("vapor-server-state", "dir", None),
-                ("vapor-server-state/state", "dir", None),
-                ("vapor-server-state/manifest.toml", "file", VALID_MANIFEST),
-                ("vapor-server-state/state/../escape", "file", b"bad"),
-            ]
-        )
+        members = valid_members()
+        members.append((f"{ROOT}/state/../escape", "file", b"bad"))
+        bundle = make_bundle(members)
         with self.assertRaises(validator.ValidationError):
             validator.validate_bundle(bundle)
 
     def test_rejects_symlink(self) -> None:
-        bundle = make_bundle(
-            [
-                ("vapor-server-state", "dir", None),
-                ("vapor-server-state/state", "dir", None),
-                ("vapor-server-state/manifest.toml", "file", VALID_MANIFEST),
-                ("vapor-server-state/state/link", "symlink", None),
-            ]
-        )
+        members = valid_members()
+        members.append((f"{ROOT}/state/link", "symlink", None))
+        bundle = make_bundle(members)
         with self.assertRaises(validator.ValidationError):
             validator.validate_bundle(bundle)
 
     def test_rejects_secret_manifest(self) -> None:
-        bundle = make_bundle(
-            [
-                ("vapor-server-state", "dir", None),
-                ("vapor-server-state/state", "dir", None),
-                (
-                    "vapor-server-state/manifest.toml",
-                    "file",
-                    b"schema_version = 1\nsecrets_included = true\n",
-                ),
-            ]
-        )
+        members = valid_members()
+        members = [
+            (name, kind, b"schema_version = 1\nsecrets_included = true\n" if name == f"{ROOT}/manifest.toml" else payload)
+            for name, kind, payload in members
+        ]
+        bundle = make_bundle(members)
         with self.assertRaises(validator.ValidationError):
             validator.validate_bundle(bundle)
 

@@ -87,33 +87,101 @@ for smoke testing only; the intended public endpoint remains
   already linked Steam+GitHub developer/root profile by requiring both SteamID64
   and GitHub login, using the server-local identity admin token for bootstrap
   or emergency operator use.
-- `scripts/export-state.sh`: create a root-only `.tar.gz` state bundle under
-  `/var/backups/vapor-server` by default. The bundle includes
-  `/var/lib/vapor-server` state and a manifest, not `/etc/vapor-server`
-  secrets. `VAPOR_BACKUP_RETENTION_COUNT` controls retention for automatically
-  named state bundles and defaults to 48.
-- `scripts/restore-state.sh`: restore a bundle created by `export-state.sh`
-  onto an already bootstrapped server; requires `--yes` and moves prior state
-  aside before replacing it. The script writes a safe latest restore-result
-  record after restoring state and restarting services.
+- `scripts/export-state.sh`: create a root-only full-platform recovery archive
+  under `/var/backups/vapor-server`. The target schema includes service state,
+  `/etc/vapor-server` credentials/configuration, selected host routing files,
+  and exact source/submodule pins. The archive is intentionally unencrypted;
+  build-cache target output is excluded as reproducible. An atomic latest
+  pointer is published only after validation and SHA-256 calculation.
+- `scripts/backup-to-usb.ps1`: pull unseen completed archives to an explicitly
+  selected USB directory over the owner's existing SSH key. The script
+  verifies SHA-256 before retaining a copy, rechecks the latest generation on
+  every run, rotates a recheck through older copies, and can catch up after
+  missed runs. VPS checksums detect corruption, not a compromised VPS replacing
+  both the archive and index.
+- `scripts/install-usb-backup-task.ps1`: register an hourly current-user
+  Task Scheduler job plus a logon catch-up trigger once the USB and SSH key
+  paths are known. The job runs while that Windows account is signed in;
+  missed hourly generations are fetched from the VPS index when the drive is
+  mounted.
+- Example from a Windows checkout (use the actual drive letter and existing
+  root SSH identity):
+
+  ```powershell
+  .\deploy\scripts\install-usb-backup-task.ps1 -Server vapor.ghf-studios.site -SshKey "$HOME\.ssh\id_ed25519" -UsbPath 'E:\Vapor-Recovery'
+  ```
+
+  This copies the current sync script to `%LOCALAPPDATA%\Vapor\Recovery` and
+  registers a per-user task; it does not create or copy a private key. Rerun the
+  installer after updating the checkout to refresh that copy. The first run
+  requires a trusted OpenSSH `known_hosts` entry for the VPS and an SSH identity
+  available without an interactive passphrase prompt. Run `backup-to-usb.ps1`
+  directly with the same arguments for immediate or manual catch-up; the task
+  runs hourly while the account is signed in.
+- `scripts/restore-state.sh`: restore a full-platform bundle onto a bootstrapped
+  server with the exact clean Platform and submodule revisions recorded in the
+  bundle and the service binaries already built from them; requires `--yes`,
+  stages prior state/configuration, and attempts rollback before restarting
+  services if restore fails. It rejects managed host symlinks it cannot safely
+  roll back and uses a unique pre-restore directory. It does not bootstrap a
+  fresh OS or build binaries.
+  A clean-host drill is still required before calling this a proven recovery
+  path.
+- `scripts/recover-fresh-host.sh`: guarded fresh-host coordinator for supported
+  Ubuntu x86_64 hosts. It validates the USB bundle and exact source/submodule
+  pins, checks that the Vapor install/state/config paths are empty, installs
+  the recorded Rust/Cargo toolchain, rebuilds and deploys the pinned source,
+  restores the bundle, and checks configured Steam/GitHub/dashboard readiness.
+  Run as root with `--bundle PATH --yes`. It refuses existing Vapor
+  data/configuration on a new run; if interrupted after it creates its recovery
+  marker, rerun with `--resume` and the same bundle. It requires the bundle to
+  contain a current exact toolchain observation and validates the archive with
+  the validator from its pinned source commit. After restoring, it leaves the
+  site running but keeps a recovery marker until the owner signs in with Steam
+  and GitHub and verifies the owner dashboard; then rerun with
+  `--resume --confirm-provider-checks`. Exit code `3` means the restore is
+  complete and waiting for those owner checks. A failed post-deploy recovery
+  disables and stops the newly deployed Vapor services, the export timer, and
+  Caddy, and preserves its marker for review. This
+  source path has not yet been exercised on a clean VPS; a successful local
+  test is not a recovery drill.
+
+The Windows sync script refuses destinations not reported as removable unless
+`-AllowFixedDrive` is supplied after confirming the USB volume. It verifies the
+SSH host through the existing OpenSSH known-host record, downloads into a
+temporary directory, checks byte count and SHA-256, then renames the bundle into
+the recovery folder. The USB archive is intentionally plaintext and contains
+server credentials; keep the drive physically controlled. The sync follows the
+explicit latest-generation pointer and checks it against the archive index; it
+does not infer recency from a timestamp/hash filename. It rehashes the latest
+copy and one rotating historical copy each run. Before deleting any
+generation for capacity, it rehashes every indexed candidate and removes only
+the oldest candidate whose payload digest matches the current VPS index.
+Unknown, stale, or damaged files count against capacity and are left untouched;
+if they prevent safe pruning, the sync stops. The report distinguishes copies
+hashed this run from archive files merely retained on the drive.
 - `scripts/install-systemd.sh`: install/enable the composed host unit.
 - `scripts/install-services-systemd.sh`: install/enable the individual service
-  units for `VAPOR_SERVER_MODE=services`.
+  units and Platform admin gateway for `VAPOR_SERVER_MODE=services`.
 - Platform's request database lives at
-  `${VAPOR_STATE_ROOT}/platform/platform.sqlite3` and is included in whole-state
-  export/import bundles.
-- In independent-services mode, the cross-service `/admin` toolbench returns
-  `503` instead of routing the removed Identity `/admin` page. The shared
-  toolbench is served by the composed Platform process in the default mode.
+  `${VAPOR_STATE_ROOT}/platform/platform.sqlite3` and is included in recovery
+  bundles.
+- In independent-services mode, Platform runs as the shared admin gateway on
+  port 7110. It serves its own pages and forwards only fixed service-owned
+  admin page prefixes; each owner service still checks the session/capability
+  and owns mutations/audit. The services-mode deployment builds and installs
+  this gateway alongside the independently deployed services. The gateway
+  source change is not live until an approved deployment installs it.
 - `systemd/vapor-artifact.service`: independently runnable immutable release
   delivery service for `VAPOR_SERVER_MODE=services`.
 - `systemd/vapor-build-cache.service`: independently runnable target snapshot
   service for `VAPOR_SERVER_MODE=services`; state lives under
   `/var/lib/vapor-server/build-cache`.
-- `docs/vapor-build-snapshot-contract.md`: contract for one signed current
-  compiler snapshot per locked target. VPS-hosted Linux and Windows VM
-  orchestration is a separate unfinished milestone; this server currently
-  composes and administers Build Cache but does not yet create those snapshots.
+- `docs/vapor-build-snapshot-contract.md`: contract for one signed rolling
+  compiler snapshot per locked target. An optional second VPS may build
+  candidates; the local path remains available when no worker exists. This
+  server currently composes and administers Build Cache but does not yet create
+  snapshots.
 - `scripts/install-caddy.sh`: render/install the Caddy config.
 - `caddy/Caddyfile.services.template`: path routing for the independent
   service-process mode; the default template routes through the composed host.

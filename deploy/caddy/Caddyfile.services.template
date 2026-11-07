@@ -2,6 +2,17 @@
 	encode zstd gzip
 
 	redir /atlas /atlas/ permanent
+
+	# Keep the shared operator shell at the public origin. Platform serves its
+	# own pages/assets and proxies only fixed service-owned admin sections.
+	handle /admin* {
+		reverse_proxy 127.0.0.1:7110
+	}
+
+	handle /api/admin* {
+		reverse_proxy 127.0.0.1:7110
+	}
+
 	handle_path /atlas/* {
 		root * /srv/vapor-web/atlas/current
 		file_server
@@ -41,10 +52,6 @@
 
 	handle /logout {
 		reverse_proxy 127.0.0.1:7113
-	}
-
-	handle /admin* {
-		respond "The shared admin toolbench is available in monolith mode." 503
 	}
 
 	handle {

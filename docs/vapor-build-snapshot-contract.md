@@ -1,23 +1,35 @@
 # Vapor Build Snapshot Contract
 
-Status: implementation contract for the single-VPS builder and Build Cache
-service.
+Status: target contract for an optional worker and the Build Cache service.
+The worker path is not implemented or ready until the clean-worker exercise
+below has passed.
 
 ## Authority and topology
 
-- The one Vapor VPS orchestrates both target builders. It hosts an isolated
-  Linux VM and an isolated Windows VM, using the same provision/start/build/
-  collect/clean lifecycle.
+- The primary Vapor VPS remains the sole public and policy authority. An
+  optional second VPS may run isolated Linux and Windows target jobs and may
+  replicate verified recovery archives. It does not host public routes or own
+  service state.
+- The second VPS is optional. If it is absent or unreachable, the supported
+  local build path remains available, though slower. Worker outage may leave
+  the public rolling snapshot stale; it must not block source builds, service
+  deployment, or recovery of the primary.
 - VM image identity, guest build-environment identity, and the canonical build
   recipe are pinned inputs governed by the one Vapor toolchain lock.
-- If the VPS cannot host both VMs with adequate virtualization support,
-  resources, and Windows licensing, the affected target is unavailable until
-  the VPS is upgraded or replaced. No external worker or owner PC is a fallback.
+- The worker contract consumes the canonical lock from Vapor Client; this
+  Platform repository must not invent a second lock. The recovery bundle still
+  records observed host compiler versions for rebuild reproduction, which is
+  not equivalent to the canonical product lock. Worker implementation stays
+  blocked until the lock artifact and identity are available to the operation.
+- Worker capacity, environment pinning, access, and Windows toolchain licensing
+  must be proven before publishing snapshots. Until then, candidates can be
+  built through the explicit local path; unvalidated output cannot replace the
+  current snapshot.
 - The Build Cache service owns current snapshot manifests and archives. Platform
   Server owns orchestration and route composition, not cache policy or files.
-- The VPS is the only publisher. A VM can submit only the candidate named by
-  its short-lived, target-scoped build operation; it cannot select or replace a
-  current snapshot directly.
+- Platform orchestration is the only publisher. A worker or local build can
+  submit only the candidate named by its target-scoped build operation; it
+  cannot select or replace a current snapshot directly.
 
 ## Supported target identities
 
@@ -115,8 +127,10 @@ and key ID; rotation must overlap trusted public keys across a client update.
   signature, archive byte count, and SHA-256 before extracting into a temporary
   sibling directory. It atomically activates the verified tree only after
   extraction succeeds; failure leaves the prior target root intact.
-- A missing or stale snapshot is an explicit setup failure with a repair/retry
-  action. Client-side cold compilation is not a silent fallback.
+- A missing or stale snapshot is shown explicitly. Developer workflows may use
+  the supported local build path when no current snapshot is available; Player
+  workflows that do not compile do not pretend local compilation is available.
+  Snapshot absence is never silently reported as a cache hit.
 - Promotion is atomic per target. At most one current snapshot per target is
   publicly addressable; old generations are not a client-selectable cache.
 - Restore portability is not assumed from a matching triple alone. The VPS
@@ -133,3 +147,56 @@ and key ID; rotation must overlap trusted public keys across a client update.
   game/depot bytes.
 - Whole-system export/import composes the Build Cache service's own export
   format. The cache service decides its retention and consistency rules.
+
+## Optional ephemeral compile workers (queued)
+
+The owner has proposed disposable native Linux workers billed by actual use,
+backed by independent S3-compatible object storage and `sccache`. This is a
+separate acceleration lane from the Build Cache snapshots above:
+
+- `sccache` stores reusable compiler results; the Build Cache service stores
+  validated, target-scoped developer snapshots for Vapor clients. Neither is
+  a substitute for the other.
+- `sccache` is not a remote copy of Cargo's incremental `target` directory.
+  Rust incremental crates are not cached by default; a shared-cache worker
+  recipe must either disable Cargo incremental compilation or deliberately
+  leave those crates uncached. Local incremental state can still make repeated
+  edits faster on one persistent machine.
+- A worker should be created from a pinned image/recipe, receive only a
+  target-scoped job, read and write a namespaced compilation cache, return a
+  candidate, and then be destroyed. It must not own deployment authority,
+  credentials for publishing, platform state, or proprietary game content.
+- Cost comparisons should account for actual billed VM seconds, persistent
+  object-storage capacity, cache requests, and data transfer separately. Prefer
+  a provider whose compute billing stops at job completion and whose S3 API can
+  be replaced without changing cache semantics; verify minimum billing periods,
+  storage minimums, and egress charges before choosing one.
+- The orchestration lifecycle is a target-scoped operation: queued, provisioning,
+  compiling, candidate upload, validation/promotion, then worker teardown. A
+  worker must be destroyed on success, failure, timeout, or cancellation; a
+  janitor must reap instances whose controller disappeared. Report compute
+  seconds, stored byte-hours (or the provider's equivalent billing unit),
+  request counts, and egress independently so the owner can compare real cost.
+- Give each worker only the short-lived read/write access needed for its
+  namespaced compiler-cache prefix and candidate upload. Do not put long-lived
+  object-store credentials or deployment credentials in the VM image. The
+  Build Cache service still validates and promotes the candidate.
+- Remote cache absence or outage must fall back to local native builds. Cache
+  misses affect build time, not build correctness or recovery capability.
+- Cache keys must include the locked toolchain, target triple, build flags,
+  compiler-wrapper configuration, and guest environment identity. Do not treat
+  a matching target triple alone as sufficient evidence of reuse.
+- Do not select a provider or implement provisioning until the second-node
+  capacity/cost and storage API constraints are known. Avoid tying cache
+  semantics to any one S3 vendor; use the existing Build Cache service as the
+  reviewed snapshot promotion boundary.
+- Before provider selection, benchmark one representative Linux target with a
+  cold compiler cache, a warm compiler cache, and a fully restored target
+  snapshot. Record wall time, billed compute, cache bytes/requests, and egress;
+  compare those results with the local fallback and the worker's idle/VM-image
+  costs. The cache and worker remain optional unless those measurements show a
+  practical improvement.
+
+Cranelift and mold remain candidate measurements, not defaults. Production
+artifacts continue using the canonical locked Rust/LLVM build recipe unless a
+separate target contract proves another backend produces acceptable outputs.

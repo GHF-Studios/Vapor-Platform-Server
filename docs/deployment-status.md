@@ -63,6 +63,42 @@ the retired polling timer.
 Secrets are intentionally not recorded here. Admin tokens live only in
 server-local env files under `/etc/vapor-server`.
 
+## Recovery and optional worker direction (design, not deployed)
+
+The intended recovery bundle is being changed from a state-only archive to a
+consistent primary-host recovery set: service state, `/etc/vapor-server`
+configuration and credentials, selected Caddy/systemd routing files, and exact
+source/submodule pins. The archive will be intentionally unencrypted and copied
+hourly to an owner-held 128 GB USB drive by a Windows-side SSH pull task. The
+root SSH private key remains separate. Existing bundles do not satisfy this
+target and must not be described as full-platform backups.
+
+A future second Strato VPS is optional build and replica capacity. It will not
+host public routes or own primary service state. Build/deploy and recovery must
+remain usable when it is offline; its actual role depends on the selected
+server's specifications. No worker or USB restore drill has yet been verified.
+
+## Current source-only progress (2026-11-07)
+
+The worktree now contains an independent-mode Platform admin gateway slice:
+Platform remains on loopback port 7110, serves its own admin pages and health
+route, and forwards only fixed Identity, Workshop, Artifact, and Build Cache
+admin page prefixes to their owning service ports. The services-mode Caddy
+template routes `/admin*` and `/api/admin*` to that gateway; service APIs stay
+on their existing owner routes. The deployment path now builds, installs,
+enables, restarts, and health-checks the gateway in services mode, and the
+Platform unit reads only its own environment file. The deployment health check
+also probes each fixed owner-admin page so a service returning healthy cannot
+hide a broken shared-admin route.
+
+These are local source edits only. They have not been compiled, deployed, or
+observed on the live host. The gateway still applies the existing shared
+HTML shell middleware to service pages; replacing that HTML marker/buffering
+contract with the explicit shared-layout contract in the approved design is
+still open work. USB integrity revalidation is implemented in source but has
+not run on the owner's drive. Fresh-host bootstrap/restore remains open; the
+current recovery scripts are not a proven rebuild path.
+
 ## Verified deployed source
 
 These are the runtime/service commits verified on the VPS. Documentation-only
@@ -77,7 +113,7 @@ Vapor-Identity-Server   ca9e61e
 Vapor-Diagnostics-Server 058c403
 ```
 
-## Verified runtime state
+## Verified runtime state (historical snapshot, 2026-07-25)
 
 - `caddy.service` is active/running.
 - `vapor-homepage.service` is active/running.

@@ -10,33 +10,95 @@ require_root
 BACKUP_ROOT="${VAPOR_BACKUP_ROOT:-/var/backups/vapor-server}"
 BUNDLE_PATH=""
 CONFIRMED="false"
-STATEFUL_SERVICES=(
-  vapor-docs.service
-  vapor-identity.service
-  vapor-diagnostics.service
-  vapor-platform-server.service
-  vapor-build-cache.service
-)
 ACTIVE_SERVICES=()
+ENABLED_SERVICES=()
+STATEFUL_SERVICES=(
+  vapor-homepage.service vapor-docs.service vapor-identity.service
+  vapor-diagnostics.service vapor-registry.service vapor-artifact.service
+  vapor-build-cache.service vapor-platform-server.service
+)
+TARGET_SERVICES=()
+MODE=""
+TMP_DIR=""
+PRE_RESTORE_PATH=""
+STATE_MOVED="false"
+CONFIG_MOVED="false"
+STATE_INSTALLED="false"
+CONFIG_INSTALLED="false"
+CADDY_INSTALLED="false"
+UNITS_INSTALLED="false"
+MUTATION_STARTED="false"
+CADDY_WAS_ACTIVE="false"
+CADDY_WAS_ENABLED="false"
+TIMER_WAS_ENABLED="false"
+TIMER_WAS_ACTIVE="false"
+DEPLOY_TIMER_WAS_ACTIVE="false"
+DEPLOY_TIMER_WAS_ENABLED="false"
+DEPLOY_SERVICE_WAS_ACTIVE="false"
+DEPLOY_SERVICE_WAS_ENABLED="false"
+ROLLBACK_RESULT="not_attempted"
+RESTORE_STARTED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RESTORE_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 
 usage() {
   cat >&2 <<'USAGE'
 usage: restore-state.sh --bundle PATH --yes
 
-Restores a Vapor server state bundle created by export-state.sh.
-This replaces /var/lib/vapor-server state, moves the previous state aside under
-/var/backups/vapor-server/pre-restore-*, and does not restore /etc/vapor-server
-env/token files.
+Restores a schema-v2 Vapor full-platform recovery bundle. It replaces service
+state, server configuration, the Caddyfile, and Vapor systemd units. It keeps
+the previous state/configuration under /var/backups/vapor-server/pre-restore-*.
 USAGE
+}
+
+unit_load_state() {
+  local unit="$1"
+  local state
+  if ! state="$(systemctl show --property=LoadState --value "${unit}" 2>/dev/null)"; then
+    printf 'unavailable'
+    return
+  fi
+  printf '%s' "${state:-unavailable}"
+}
+
+stop_if_loaded() {
+  local unit="$1"
+  local state
+  state="$(unit_load_state "${unit}")"
+  case "${state}" in
+    loaded) systemctl stop "${unit}" ;;
+    not-found) return 0 ;;
+    *)
+      echo "error: cannot safely stop ${unit}; systemd reports LoadState=${state}" >&2
+      return 1
+      ;;
+  esac
+}
+
+restore_enabled_state_if_loaded() {
+  local unit="$1"
+  local enabled="$2"
+  local state
+  state="$(unit_load_state "${unit}")"
+  case "${state}" in
+    not-found) return 0 ;;
+    loaded)
+      if [ "${enabled}" = "true" ]; then
+        systemctl enable "${unit}"
+      else
+        systemctl disable "${unit}" >/dev/null
+      fi
+      ;;
+    *)
+      echo "recovery-restore: cannot restore enabled state for ${unit}; systemd reports LoadState=${state}" >&2
+      return 1
+      ;;
+  esac
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --bundle)
-      if [ "$#" -lt 2 ]; then
-        usage
-        exit 2
-      fi
+      if [ "$#" -lt 2 ]; then usage; exit 2; fi
       BUNDLE_PATH="$2"
       shift 2
       ;;
@@ -48,10 +110,7 @@ while [ "$#" -gt 0 ]; do
       usage
       exit 0
       ;;
-    *)
-      usage
-      exit 2
-      ;;
+    *) usage; exit 2 ;;
   esac
 done
 
@@ -59,18 +118,64 @@ if [ -z "${BUNDLE_PATH}" ] || [ "${CONFIRMED}" != "true" ]; then
   usage
   exit 2
 fi
-
 if [ ! -f "${BUNDLE_PATH}" ]; then
-  echo "error: bundle does not exist: ${BUNDLE_PATH}" >&2
+  echo "error: recovery bundle does not exist" >&2
   exit 1
 fi
-
 if ! command -v flock >/dev/null 2>&1; then
   echo "error: flock is required for state restore locking" >&2
   exit 1
 fi
 
 python3 "${SCRIPT_DIR}/state-bundle-validate.py" "${BUNDLE_PATH}"
+if [ ! -f "${BUNDLE_PATH}.sha256" ]; then
+  echo "error: recovery archive is missing its detached SHA-256 file" >&2
+  exit 1
+fi
+if ! (cd -- "$(dirname -- "${BUNDLE_PATH}")" && \
+  sha256sum --check --status "$(basename -- "${BUNDLE_PATH}").sha256"); then
+  echo "error: recovery archive checksum does not match" >&2
+  exit 1
+fi
+MODE="$(python3 - "${BUNDLE_PATH}" <<'PY'
+import sys
+import tarfile
+import tomllib
+
+with tarfile.open(sys.argv[1], "r:gz") as archive:
+    member = archive.getmember("vapor-platform-recovery/manifest.toml")
+    stream = archive.extractfile(member)
+    if stream is None:
+        raise SystemExit("recovery manifest unavailable")
+    manifest = tomllib.loads(stream.read().decode("utf-8"))
+mode = manifest.get("runtime_mode")
+if mode not in {"monolith", "services"}:
+    raise SystemExit("unsupported runtime mode")
+print(mode)
+PY
+)"
+VAPOR_SERVER_MODE="${MODE}"
+export VAPOR_SERVER_MODE
+
+case "${MODE}" in
+  monolith)
+    TARGET_SERVICES=(vapor-platform-server.service)
+    REQUIRED_BINARIES=(vapor_platform_server)
+    ;;
+  services)
+    TARGET_SERVICES=(
+      vapor-homepage.service vapor-docs.service vapor-identity.service
+      vapor-diagnostics.service vapor-registry.service vapor-artifact.service
+      vapor-build-cache.service vapor-platform-server.service
+    )
+    REQUIRED_BINARIES=(
+      vapor_homepage_server vapor_docs_server vapor_identity_server
+      vapor_diagnostics_server vapor_registry_server vapor_artifact_server
+      vapor_build_cache_server vapor_platform_server
+    )
+    ;;
+  *) echo "error: unsupported recovery runtime mode" >&2; exit 1 ;;
+esac
 
 LOCK_FILE=/run/vapor-server-deploy.lock
 exec 9>"${LOCK_FILE}"
@@ -78,79 +183,261 @@ if ! flock -n 9; then
   echo "error: Vapor deploy/state lock is already held; retry after the active operation finishes" >&2
   exit 1
 fi
+if ! python3 - "${BUNDLE_PATH}" "${VAPOR_DEPLOY_ROOT}" <<'PY'
+import subprocess
+import sys
+import tarfile
 
-TMP_DIR="$(mktemp -d)"
-RESTORE_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-PRE_RESTORE_PATH="${BACKUP_ROOT}/pre-restore-${RESTORE_TIMESTAMP}"
-RESTORE_OPERATION_STARTED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-RESTORE_OPERATION_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
-
-cleanup() {
-  rm -rf "${TMP_DIR}"
-}
-
-restart_services() {
-  local service
-  for service in "${ACTIVE_SERVICES[@]}"; do
-    systemctl start "${service}"
-  done
-  # The old polling deploy timer is retired. A restore must never reactivate it.
-}
-
-record_restore_operation() {
-  local status="$?"
-  local result="failed"
-  local finished_at_utc
-  trap - EXIT
-  set +e
-  if [ "$status" -eq 0 ]; then
-    result="success"
-  fi
-  restart_services
-  cleanup
-  finished_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  if ! write_operation_record \
-    restore "$result" "$RESTORE_OPERATION_STARTED_AT_UTC" "$finished_at_utc" \
-    "$RESTORE_OPERATION_REVISION" "$VAPOR_SERVER_MODE"; then
-    echo "warning: restore result could not be recorded" >&2
-  fi
-  exit "$status"
-}
-trap record_restore_operation EXIT
-
-if systemctl is-active --quiet vapor-deploy.timer; then
-  echo "restore: stopping retired deploy timer; it will remain disabled"
-  systemctl stop vapor-deploy.timer
+bundle, source_root = sys.argv[1:]
+try:
+    with tarfile.open(bundle, "r:gz") as archive:
+        expected_commit = archive.extractfile(
+            "vapor-platform-recovery/source/root-commit.txt"
+        ).read(256).decode("ascii").strip()
+        expected_submodules = archive.extractfile(
+            "vapor-platform-recovery/source/submodules.txt"
+        ).read(4 * 1024 * 1024).decode("utf-8")
+    actual_commit = subprocess.check_output(
+        ["git", "-C", source_root, "rev-parse", "HEAD"], text=True
+    ).strip()
+    actual_submodules = subprocess.check_output(
+        ["git", "-C", source_root, "submodule", "status", "--recursive"],
+        text=True,
+    )
+    source_status = subprocess.check_output(
+        ["git", "-C", source_root, "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+    )
+    submodule_status = subprocess.run(
+        [
+            "git", "-C", source_root, "submodule", "foreach", "--quiet", "--recursive",
+            'test -z "$(git status --porcelain --untracked-files=all)"',
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+except (OSError, subprocess.CalledProcessError, tarfile.TarError, AttributeError):
+    raise SystemExit("recovery-restore: source pin recheck failed")
+if actual_commit != expected_commit or actual_submodules != expected_submodules:
+    raise SystemExit("recovery-restore: source checkout changed before restore acquired the lock")
+if source_status or submodule_status.returncode != 0:
+    raise SystemExit("recovery-restore: source checkout is dirty")
+PY
+then
+  exit 1
 fi
-systemctl disable vapor-deploy.timer >/dev/null 2>&1 || true
-systemctl stop vapor-deploy.service 2>/dev/null || true
+for binary in "${REQUIRED_BINARIES[@]}"; do
+  if [ ! -x "${VAPOR_DEPLOY_ROOT}/target/release/${binary}" ]; then
+    echo "error: a required service binary is missing; build the recorded source before restore" >&2
+    exit 1
+  fi
+done
+python3 "${SCRIPT_DIR}/restore_host_preflight.py" || exit 1
+
+install_dir root root 0700 "${BACKUP_ROOT}"
+TMP_DIR="$(mktemp -d "${BACKUP_ROOT}/.restore.XXXXXX")"
+PRE_RESTORE_PATH="$(mktemp -d "${BACKUP_ROOT}/pre-restore-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+chown root:root "${PRE_RESTORE_PATH}"
+chmod 0700 "${PRE_RESTORE_PATH}"
+tar -xzf "${BUNDLE_PATH}" -C "${TMP_DIR}"
+BUNDLE_ROOT="${TMP_DIR}/vapor-platform-recovery"
 
 for service in "${STATEFUL_SERVICES[@]}"; do
   if systemctl is-active --quiet "${service}"; then
     ACTIVE_SERVICES+=("${service}")
-    systemctl stop "${service}"
+  fi
+  if systemctl is-enabled --quiet "${service}"; then
+    ENABLED_SERVICES+=("${service}")
   fi
 done
-
-tar -xzf "${BUNDLE_PATH}" -C "${TMP_DIR}"
-
-install_dir root root 0750 "${BACKUP_ROOT}"
-if [ -e "${VAPOR_STATE_ROOT}" ]; then
-  mv "${VAPOR_STATE_ROOT}" "${PRE_RESTORE_PATH}"
+if systemctl is-active --quiet caddy.service; then
+  CADDY_WAS_ACTIVE="true"
 fi
+if systemctl is-enabled --quiet caddy.service; then CADDY_WAS_ENABLED="true"; fi
+if systemctl is-enabled --quiet vapor-state-export.timer; then TIMER_WAS_ENABLED="true"; fi
+if systemctl is-active --quiet vapor-state-export.timer; then
+  TIMER_WAS_ACTIVE="true"
+fi
+if systemctl is-enabled --quiet vapor-deploy.timer; then DEPLOY_TIMER_WAS_ENABLED="true"; fi
+if systemctl is-active --quiet vapor-deploy.timer; then DEPLOY_TIMER_WAS_ACTIVE="true"; fi
+if systemctl is-enabled --quiet vapor-deploy.service; then DEPLOY_SERVICE_WAS_ENABLED="true"; fi
+if systemctl is-active --quiet vapor-deploy.service; then DEPLOY_SERVICE_WAS_ACTIVE="true"; fi
 
+restore_previous_host_files() {
+  mkdir -p /etc/systemd/system || return 1
+  find /etc/systemd/system -maxdepth 1 \( -type f -o -type l \) \
+    \( -name 'vapor-*.service' -o -name 'vapor-*.timer' \) -delete || return 1
+  if [ -d "${PRE_RESTORE_PATH}/host/systemd" ]; then
+    cp -a "${PRE_RESTORE_PATH}/host/systemd/." /etc/systemd/system/ || return 1
+  fi
+  if [ -f "${PRE_RESTORE_PATH}/host/caddy/Caddyfile" ]; then
+    install -D -o root -g root -m 0644 \
+      "${PRE_RESTORE_PATH}/host/caddy/Caddyfile" /etc/caddy/Caddyfile || return 1
+  elif [ -e /etc/caddy/Caddyfile ]; then
+    rm -f /etc/caddy/Caddyfile || return 1
+  fi
+  systemctl daemon-reload || return 1
+  if [ "${CADDY_WAS_ACTIVE}" = "true" ]; then
+    systemctl reload caddy.service || systemctl restart caddy.service || return 1
+  fi
+}
+
+rollback() {
+  local service
+  local enabled
+  local was_enabled
+  local rollback_failed=0
+  set +e
+  if [ "${MUTATION_STARTED}" != "true" ]; then return; fi
+  ROLLBACK_RESULT="incomplete"
+  for service in "${STATEFUL_SERVICES[@]}"; do
+    stop_if_loaded "${service}" || rollback_failed=1
+  done
+  if [ "${rollback_failed}" -ne 0 ]; then
+    echo "recovery-restore: rollback incomplete; could not stop every service" >&2
+    return 1
+  fi
+  if [ "${STATE_INSTALLED}" = "true" ] && [ -e "${VAPOR_STATE_ROOT}" ]; then
+    rm -rf -- "${VAPOR_STATE_ROOT}" || rollback_failed=1
+  fi
+  if [ "${STATE_MOVED}" = "true" ] && [ -e "${PRE_RESTORE_PATH}/state" ]; then
+    mv -- "${PRE_RESTORE_PATH}/state" "${VAPOR_STATE_ROOT}" || rollback_failed=1
+  fi
+  if [ "${CONFIG_INSTALLED}" = "true" ] && [ -e "${VAPOR_CONFIG_DIR}" ]; then
+    rm -rf -- "${VAPOR_CONFIG_DIR}" || rollback_failed=1
+  fi
+  if [ "${CONFIG_MOVED}" = "true" ] && [ -e "${PRE_RESTORE_PATH}/config/vapor-server" ]; then
+    mv -- "${PRE_RESTORE_PATH}/config/vapor-server" "${VAPOR_CONFIG_DIR}" || rollback_failed=1
+  fi
+  if [ "${CADDY_INSTALLED}" = "true" ] || [ "${UNITS_INSTALLED}" = "true" ]; then
+    restore_previous_host_files || rollback_failed=1
+  fi
+  if [ "${rollback_failed}" -ne 0 ]; then
+    echo "recovery-restore: rollback incomplete; restored services will remain stopped" >&2
+    return 1
+  fi
+  for service in "${STATEFUL_SERVICES[@]}"; do
+    was_enabled="false"
+    for enabled in "${ENABLED_SERVICES[@]}"; do
+      if [ "${enabled}" = "${service}" ]; then was_enabled="true"; fi
+    done
+    restore_enabled_state_if_loaded "${service}" "${was_enabled}" || rollback_failed=1
+  done
+  restore_enabled_state_if_loaded caddy.service "${CADDY_WAS_ENABLED}" || rollback_failed=1
+  restore_enabled_state_if_loaded vapor-state-export.timer "${TIMER_WAS_ENABLED}" || rollback_failed=1
+  if [ "${TIMER_WAS_ACTIVE}" = "true" ]; then
+    systemctl start vapor-state-export.timer || rollback_failed=1
+  fi
+  restore_enabled_state_if_loaded vapor-deploy.timer "${DEPLOY_TIMER_WAS_ENABLED}" || rollback_failed=1
+  if [ "${DEPLOY_TIMER_WAS_ACTIVE}" = "true" ]; then
+    systemctl start vapor-deploy.timer || rollback_failed=1
+  fi
+  restore_enabled_state_if_loaded vapor-deploy.service "${DEPLOY_SERVICE_WAS_ENABLED}" || rollback_failed=1
+  if [ "${DEPLOY_SERVICE_WAS_ACTIVE}" = "true" ]; then
+    systemctl start vapor-deploy.service || rollback_failed=1
+  fi
+  if [ "${rollback_failed}" -ne 0 ]; then
+    echo "recovery-restore: rollback incomplete; service restart was skipped" >&2
+    return 1
+  fi
+  for service in "${ACTIVE_SERVICES[@]}"; do systemctl start "${service}" || rollback_failed=1; done
+  if [ "${CADDY_WAS_ACTIVE}" = "true" ]; then systemctl start caddy.service || rollback_failed=1; fi
+  if [ "${rollback_failed}" -eq 0 ]; then
+    ROLLBACK_RESULT="complete"
+    echo "recovery-restore: rollback completed" >&2
+  else
+    echo "recovery-restore: rollback incomplete; inspect service logs and preserved pre-restore files" >&2
+  fi
+  return "${rollback_failed}"
+}
+
+cleanup_and_record() {
+  local status=$?
+  trap - EXIT
+  set +e
+  if [ "${status}" -ne 0 ]; then
+    if ! rollback; then
+      ROLLBACK_RESULT="incomplete"
+    fi
+    echo "recovery-restore: operation failed (rollback ${ROLLBACK_RESULT})" >&2
+  fi
+  local result=success
+  [ "${status}" -eq 0 ] || result=failed
+  local finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_operation_record restore "${result}" "${RESTORE_STARTED_AT_UTC}" \
+    "${finished_at}" "${RESTORE_REVISION}" "${MODE}" || true
+  rm -rf -- "${TMP_DIR}"
+  exit "${status}"
+}
+trap cleanup_and_record EXIT
+
+MUTATION_STARTED="true"
+if [ "${DEPLOY_TIMER_WAS_ACTIVE}" = "true" ]; then
+  systemctl stop vapor-deploy.timer
+fi
+systemctl disable vapor-deploy.timer >/dev/null 2>&1 || true
+stop_if_loaded vapor-deploy.service
+stop_if_loaded vapor-state-export.timer
+for service in "${STATEFUL_SERVICES[@]}"; do stop_if_loaded "${service}"; done
+
+mkdir -p "${PRE_RESTORE_PATH}/host/caddy" "${PRE_RESTORE_PATH}/host/systemd" \
+  "${PRE_RESTORE_PATH}/config"
+if [ -e "${VAPOR_STATE_ROOT}" ]; then
+  mv -- "${VAPOR_STATE_ROOT}" "${PRE_RESTORE_PATH}/state"
+  STATE_MOVED="true"
+fi
+if [ -e "${VAPOR_CONFIG_DIR}" ]; then
+  mv -- "${VAPOR_CONFIG_DIR}" "${PRE_RESTORE_PATH}/config/vapor-server"
+  CONFIG_MOVED="true"
+fi
+if [ -f /etc/caddy/Caddyfile ]; then
+  cp -a /etc/caddy/Caddyfile "${PRE_RESTORE_PATH}/host/caddy/Caddyfile"
+fi
+for unit in /etc/systemd/system/vapor-*.service /etc/systemd/system/vapor-*.timer; do
+  [ -f "${unit}" ] && [ ! -L "${unit}" ] || continue
+  cp -a "${unit}" "${PRE_RESTORE_PATH}/host/systemd/"
+done
+
+STATE_INSTALLED="true"
 install_dir "${VAPOR_USER}" "${VAPOR_GROUP}" 0750 "${VAPOR_STATE_ROOT}"
-cp -a "${TMP_DIR}/vapor-server-state/state/." "${VAPOR_STATE_ROOT}/"
+cp -a "${BUNDLE_ROOT}/state/." "${VAPOR_STATE_ROOT}/"
 chown -R "${VAPOR_USER}:${VAPOR_GROUP}" "${VAPOR_STATE_ROOT}"
 find "${VAPOR_STATE_ROOT}" -type d -exec chmod 0750 {} +
 find "${VAPOR_STATE_ROOT}" -type f -exec chmod 0640 {} +
 
-restart_services
-ACTIVE_SERVICES=()
+CONFIG_INSTALLED="true"
+install_dir root "${VAPOR_GROUP}" 0750 "${VAPOR_CONFIG_DIR}"
+cp -a "${BUNDLE_ROOT}/config/vapor-server/." "${VAPOR_CONFIG_DIR}/"
+chown -R "root:${VAPOR_GROUP}" "${VAPOR_CONFIG_DIR}"
+find "${VAPOR_CONFIG_DIR}" -type d -exec chmod 0750 {} +
+find "${VAPOR_CONFIG_DIR}" -type f -exec chmod 0640 {} +
+
+CADDY_INSTALLED="true"
+install -D -o root -g root -m 0644 \
+  "${BUNDLE_ROOT}/host/caddy/Caddyfile" /etc/caddy/Caddyfile
+UNITS_INSTALLED="true"
+find /etc/systemd/system -maxdepth 1 \( -type f -o -type l \) \
+  \( -name 'vapor-*.service' -o -name 'vapor-*.timer' \) -delete
+for unit in "${BUNDLE_ROOT}"/host/systemd/vapor-*; do
+  [ -f "${unit}" ] || continue
+  install -D -o root -g root -m 0644 "${unit}" "/etc/systemd/system/$(basename -- "${unit}")"
+done
+
+systemctl daemon-reload
+caddy validate --config /etc/caddy/Caddyfile
+systemctl enable --now caddy.service
+for service in "${STATEFUL_SERVICES[@]}"; do
+  if [[ ! " ${TARGET_SERVICES[*]} " =~ " ${service} " ]]; then
+    systemctl disable --now "${service}" >/dev/null 2>&1 || true
+  fi
+done
+for service in "${TARGET_SERVICES[@]}"; do
+  systemctl enable --now "${service}"
+done
+systemctl enable --now vapor-state-export.timer
+systemctl reload caddy.service
 
 "${SCRIPT_DIR}/health-check.sh"
-
-echo "state-restore: restored ${BUNDLE_PATH}"
-if [ -e "${PRE_RESTORE_PATH}" ]; then
-  echo "state-restore: previous state moved to ${PRE_RESTORE_PATH}"
-fi
+echo "recovery-restore: restored validated full-platform bundle"
+echo "recovery-restore: previous state/configuration retained at ${PRE_RESTORE_PATH}"

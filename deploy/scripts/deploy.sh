@@ -50,6 +50,10 @@ case "${VAPOR_SERVER_MODE}" in
     exit 1
     ;;
 esac
+ensure_env_assignment \
+  "${VAPOR_CONFIG_DIR}/platform.env" \
+  VAPOR_SERVER_MODE \
+  "${VAPOR_SERVER_MODE}"
 
 DEPLOY_OPERATION_STARTED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DEPLOY_OPERATION_REVISION="unknown"
@@ -211,6 +215,10 @@ else
       --manifest-path "${VAPOR_DEPLOY_ROOT}/${service_package}/Cargo.toml" \
       --target-dir "${VAPOR_DEPLOY_ROOT}/target"
   done
+  cargo build --release --locked \
+    --manifest-path "${VAPOR_DEPLOY_ROOT}/Cargo.toml" \
+    --target-dir "${VAPOR_DEPLOY_ROOT}/target" \
+    --bin vapor_platform_server
   ensure_runtime_access \
     "${VAPOR_DEPLOY_ROOT}/target/release/vapor_homepage_server" \
     "${VAPOR_DEPLOY_ROOT}/target/release/vapor_docs_server" \
@@ -218,7 +226,8 @@ else
     "${VAPOR_DEPLOY_ROOT}/target/release/vapor_diagnostics_server" \
     "${VAPOR_DEPLOY_ROOT}/target/release/vapor_registry_server" \
     "${VAPOR_DEPLOY_ROOT}/target/release/vapor_artifact_server" \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_build_cache_server"
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_build_cache_server" \
+    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_platform_server"
   "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-services-systemd.sh"
   "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-services-caddy.sh"
 fi
@@ -241,6 +250,7 @@ else
   systemctl restart vapor-registry.service
   systemctl restart vapor-artifact.service
   systemctl restart vapor-build-cache.service
+  systemctl restart vapor-platform-server.service
 fi
 systemctl restart caddy.service
 

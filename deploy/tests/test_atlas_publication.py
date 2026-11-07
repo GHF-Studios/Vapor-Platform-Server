@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sys
 import subprocess
 import tempfile
 import unittest
+
+from shell_test_support import bash_executable, posix_path, read_symlink, shell_path_list
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -13,6 +16,11 @@ DEPLOYER = REPO_ROOT / "deploy" / "scripts" / "deploy-atlas.sh"
 
 class AtlasPublicationTests(unittest.TestCase):
     def test_deployment_builds_switches_retains_and_preserves_current_on_failure(self) -> None:
+        if os.name == "nt":
+            self.skipTest(
+                "the deploy flow requires native symlinks; Git Bash cannot create them "
+                "without Windows symlink privileges"
+            )
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             fake_bin = root / "bin"
@@ -60,7 +68,7 @@ class AtlasPublicationTests(unittest.TestCase):
             environment = os.environ.copy()
             environment.update(
                 {
-                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "PATH": shell_path_list(fake_bin, environment["PATH"]),
                     "VAPOR_DEPLOY_ROOT": str(deploy_root),
                     "VAPOR_ATLAS_WEB_ROOT": str(web_root),
                     "VAPOR_CONFIG_DIR": str(root / "no-config"),
@@ -76,7 +84,7 @@ class AtlasPublicationTests(unittest.TestCase):
                 else:
                     environment.pop("ATLAS_TEST_FAIL", None)
                 return subprocess.run(
-                    [str(DEPLOYER)],
+                    [bash_executable(), posix_path(DEPLOYER)],
                     check=False,
                     env=environment,
                     capture_output=True,
@@ -90,7 +98,7 @@ class AtlasPublicationTests(unittest.TestCase):
 
             result = deploy(first)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(os.readlink(web_root / "current"), f"releases/{first}")
+            self.assertEqual(read_symlink(web_root / "current"), f"releases/{first}")
             self.assertEqual((web_root / "current" / "index.html").read_text(), first)
 
             result = deploy(first)
@@ -100,19 +108,19 @@ class AtlasPublicationTests(unittest.TestCase):
 
             result = deploy(second)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(os.readlink(web_root / "current"), f"releases/{second}")
-            self.assertEqual(os.readlink(web_root / "previous"), f"releases/{first}")
+            self.assertEqual(read_symlink(web_root / "current"), f"releases/{second}")
+            self.assertEqual(read_symlink(web_root / "previous"), f"releases/{first}")
 
             result = deploy(third)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(os.readlink(web_root / "current"), f"releases/{third}")
-            self.assertEqual(os.readlink(web_root / "previous"), f"releases/{second}")
+            self.assertEqual(read_symlink(web_root / "current"), f"releases/{third}")
+            self.assertEqual(read_symlink(web_root / "previous"), f"releases/{second}")
             self.assertFalse((web_root / "releases" / first).exists())
 
             result = deploy(failed, fail=True)
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(os.readlink(web_root / "current"), f"releases/{third}")
-            self.assertEqual(os.readlink(web_root / "previous"), f"releases/{second}")
+            self.assertEqual(read_symlink(web_root / "current"), f"releases/{third}")
+            self.assertEqual(read_symlink(web_root / "previous"), f"releases/{second}")
             self.assertFalse(any(web_root.glob(".staging.*")))
 
     def test_caddy_serves_atlas_from_its_independent_static_root(self) -> None:

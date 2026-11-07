@@ -25,6 +25,7 @@ apt-get install --yes \
   gnupg \
   libssl-dev \
   libsqlite3-dev \
+  openssh-server \
   openssl \
   pkg-config \
   python3 \
@@ -86,6 +87,7 @@ find "${VAPOR_STATE_ROOT}" -type f -exec chmod 0640 {} +
 install_secret_env "${VAPOR_CONFIG_DIR}/platform.env" \
 "VAPOR_DOMAIN=${VAPOR_DOMAIN}
 VAPOR_PLATFORM_BIND=127.0.0.1:7110
+VAPOR_SERVER_MODE=${VAPOR_SERVER_MODE}
 VAPOR_PLATFORM_PROBE_ORIGIN=http://127.0.0.1:7110
 VAPOR_PLATFORM_IDENTITY_AUTHZ_URL=http://127.0.0.1:7110/api/identity/v1/internal/authorization/check
 VAPOR_BRANCH=${VAPOR_BRANCH}

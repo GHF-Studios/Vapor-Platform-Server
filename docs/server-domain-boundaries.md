@@ -164,8 +164,13 @@ Current state ownership:
 /var/lib/vapor-server/registry       Registry catalog metadata
 /var/lib/vapor-server/updates        immutable Artifact releases
 /var/lib/vapor-server/operations     latest root deploy/restore status pointer
-/etc/vapor-server                    server-local env/secrets, not exported
+/etc/vapor-server                    server-local env/secrets; included only in the new, intentionally unencrypted recovery-bundle design
 ```
+
+The deployed state-only bundle predates this recovery design and excludes the
+configuration directory. Schema-v2 export code now includes it, but that source
+change is not yet deployed or validated by a clean-host restore drill. See
+`docs/operations-evidence-and-recovery-contract.md` for the current contract.
 
 Future state should be service-owned:
 

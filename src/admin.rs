@@ -1404,6 +1404,38 @@ fn auth_unavailable_response(failure: crate::admin_auth::AuthFailure) -> Respons
 }
 
 async fn probe_services(client: &reqwest::Client, origin: &str) -> Vec<ServiceSummary> {
+    if std::env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services") {
+        let (
+            platform,
+            homepage,
+            docs,
+            identity,
+            diagnostics,
+            registry,
+            artifacts,
+            build_cache,
+        ) = tokio::join!(
+            probe_health(client, "http://127.0.0.1:7110", "/healthz"),
+            probe_health(client, "http://127.0.0.1:7111", "/healthz"),
+            probe_health(client, "http://127.0.0.1:7112", "/healthz"),
+            probe_health(client, "http://127.0.0.1:7113", "/healthz"),
+            probe_health(client, "http://127.0.0.1:7114", "/healthz"),
+            probe_health(client, "http://127.0.0.1:7115", "/healthz"),
+            probe_health(client, "http://127.0.0.1:7116", "/healthz"),
+            probe_health(client, "http://127.0.0.1:7117", "/healthz"),
+        );
+        return vec![
+            service("platform", "Platform", platform, "not reported", Some("/admin")),
+            service("homepage", "Homepage", homepage, "not reported", None),
+            service("docs", "Docs", docs, "not reported", None),
+            service("identity", "Identity", identity, "not reported", Some("/admin/identity")),
+            service("diagnostics", "Diagnostics", diagnostics, "not reported", None),
+            service("registry", "Workshop / Registry", registry, "not reported", Some("/admin/workshop")),
+            service("artifacts", "Artifacts", artifacts, "not reported", Some("/admin/artifacts")),
+            service("build-cache", "Build Cache", build_cache, "not reported", Some("/admin/build-cache")),
+        ];
+    }
+
     let (platform, docs, identity, diagnostics, registry, artifacts, build_cache) = tokio::join!(
         probe_health(client, origin, "/healthz"),
         probe_health(client, origin, "/docs/healthz"),
