@@ -10,6 +10,8 @@
   instead of leaving the contradictory `claimed` state. The deployment request
   remains closed as failed and requires a fresh approval; the deployment effect
   itself is still explicitly unknown.
+- The deployment request card reflects that distinction instead of labeling an
+  unknown execution outcome as a confirmed deployment failure.
 - Regression tests cover each recovery bound and the stopped-worker lifecycle
   transition. The full local Platform test recipe passed after these changes.
 - CI run `42348443012` found a Linux-only helper qualification error that the
@@ -18,6 +20,8 @@
   revision.
 - SSH read-only probes using both the root key and the same key for `leslieghf`
   were rejected. No VPS changes were made.
+- The follow-up UI wording was validated by the full local recipe and is queued
+  for its own CI run.
 
 ## Approval dispatch lifecycle follow-up (2026-11-07 06:30 UTC)
 

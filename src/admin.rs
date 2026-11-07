@@ -931,6 +931,7 @@ const JS: &str = r#"
           ? '; retry available' : '';
         const lifecycleLabel = item.status === 'executing' ? 'worker claimed; deployment running' :
           item.status === 'succeeded' ? 'deployment succeeded' :
+          item.status === 'failed' && item.dispatch_state === 'unknown' ? 'worker stopped; deployment outcome unknown' :
           item.status === 'failed' ? 'deployment failed' :
           item.status === 'expired' ? 'expired before worker claim' : null;
         dispatchStage.textContent = `Deployment: ${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail && !lifecycleLabel ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
@@ -2322,6 +2323,7 @@ mod tests {
         assert!(script.contains("expired: 'expired before worker claim'"));
         assert!(script.contains("claimed: 'worker claimed deployment'"));
         assert!(script.contains("completed: 'worker finished deployment'"));
+        assert!(script.contains("worker stopped; deployment outcome unknown"));
         assert!(script.contains("secondaryLabel: 'Dispatch needs attention'"));
         assert!(script.contains("Approval saved; deployment is queued for the worker."));
         assert!(script.contains("Approval saved; the worker claimed the deployment and it is running."));
