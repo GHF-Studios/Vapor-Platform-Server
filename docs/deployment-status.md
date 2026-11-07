@@ -42,8 +42,9 @@ and must not be read as current host status.
   positive: the CLI emitted it whenever the safe prune list was empty, even
   when metadata was valid and the retention limit had not been reached. A
   source fix now reports that warning only when metadata is actually missing
-  or inconsistent; it has not yet been deployed. The periodic deploy timer was
-  not started.
+  or inconsistent. Commit `c7b6a33` passed both `root-ci` and
+  `windows-recovery-tests` in GitHub Actions run `42385701950`; the fix has not
+  yet been deployed. The periodic deploy timer was not started.
 - The three pending full-deploy requests are `f08c9dec-627f-414e-b4e5-54562100df2f`
   (`7d07590`), `ed74751d-d3b2-4e67-a719-744121bd34d5` (`96e650f`), and
   `3196a6b8-2eb2-4957-b56a-2b7241bfce7d` (`12192d8`). The first two are
