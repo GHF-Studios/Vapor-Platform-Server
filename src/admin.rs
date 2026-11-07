@@ -211,7 +211,21 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .history-count { margin:8px 0 12px; }
 .history-toolbar { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0; }
 .history-toolbar p { margin:0; }
-.history-list { display:grid; gap:8px; }
+.history-workbench { display:grid; grid-template-columns:minmax(260px,.9fr) minmax(0,1.6fr); border:1px solid #2b3a4b; border-radius:7px; overflow:hidden; background:#151f2a; }
+.history-record-list { list-style:none; margin:0; padding:0; max-height:68vh; overflow:auto; border-right:1px solid #2b3a4b; }
+.history-record-list li + li { border-top:1px solid #293747; }
+.history-record { display:grid; width:100%; gap:4px; padding:10px 12px; border:0; border-radius:0; text-align:left; background:transparent; }
+.history-record:hover, .history-record[aria-current="true"] { background:#26394e; }
+.history-record-title { overflow:hidden; color:#e6edf3; font-size:13px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.history-record-meta { display:flex; flex-wrap:wrap; gap:4px 9px; color:#9eacba; font-size:11px; }
+.history-record-detail { min-width:0; min-height:250px; padding:16px; overflow:auto; }
+.history-record-detail > header { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.history-record-detail h2 { margin:0; overflow-wrap:anywhere; font-size:17px; }
+.history-source-status { display:flex; flex-wrap:wrap; gap:6px 12px; margin:10px 0; color:#9eacba; font-size:11px; }
+.history-source-status span { white-space:nowrap; }
+.history-source-status .source-error { color:#ed9aa0; }
+.history-source-panel { margin:10px 0; border-top:1px solid #2b3a4b; border-bottom:1px solid #2b3a4b; }
+.history-source-panel > summary { padding:7px 0; cursor:pointer; color:#9eacba; font-size:12px; }
 .request-queue-table { width:100%; margin-top:8px; border-collapse:collapse; }
 .request-queue-table th, .request-queue-table td { padding:8px 10px; border:0; border-bottom:1px solid #293747; text-align:left; }
 .request-queue-table th { color:#9eacba; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
@@ -221,9 +235,6 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .queue-action a { color:#b9d8f4; }
 .request-queue-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .request-queue-header h2 { margin:0; }
-.history-entry { background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
-.history-entry header { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
-.history-entry h3 { margin:0; font-size:14px; overflow-wrap:anywhere; }
 .history-meta { display:flex; flex-wrap:wrap; gap:6px 12px; margin:6px 0; color:#9eacba; font-size:12px; }
 .history-kind { color:#8fc5f4; font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.06em; }
 .history-state { border:1px solid #40536a; border-radius:10px; padding:1px 7px; white-space:nowrap; font-size:11px; }
@@ -290,7 +301,7 @@ form.inline { display:inline; }
 @media(max-width:820px) { .ssh-workbench { grid-template-columns:1fr; } .ssh-record-list { max-height:36vh; } }
 @media(max-width:720px) { .shell { grid-template-columns:1fr; } .shell > nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } .nav-group { display:inline-block; margin:8px 8px 4px; } .shell > nav a { display:inline-flex; } .admin-header { align-items:flex-start; flex-direction:column; padding:12px 14px; } .admin-statuses { justify-content:flex-start; } main { padding:20px 14px; } }
 @media(max-width:620px) { .history-controls { grid-template-columns:1fr; } }
-@media(max-width:560px) { .history-entry header { flex-direction:column; } }
+@media(max-width:760px) { .history-workbench { grid-template-columns:1fr; } .history-record-list { max-height:30vh; border-right:0; border-bottom:1px solid #2b3a4b; } }
 "#;
 
 const JS: &str = r#"
@@ -883,6 +894,7 @@ const JS: &str = r#"
     const isoTime = value => validTimestamp(value) ? new Date(value * 1000).toISOString() : '';
     const safeText = value => typeof value === 'string' ? value : '';
     let records = [];
+    let selectedRecordId = null;
     let failures = [];
     let sourceStates = [];
     const addRecord = (source, item) => {
@@ -949,13 +961,26 @@ const JS: &str = r#"
       }
       if (record.id && record.status) records.push(record);
     };
+    const historyStatus = record => {
+      const status = record.statusKey;
+      const dispatch = record.dispatchStatusKey;
+      if (['failed', 'rejected', 'expired', 'cancelled', 'revoked', 'expired-pending'].includes(status) || ['dispatch-failed', 'dispatch-unknown'].includes(dispatch)) return 'attention';
+      if (['pending', 'approved', 'executing', 'provisioning', 'stale'].includes(status) || ['dispatch-dispatching', 'dispatch-queued', 'dispatch-claimed'].includes(dispatch)) return 'active';
+      return ['succeeded', 'success', 'active'].includes(status) || dispatch === 'dispatch-completed' ? 'complete' : 'other';
+    };
+    const decorateHistoryState = (element, record) => {
+      element.className = 'history-state';
+      if (historyStatus(record) === 'attention') element.classList.add('state-danger');
+      else if (historyStatus(record) === 'complete') element.classList.add('state-good');
+      else if (historyStatus(record) === 'active') element.classList.add('state-warning');
+    };
     const renderHistory = () => {
       const query = (search?.value || '').trim().toLocaleLowerCase();
       const selectedKind = kindFilter?.value || 'all';
       const selectedStatus = statusFilter?.value || 'all';
       const visible = records.filter(record =>
         (selectedKind === 'all' || record.kind === selectedKind) &&
-        (selectedStatus === 'all' || record.statusKey === selectedStatus || record.dispatchStatusKey === selectedStatus) &&
+        (selectedStatus === 'all' || historyStatus(record) === selectedStatus) &&
         (!query || `${record.kind} ${record.statusLabel} ${record.id} ${record.search}`.toLocaleLowerCase().includes(query))
       );
       operationHistory.replaceChildren();
@@ -968,74 +993,78 @@ const JS: &str = r#"
         operationHistory.textContent = records.length ? 'No records match these filters.' : 'No records have been recorded by the available services.';
         return;
       }
-      const list = document.createElement('div');
-      list.className = 'history-list';
+      const selected = visible.find(record => record.id === selectedRecordId) || visible[0];
+      selectedRecordId = selected.id;
+      const workbench = document.createElement('div'); workbench.className = 'history-workbench';
+      const list = document.createElement('ul'); list.className = 'history-record-list'; list.setAttribute('aria-label', 'History records');
       for (const record of visible) {
-        const card = document.createElement('article');
-        card.className = 'history-entry';
-        const header = document.createElement('header');
-        const heading = document.createElement('h3'); heading.textContent = record.title;
-        const state = document.createElement('span'); state.className = 'history-state'; state.textContent = record.statusLabel;
-        if (record.status === 'failed' || record.status === 'rejected' || record.status === 'expired' || record.status === 'cancelled' || record.status === 'revoked' || record.dispatchStatusKey === 'dispatch-failed' || record.dispatchStatusKey === 'dispatch-unknown') state.classList.add('state-danger');
-        else if (record.status === 'success' || record.status === 'succeeded' || record.status === 'active') state.classList.add('state-good');
-        else if (record.status === 'pending' || record.status === 'approved' || record.status === 'executing' || record.status === 'provisioning' || record.status === 'stale' || record.statusKey === 'expired-pending' || record.dispatchStatusKey === 'dispatch-dispatching' || record.dispatchStatusKey === 'dispatch-queued') state.classList.add('state-warning');
-        header.append(heading, state);
-        const meta = document.createElement('p'); meta.className = 'history-meta';
-        const kind = document.createElement('span'); kind.className = 'history-kind'; kind.textContent = record.kind;
-        const date = document.createElement('time'); date.dateTime = isoTime(record.timestamp);
-        date.textContent = `${record.timestampLabel}: ${humanTime(record.timestamp)}`;
-        const id = document.createElement('span'); id.textContent = `${record.kind === 'Platform operation' ? 'Operation' : 'Request'} ${record.id}`;
-        meta.append(kind, date, id);
-        card.append(header, meta);
-        if (record.subject) { const subject = document.createElement('p'); subject.className = 'history-detail'; subject.textContent = record.subject; card.append(subject); }
-        if (record.details.length) {
-          const detailList = document.createElement('ul'); detailList.className = 'history-detail-list';
-          for (const detail of record.details) { const line = document.createElement('li'); line.textContent = detail; detailList.append(line); }
-          card.append(detailList);
-        }
-        if (record.link) { const link = document.createElement('a'); link.href = record.link; link.textContent = record.kind === 'Deployment' ? 'Open CI run' : 'Open owning section'; link.rel = 'noopener noreferrer'; card.append(link); }
-        if (record.eventsUrl) {
-          const details = document.createElement('details');
-          const summary = document.createElement('summary'); summary.textContent = 'Request activity';
-          const body = document.createElement('div'); body.className = 'history-detail'; body.textContent = 'Open to load owner-recorded status changes.';
-          details.append(summary, body);
-          details.addEventListener('toggle', async () => {
-            if (!details.open || details.dataset.loaded === 'true') return;
-            body.textContent = 'Loading activity…';
-            try {
-              const response = await fetch(record.eventsUrl, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
-              const events = await response.json().catch(() => null);
-              if (!response.ok || !Array.isArray(events)) { body.textContent = response.status === 403 ? 'Root access required.' : `Activity unavailable (HTTP ${response.status}).`; return; }
-              body.replaceChildren();
-              if (!events.length) body.textContent = 'No request transitions were recorded.';
-              for (const event of events) {
-                const line = document.createElement('p'); line.className = 'history-detail';
-                const transition = event.from_status ? `${event.from_status} → ${event.to_status}` : event.to_status;
-                line.textContent = `${humanTime(Number(event.at_unix))} · ${transition} · ${safeText(event.actor_label || event.actor_kind)}`;
-                body.append(line);
-              }
-              details.dataset.loaded = 'true';
-            } catch (_) { body.textContent = 'Could not contact the Platform history API.'; }
-          });
-          card.append(details);
-        }
-        list.append(card);
+        const item = document.createElement('li');
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'history-record';
+        button.setAttribute('aria-current', String(record.id === selected.id));
+        button.addEventListener('click', () => { selectedRecordId = record.id; renderHistory(); });
+        const title = document.createElement('span'); title.className = 'history-record-title'; title.textContent = record.title;
+        const meta = document.createElement('span'); meta.className = 'history-record-meta';
+        const kind = document.createElement('span'); kind.textContent = record.kind;
+        const date = document.createElement('time'); date.dateTime = isoTime(record.timestamp); date.textContent = humanTime(record.timestamp);
+        const state = document.createElement('span'); state.textContent = record.statusLabel; decorateHistoryState(state, record);
+        meta.append(kind, date, state); button.append(title, meta); item.append(button); list.append(item);
       }
-      operationHistory.append(list);
+      const detail = document.createElement('section'); detail.className = 'history-record-detail'; detail.setAttribute('aria-live', 'polite');
+      const header = document.createElement('header');
+      const heading = document.createElement('h2'); heading.textContent = selected.title;
+      const state = document.createElement('span'); state.textContent = selected.statusLabel; decorateHistoryState(state, selected);
+      header.append(heading, state); detail.append(header);
+      const meta = document.createElement('p'); meta.className = 'history-meta';
+      const kind = document.createElement('span'); kind.className = 'history-kind'; kind.textContent = selected.kind;
+      const date = document.createElement('time'); date.dateTime = isoTime(selected.timestamp); date.textContent = `${selected.timestampLabel}: ${humanTime(selected.timestamp)}`;
+      const id = document.createElement('span'); id.textContent = `${selected.kind === 'Platform operation' ? 'Operation' : 'Request'} ${selected.id}`;
+      meta.append(kind, date, id); detail.append(meta);
+      if (selected.subject) { const subject = document.createElement('p'); subject.className = 'history-detail'; subject.textContent = selected.subject; detail.append(subject); }
+      if (selected.details.length) {
+        const details = document.createElement('ul'); details.className = 'history-detail-list';
+        for (const value of selected.details) { const line = document.createElement('li'); line.textContent = value; details.append(line); }
+        detail.append(details);
+      }
+      if (selected.link) { const link = document.createElement('a'); link.href = selected.link; link.textContent = selected.kind === 'Deployment' ? 'Open CI run' : 'Open owning section'; link.rel = 'noopener noreferrer'; detail.append(link); }
+      if (selected.eventsUrl) {
+        const events = document.createElement('details');
+        const summary = document.createElement('summary'); summary.textContent = 'Request activity';
+        const body = document.createElement('div'); body.className = 'history-detail'; body.textContent = 'Open to load owner-recorded status changes.';
+        events.append(summary, body);
+        events.addEventListener('toggle', async () => {
+          if (!events.open || events.dataset.loaded === 'true') return;
+          body.textContent = 'Loading activity…';
+          try {
+            const response = await fetch(selected.eventsUrl, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+            const transitions = await response.json().catch(() => null);
+            if (!response.ok || !Array.isArray(transitions)) { body.textContent = response.status === 403 ? 'Root access required.' : `Activity unavailable (HTTP ${response.status}).`; return; }
+            body.replaceChildren();
+            if (!transitions.length) body.textContent = 'No request transitions were recorded.';
+            for (const event of transitions) {
+              const line = document.createElement('p'); line.className = 'history-detail';
+              const transition = event.from_status ? `${event.from_status} → ${event.to_status}` : event.to_status;
+              line.textContent = `${humanTime(Number(event.at_unix))} · ${transition} · ${safeText(event.actor_label || event.actor_kind)}`;
+              body.append(line);
+            }
+            events.dataset.loaded = 'true';
+          } catch (_) { body.textContent = 'Could not contact the Platform history API.'; }
+        });
+        detail.append(events);
+      }
+      workbench.append(list, detail); operationHistory.append(workbench);
     };
     const refreshButton = document.querySelector('#history-refresh');
     const loadMoreButton = document.querySelector('#history-load-more');
     const renderSourceStatus = () => {
       sourceStatus.replaceChildren();
       for (const state of sourceStates) {
-        const line = document.createElement('p');
-        line.className = state.error ? 'error' : 'muted';
+        const line = document.createElement('span');
+        if (state.error) line.className = 'source-error';
         const summary = state.error || `${state.loaded} loaded${state.nextCursor ? ' · more available' : ''}`;
         line.textContent = `${state.source.label}: ${summary}`;
         sourceStatus.append(line);
       }
       const refreshed = document.createElement('span');
-      refreshed.className = 'muted';
       refreshed.textContent = `Updated ${new Date().toLocaleTimeString()}`;
       sourceStatus.append(refreshed);
       if (loadMoreButton) {
@@ -1748,7 +1777,15 @@ fn operations_page(view: OperationsView) -> String {
         .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
         OperationsView::TemporaryAccess => "<p class=\"eyebrow\">Operate · Access</p><div class=\"request-queue-header\"><div><h1>SSH access</h1><p class=\"muted\">Inspect temporary machine access, connection details, expiry, and grant history. Review new requests in <a href=\"/admin/approvals#pending-ssh-approvals\">Approvals</a>; this workspace manages grants after the decision.</p></div><button id=\"ssh-access-refresh\" type=\"button\">Refresh</button></div><section class=\"ssh-workbench\" aria-label=\"SSH access workbench\"><div class=\"ssh-list-panel\"><div class=\"ssh-list-toolbar\"><label for=\"ssh-access-search\">Find a request or grant<input id=\"ssh-access-search\" type=\"search\" placeholder=\"Name, purpose, fingerprint, account\" autocomplete=\"off\"></label><label for=\"ssh-access-filter\">Show<select id=\"ssh-access-filter\"><option value=\"active\">Active grants</option><option value=\"all\">All access records</option><option value=\"pending\">Pending review</option><option value=\"history\">Closed history</option></select></label><p id=\"ssh-access-count\" class=\"ssh-list-count\" aria-live=\"polite\">Loading access records…</p></div><ul id=\"ssh-access-list\" class=\"ssh-record-list\" aria-label=\"SSH access records\"><li class=\"muted\">Loading…</li></ul></div><section id=\"ssh-access-detail\" class=\"ssh-detail-panel\" aria-live=\"polite\"><p class=\"muted\">Choose a grant to inspect its details.</p></section></section>".to_owned(),
-        OperationsView::History => "<section class=\"card\"><h2>Request and operation history</h2><p class=\"muted\">Read-only Platform deploy/restore outcomes and owner-sourced deployment, access, and Identity request records. Each owning service remains authoritative for its records and decisions; an unavailable source is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><div><button id=\"history-load-more\" type=\"button\" hidden>Load older records</button> <button id=\"history-refresh\" type=\"button\">Refresh records</button></div></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Platform operation</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>success</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option><option value=\"dispatch-claimed\">claimed by worker</option><option value=\"dispatch-completed\">worker completed</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading history sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading history…</p></div></section>".to_owned(),
+        OperationsView::History => concat!(
+            "<p class=\"eyebrow\">Platform · Records</p><h1>History</h1>",
+            "<section class=\"card\"><p class=\"muted\">Search records from their owning services. Select a row to inspect its details.</p>",
+            "<div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><div><button id=\"history-load-more\" type=\"button\" hidden>Load older records</button> <button id=\"history-refresh\" type=\"button\">Refresh</button></div></div>",
+            "<div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Name, revision, ID, fingerprint…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Platform operation</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">Any status</option><option value=\"attention\">Needs attention</option><option value=\"active\">In progress</option><option value=\"complete\">Completed</option></select></label></div>",
+            "<details class=\"history-source-panel\"><summary>Record sources</summary><div id=\"history-sources\" class=\"history-source-status\" aria-live=\"polite\"><span>Loading sources…</span></div></details>",
+            "<div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading records…</p></div></section>"
+        )
+        .to_owned(),
     };
     if view == OperationsView::TemporaryAccess {
         return content;
@@ -2492,6 +2529,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let css = std::str::from_utf8(&body).unwrap();
         assert!(css.contains("@media(max-width:620px) { .history-controls { grid-template-columns:1fr; }"));
+        assert!(css.contains("@media(max-width:760px) { .history-workbench { grid-template-columns:1fr; }"));
     }
 
     #[tokio::test]
@@ -2949,9 +2987,12 @@ mod tests {
         assert!(deployments.contains("Latest deploy or restore result"));
         assert!(deployments.contains("id=\"latest-operation-status\""));
         assert!(!history.contains("latest-operation-status"));
-        assert!(history.contains("Request and operation history"));
-        assert!(history.contains("value=\"dispatch-claimed\">claimed by worker"));
-        assert!(history.contains("value=\"dispatch-completed\">worker completed"));
+        assert!(history.contains("Platform · Records"));
+        assert!(history.contains("Needs attention"));
+        assert!(history.contains("In progress"));
+        assert!(history.contains("Completed"));
+        assert!(history.contains("class=\"history-source-panel\""));
+        assert!(history.contains("id=\"operations-history\""));
         assert!(history.contains("id=\"history-load-more\""));
     }
 
@@ -2967,6 +3008,11 @@ mod tests {
         assert!(script.contains("cursor: state.nextCursor"));
         assert!(script.contains("limit: '50'"));
         assert!(script.contains("loadMoreButton?.addEventListener('click', loadMoreHistory)"));
+        assert!(script.contains("className = 'history-workbench'"));
+        assert!(script.contains("className = 'history-record-list'"));
+        assert!(script.contains("const historyStatus = record =>"));
+        assert!(script.contains("record.id === selectedRecordId"));
+        assert!(!script.contains("className = 'history-entry'"));
     }
 
     #[tokio::test]
