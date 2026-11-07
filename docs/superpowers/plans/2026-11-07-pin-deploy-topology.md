@@ -76,3 +76,21 @@ and approved.
 - The current pending ticket may be superseded by a new request after this
   change reaches main; that is an explicit approval transition, not an implicit
   deployment.
+
+## Runtime regression follow-up — 2026-11-07
+
+The live worker exposed a gap in the original execution check: the worker passed
+the approved request mode in its environment, but `lib.sh` then sourced
+`/etc/vapor-server/platform.env` and replaced it with the host's previous mode
+before `deploy.sh` verified the immutable request. The config loader now
+preserves and validates the incoming mode only when an approved request ID is
+present; ordinary invocations continue to use host configuration, and an
+approved invocation without a valid request mode fails closed. Behavioral
+regressions cover both mode precedence cases and the missing-mode rejection.
+
+The affected live tickets were created by older request workflows and lack the
+current deployment-scope fields; immutable legacy bodies must be rejected and
+replaced by a fresh request. The follow-up does not edit those records or bypass
+the approval flow. Validation: deployment helper suite passes (104 tests, 10
+platform-specific skips), Platform Rust suite passes (84 tests), and CI run
+42406197886 passed both jobs. Source commit: `3cb6aef`.
