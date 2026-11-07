@@ -366,7 +366,7 @@ const JS: &str = r#"
   if (requestQueue) {
     const refreshQueueButton = document.querySelector('#operator-queue-refresh');
     const sources = [
-      { name: 'Deployments', url: '/api/admin/deploy-requests', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'approved' && ['failed', 'unknown', 'dispatching', 'queued'].includes(item.dispatch_state)).length, secondaryLabel: 'Approved, dispatch unresolved' }) },
+      { name: 'Deployments', url: '/api/admin/deploy-requests', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'approved' && ['failed', 'unknown', 'dispatching'].includes(item.dispatch_state)).length, secondaryLabel: 'Dispatch needs attention' }) },
       { name: 'Temporary access', url: '/api/admin/ssh-access/requests', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'active').length, secondaryLabel: 'Active grants' }) },
       { name: 'Identity permissions', url: '/api/identity/v1/admin/permission-requests', href: '/admin/approvals', summarize: items => { const pending = items.filter(item => item.status === 'pending'); const overdue = pending.filter(item => Number(item.expires_at_unix) > 0 && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000)).length; return { primary: pending.length - overdue, label: 'Awaiting review', secondary: overdue, secondaryLabel: 'Expired by time; owner transition pending' }; } }
     ];
@@ -899,13 +899,18 @@ const JS: &str = r#"
         dispatchStage.className = 'muted';
         const dispatchLabels = {
           not_attempted: 'not attempted', dispatching: 'dispatch in progress',
-          queued: 'queued', expired: 'expired before worker claim',
-          failed: 'dispatch failed', unknown: 'dispatch result unknown'
+          queued: 'queued for worker', claimed: 'worker claimed deployment',
+          completed: 'worker finished deployment', expired: 'expired before worker claim',
+          failed: 'dispatch or worker claim failed', unknown: 'dispatch result unknown'
         };
         const selectionValid = validDeploymentSelection(item);
         const retryLabel = selectionValid && item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)
           ? '; retry available' : '';
-        dispatchStage.textContent = `Deployment: ${dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
+        const lifecycleLabel = item.status === 'executing' ? 'worker claimed; deployment running' :
+          item.status === 'succeeded' ? 'deployment succeeded' :
+          item.status === 'failed' ? 'deployment failed' :
+          item.status === 'expired' ? 'expired before worker claim' : null;
+        dispatchStage.textContent = `Deployment: ${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail && !lifecycleLabel ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
         const revision = document.createElement('p');
         revision.textContent = `Commit ${item.commit} · tree ${item.tree}`;
         const target = document.createElement('p');
@@ -1398,7 +1403,7 @@ fn operations_page(view: OperationsView) -> String {
         .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
         OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
-        OperationsView::History => "<section class=\"card\"><h2>Request history</h2><p class=\"muted\">A read-only view of recent Platform deployment/access requests and Identity permission requests. Each owning service remains authoritative for its records and decisions; a service that is unavailable is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><button id=\"history-refresh\" type=\"button\">Refresh records</button></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading request sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading request history…</p></div></section>".to_owned(),
+        OperationsView::History => "<section class=\"card\"><h2>Request history</h2><p class=\"muted\">A read-only view of recent Platform deployment/access requests and Identity permission requests. Each owning service remains authoritative for its records and decisions; a service that is unavailable is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><button id=\"history-refresh\" type=\"button\">Refresh records</button></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option><option value=\"dispatch-claimed\">claimed by worker</option><option value=\"dispatch-completed\">worker completed</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading request sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading request history…</p></div></section>".to_owned(),
     };
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Platform · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>{}</h1>{content}</main></body></html>",
@@ -2236,6 +2241,8 @@ mod tests {
         assert!(deployments.contains("id=\"latest-operation-status\""));
         assert!(!history.contains("latest-operation-status"));
         assert!(history.contains("Request history"));
+        assert!(history.contains("value=\"dispatch-claimed\">claimed by worker"));
+        assert!(history.contains("value=\"dispatch-completed\">worker completed"));
     }
 
     #[test]
@@ -2288,8 +2295,11 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
         assert!(script.contains("Decision: ${item.status"));
-        assert!(script.contains("Deployment: ${dispatchLabels[item.dispatch_state]"));
+        assert!(script.contains("Deployment: ${lifecycleLabel || dispatchLabels[item.dispatch_state]"));
         assert!(script.contains("expired: 'expired before worker claim'"));
+        assert!(script.contains("claimed: 'worker claimed deployment'"));
+        assert!(script.contains("completed: 'worker finished deployment'"));
+        assert!(script.contains("secondaryLabel: 'Dispatch needs attention'"));
         assert!(script.contains("? '; retry available' : '';"));
         assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const validDeploymentSelection = item =>"));

@@ -779,7 +779,14 @@ async fn dispatch_approved_authorized(
             (state, detail, None)
         }
     };
-    let recorded = match finish_dispatch_attempt(&state.pool, id, attempt, dispatch_state, detail)
+    let recorded = match finish_dispatch_attempt(
+        &state.pool,
+        id,
+        version,
+        attempt,
+        dispatch_state,
+        detail,
+    )
         .await
     {
         Ok(recorded) => recorded,
@@ -798,11 +805,61 @@ async fn dispatch_approved_authorized(
         }
     };
     if !recorded {
+        let row = match sqlx::query(
+            "SELECT status, version, dispatch_state, dispatch_detail, result_detail
+             FROM platform_deploy_requests WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        {
+            Ok(Some(row)) => row,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(error) => {
+                eprintln!(
+                    "deploy request {id}: stage=dispatch_persistence category=database_read_failed error={error}"
+                );
+                return stage_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "dispatch_state_unavailable",
+                    "dispatch_recording",
+                    "Approval is saved, but the current deployment state could not be read. Reload before retrying.",
+                    true,
+                    false,
+                );
+            }
+        };
+        let current_status: String = row.get("status");
+        let current_version: i64 = row.get("version");
+        let current_dispatch_state: String = row.get("dispatch_state");
+        let current_dispatch_detail: Option<String> = row.get("dispatch_detail");
+        let current_result_detail: Option<String> = row.get("result_detail");
+        if worker_has_progressed(&current_status, &current_dispatch_state) {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "id": id,
+                    "status": current_status,
+                    "version": current_version,
+                    "decision": {"status": "approved", "saved": true},
+                    "dispatch": {
+                        "status": current_dispatch_state,
+                        "detail": current_dispatch_detail,
+                        "result": current_result_detail
+                    }
+                })),
+            )
+                .into_response();
+        }
         return stage_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "dispatch_result_not_recorded",
+            StatusCode::CONFLICT,
+            "dispatch_attempt_superseded",
             "dispatch_recording",
-            "The request changed while dispatch was running. Reload it to see the current deployment state.",
+            if current_status == "expired" {
+                "Approval is saved, but the request expired before the worker claimed it. Reload to confirm its current state."
+            } else {
+                "Approval is saved, but another dispatch attempt or request transition superseded this result. Reload before retrying."
+            },
             true,
             false,
         );
@@ -922,6 +979,11 @@ fn retry_eligible(
         }
 }
 
+fn worker_has_progressed(status: &str, dispatch_state: &str) -> bool {
+    matches!(status, "executing" | "succeeded" | "failed")
+        && matches!(dispatch_state, "claimed" | "completed" | "failed")
+}
+
 async fn begin_dispatch_attempt(
     pool: &SqlitePool,
     id: &str,
@@ -950,7 +1012,7 @@ async fn normalize_stale_dispatches(pool: &SqlitePool, now: i64) -> Result<(), s
         "UPDATE platform_deploy_requests
          SET dispatch_state = 'unknown',
              dispatch_detail = 'Previous dispatch attempt stopped responding; retry is available.'
-         WHERE status = 'approved' AND dispatch_state = 'dispatching'
+         WHERE status = 'approved' AND dispatch_state IN ('dispatching', 'queued')
            AND dispatch_attempted_at_unix <= ?",
     )
     .bind(now - DISPATCH_STALE_SECONDS)
@@ -962,6 +1024,7 @@ async fn normalize_stale_dispatches(pool: &SqlitePool, now: i64) -> Result<(), s
 async fn finish_dispatch_attempt(
     pool: &SqlitePool,
     id: &str,
+    expected_version: i64,
     attempt: i64,
     outcome: &str,
     detail: &str,
@@ -971,12 +1034,13 @@ async fn finish_dispatch_attempt(
         "UPDATE platform_deploy_requests
          SET dispatch_state = ?, dispatch_detail = ?
          WHERE id = ? AND dispatch_attempts = ? AND dispatch_state = 'dispatching'
-           AND status != 'expired'",
+           AND status = 'approved' AND version = ?",
     )
     .bind(outcome)
     .bind(bounded_detail)
     .bind(id)
     .bind(attempt)
+    .bind(expected_version)
     .execute(pool)
     .await?;
     Ok(result.rows_affected() == 1)
@@ -986,7 +1050,7 @@ async fn finish_dispatch_attempt(
 mod dispatch_tests {
     use super::{
         begin_dispatch_attempt, expire_requests, finish_dispatch_attempt,
-        normalize_stale_dispatches, retry_eligible,
+        normalize_stale_dispatches, retry_eligible, worker_has_progressed,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Row;
@@ -1012,7 +1076,7 @@ mod dispatch_tests {
             .unwrap();
         sqlx::query("CREATE TABLE platform_deploy_requests (id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, dispatch_state TEXT NOT NULL DEFAULT 'not_attempted', dispatch_attempts INTEGER NOT NULL DEFAULT 0, dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO platform_deploy_requests (id, status, version, expires_at_unix, dispatch_state, dispatch_attempts, dispatch_attempted_at_unix) VALUES ('queued', 'approved', 3, 99, 'queued', 1, 90), ('dispatching', 'approved', 3, 99, 'dispatching', 1, 90), ('pending', 'pending', 1, 99, 'not_attempted', 0, NULL), ('future', 'approved', 2, 101, 'queued', 1, 90), ('executing', 'executing', 4, 99, 'queued', 1, 90)")
+        sqlx::query("INSERT INTO platform_deploy_requests (id, status, version, expires_at_unix, dispatch_state, dispatch_attempts, dispatch_attempted_at_unix) VALUES ('queued', 'approved', 3, 99, 'queued', 1, 90), ('dispatching', 'approved', 3, 99, 'dispatching', 1, 90), ('pending', 'pending', 1, 99, 'not_attempted', 0, NULL), ('future', 'approved', 2, 101, 'queued', 1, 90), ('executing', 'executing', 4, 99, 'claimed', 1, 90)")
             .execute(&pool).await.unwrap();
         pool
     }
@@ -1045,7 +1109,7 @@ mod dispatch_tests {
         assert_eq!(dispatching.get::<String, _>("status"), "expired");
         assert_eq!(dispatching.get::<String, _>("dispatch_state"), "expired");
         assert!(
-            !finish_dispatch_attempt(&pool, "dispatching", 1, "queued", "queued")
+            !finish_dispatch_attempt(&pool, "dispatching", 3, 1, "queued", "queued")
                 .await
                 .unwrap()
         );
@@ -1083,7 +1147,7 @@ mod dispatch_tests {
             .await
             .unwrap()
             .unwrap();
-        finish_dispatch_attempt(&pool, "r1", attempt, "failed", "helper rejected")
+        finish_dispatch_attempt(&pool, "r1", 3, attempt, "failed", "helper rejected")
             .await
             .unwrap();
         let row = sqlx::query("SELECT status, version, dispatch_state, dispatch_detail FROM platform_deploy_requests WHERE id='r1'")
@@ -1111,13 +1175,13 @@ mod dispatch_tests {
             .unwrap()
             .is_none());
         sqlx::query(
-            "UPDATE platform_deploy_requests SET status='executing', version=4 WHERE id='r1'",
+            "UPDATE platform_deploy_requests SET status='executing', version=4, dispatch_state='claimed' WHERE id='r1'",
         )
         .execute(&pool)
         .await
         .unwrap();
         assert!(
-            finish_dispatch_attempt(&pool, "r1", attempt, "queued", "queued")
+            !finish_dispatch_attempt(&pool, "r1", 3, attempt, "queued", "queued")
                 .await
                 .unwrap()
         );
@@ -1129,7 +1193,20 @@ mod dispatch_tests {
         .unwrap();
         assert_eq!(row.get::<String, _>("status"), "executing");
         assert_eq!(row.get::<i64, _>("version"), 4);
-        assert_eq!(row.get::<String, _>("dispatch_state"), "queued");
+        assert_eq!(row.get::<String, _>("dispatch_state"), "claimed");
+        assert!(worker_has_progressed("executing", "claimed"));
+
+        sqlx::query(
+            "UPDATE platform_deploy_requests SET status='succeeded', version=5, dispatch_state='completed' WHERE id='r1'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(worker_has_progressed("succeeded", "completed"));
+        assert!(worker_has_progressed("failed", "completed"));
+        assert!(worker_has_progressed("failed", "failed"));
+        assert!(!worker_has_progressed("approved", "queued"));
+        assert!(!worker_has_progressed("expired", "expired"));
     }
 
     #[tokio::test]
@@ -1155,7 +1232,7 @@ mod dispatch_tests {
             .unwrap()
             .is_some());
         assert!(
-            !finish_dispatch_attempt(&pool, "r1", first, "queued", "late")
+            !finish_dispatch_attempt(&pool, "r1", 3, first, "queued", "late")
                 .await
                 .unwrap()
         );
@@ -1171,6 +1248,55 @@ mod dispatch_tests {
             None,
             140
         ));
+    }
+
+    #[tokio::test]
+    async fn stale_queued_attempt_becomes_retryable_but_claimed_work_is_untouched() {
+        let pool = pool_with_approved_request().await;
+        sqlx::query(
+            "UPDATE platform_deploy_requests SET dispatch_state='queued', dispatch_attempts=1,
+             dispatch_attempted_at_unix=100 WHERE id='r1'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO platform_deploy_requests
+             (id, status, version, dispatch_state, dispatch_attempts, dispatch_attempted_at_unix)
+             VALUES ('claimed', 'executing', 4, 'claimed', 1, 100)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        normalize_stale_dispatches(&pool, 130).await.unwrap();
+
+        let queued = sqlx::query(
+            "SELECT status, dispatch_state, dispatch_detail FROM platform_deploy_requests WHERE id='r1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(queued.get::<String, _>("status"), "approved");
+        assert_eq!(queued.get::<String, _>("dispatch_state"), "unknown");
+        assert!(queued
+            .get::<String, _>("dispatch_detail")
+            .contains("retry is available"));
+        assert!(retry_eligible(
+            queued.get("status"),
+            queued.get("dispatch_state"),
+            Some(100),
+            130
+        ));
+
+        let claimed = sqlx::query(
+            "SELECT status, dispatch_state FROM platform_deploy_requests WHERE id='claimed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(claimed.get::<String, _>("status"), "executing");
+        assert_eq!(claimed.get::<String, _>("dispatch_state"), "claimed");
     }
 }
 

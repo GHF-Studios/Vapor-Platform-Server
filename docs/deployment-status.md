@@ -1,5 +1,23 @@
 # Vapor server deployment status
 
+## Approval dispatch lifecycle follow-up (2026-11-07 06:30 UTC)
+
+- The deployment approval endpoint and worker now record distinct queued,
+  claimed, and completed dispatch states. The endpoint's final write is guarded
+  by the original request version and cannot overwrite a worker that has already
+  claimed or completed the deployment. If the worker advances first, the
+  approval response returns the current authoritative state.
+- A worker may claim only a fresh dispatch attempt. Stale queued and dispatching
+  attempts normalize to `unknown` and become retryable; executing/claimed work
+  is excluded from stale recovery. The request history exposes the new worker
+  states and the deployment UI reports terminal failure consistently.
+- Local verification passed: all 76 Python tests (9 platform skips), the Rust
+  Platform test suite (63 unit tests plus 3 CLI integration tests), all
+  workspace Rust tests through `deploy/scripts/test.sh`, and the shell,
+  Python-syntax, and Atlas checks. Existing Rust dead-code warnings remain.
+- This is source-only; no VPS deployment was performed. GitHub Actions for the
+  new source revision must pass before treating it as a validated candidate.
+
 ## Latest candidate validation (2026-11-07 06:10 UTC)
 
 - The latest validated candidate is

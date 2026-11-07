@@ -27,7 +27,8 @@ class DeployRequestQueueTests(unittest.TestCase):
             "CREATE TABLE platform_deploy_requests ("
             "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, "
             "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
-            "dispatch_state TEXT NOT NULL, dispatch_detail TEXT, result_detail TEXT, "
+            "dispatch_state TEXT NOT NULL, dispatch_attempts INTEGER NOT NULL DEFAULT 1, "
+            "dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT, result_detail TEXT, "
             "body_hash TEXT NOT NULL, request_json TEXT NOT NULL, repository TEXT NOT NULL, "
             "branch TEXT NOT NULL, commit_hash TEXT NOT NULL, tree_hash TEXT NOT NULL, "
             "workflow_url TEXT NOT NULL, summary TEXT NOT NULL, submodules_json TEXT NOT NULL)"
@@ -35,11 +36,12 @@ class DeployRequestQueueTests(unittest.TestCase):
         raw = json.dumps(request, separators=(",", ":"))
         db.execute(
             "INSERT INTO platform_deploy_requests "
-            "(id,status,version,expires_at_unix,decided_at_unix,dispatch_state,dispatch_detail,result_detail,"
+            "(id,status,version,expires_at_unix,decided_at_unix,dispatch_state,dispatch_attempts,"
+            "dispatch_attempted_at_unix,dispatch_detail,result_detail,"
             "body_hash,request_json,repository,branch,commit_hash,tree_hash,workflow_url,summary,submodules_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "req", status, version, 9999999999, None, "not_attempted", None, None,
+                "req", status, version, 9999999999, None, "dispatching", 1, 100, None, None,
                 hashlib.sha256(raw.encode()).hexdigest(), raw,
                 request["repository"], request["branch"], request["commit"], request["tree"],
                 request["workflow_url"], request["summary"],
@@ -67,7 +69,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         db = self._database_with_request(self._request())
         output = io.StringIO()
 
-        with contextlib.redirect_stdout(output):
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
             result = QUEUE.claim(db, "req")
 
         self.assertEqual(result, 0)
@@ -75,6 +77,19 @@ class DeployRequestQueueTests(unittest.TestCase):
         self.assertEqual(claimed["server_mode"], "services")
         self.assertEqual(claimed["deployment_scope"], "full")
         self.assertIsNone(claimed["service_target"])
+        row = db.execute(
+            "SELECT status, version, dispatch_state FROM platform_deploy_requests WHERE id='req'"
+        ).fetchone()
+        self.assertEqual(row["status"], "executing")
+        self.assertEqual(row["dispatch_state"], "claimed")
+
+        QUEUE.complete(db, "req", row["version"], "succeeded", "deployment ok")
+        row = db.execute(
+            "SELECT status, dispatch_state, result_detail FROM platform_deploy_requests WHERE id='req'"
+        ).fetchone()
+        self.assertEqual(row["status"], "succeeded")
+        self.assertEqual(row["dispatch_state"], "completed")
+        self.assertEqual(row["result_detail"], "deployment ok")
         db.close()
 
     def test_claim_preserves_service_scope_and_target(self) -> None:
@@ -82,13 +97,41 @@ class DeployRequestQueueTests(unittest.TestCase):
         db = self._database_with_request(request)
         output = io.StringIO()
 
-        with contextlib.redirect_stdout(output):
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
             result = QUEUE.claim(db, "req")
 
         self.assertEqual(result, 0)
         claimed = json.loads(output.getvalue())["request"]
         self.assertEqual(claimed["deployment_scope"], "service")
         self.assertEqual(claimed["service_target"], "identity")
+        db.close()
+
+    def test_claim_rejects_stale_or_unqueued_attempt(self) -> None:
+        db = self._database_with_request(self._request())
+        db.execute(
+            "UPDATE platform_deploy_requests SET dispatch_state='queued', "
+            "dispatch_attempted_at_unix=69 WHERE id='req'"
+        )
+        output = io.StringIO()
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
+            result = QUEUE.claim(db, "req")
+        self.assertEqual(result, 0)
+        self.assertEqual(output.getvalue().strip(), "null")
+        row = db.execute(
+            "SELECT status, dispatch_state FROM platform_deploy_requests WHERE id='req'"
+        ).fetchone()
+        self.assertEqual(row["status"], "approved")
+        self.assertEqual(row["dispatch_state"], "queued")
+
+        db.execute(
+            "UPDATE platform_deploy_requests SET dispatch_state='not_attempted', "
+            "dispatch_attempted_at_unix=100 WHERE id='req'"
+        )
+        output = io.StringIO()
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
+            result = QUEUE.claim(db, "req")
+        self.assertEqual(result, 0)
+        self.assertEqual(output.getvalue().strip(), "null")
         db.close()
 
     def test_claim_fails_closed_for_invalid_scope_target_combinations(self) -> None:
@@ -103,7 +146,7 @@ class DeployRequestQueueTests(unittest.TestCase):
             with self.subTest(index=index):
                 db = self._database_with_request(request)
                 output = io.StringIO()
-                with contextlib.redirect_stdout(output):
+                with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
                     result = QUEUE.claim(db, "req")
                 row = db.execute(
                     "SELECT status, dispatch_state, dispatch_detail FROM platform_deploy_requests WHERE id='req'"
@@ -142,7 +185,8 @@ class DeployRequestQueueTests(unittest.TestCase):
             "CREATE TABLE platform_deploy_requests ("
             "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, "
             "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
-            "dispatch_state TEXT NOT NULL, dispatch_detail TEXT, result_detail TEXT, "
+            "dispatch_state TEXT NOT NULL, dispatch_attempts INTEGER NOT NULL DEFAULT 1, "
+            "dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT, result_detail TEXT, "
             "body_hash TEXT NOT NULL, request_json TEXT NOT NULL, repository TEXT NOT NULL, "
             "branch TEXT NOT NULL, commit_hash TEXT NOT NULL, tree_hash TEXT NOT NULL, "
             "workflow_url TEXT NOT NULL, summary TEXT NOT NULL, submodules_json TEXT NOT NULL)"
@@ -152,11 +196,12 @@ class DeployRequestQueueTests(unittest.TestCase):
         raw = json.dumps(request, separators=(",", ":"))
         db.execute(
             "INSERT INTO platform_deploy_requests "
-            "(id,status,version,expires_at_unix,decided_at_unix,dispatch_state,dispatch_detail,result_detail,"
+            "(id,status,version,expires_at_unix,decided_at_unix,dispatch_state,dispatch_attempts,"
+            "dispatch_attempted_at_unix,dispatch_detail,result_detail,"
             "body_hash,request_json,repository,branch,commit_hash,tree_hash,workflow_url,summary,submodules_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "legacy", "approved", 2, 9999999999, None, "queued", None, None,
+                "legacy", "approved", 2, 9999999999, None, "queued", 1, 100, None, None,
                 hashlib.sha256(raw.encode()).hexdigest(), raw, request["repository"],
                 request["branch"], request["commit"], request["tree"],
                 request["workflow_url"], request["summary"], "[]",
@@ -164,7 +209,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         )
         output = io.StringIO()
 
-        with contextlib.redirect_stdout(output):
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
             result = QUEUE.claim(db, "legacy")
 
         row = db.execute(
@@ -186,7 +231,7 @@ class DeployRequestQueueTests(unittest.TestCase):
             "CREATE TABLE platform_deploy_requests ("
             "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, "
             "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
-            "dispatch_state TEXT NOT NULL, dispatch_detail TEXT)"
+            "dispatch_state TEXT NOT NULL, dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT)"
         )
         db.execute(
             "INSERT INTO platform_deploy_requests "

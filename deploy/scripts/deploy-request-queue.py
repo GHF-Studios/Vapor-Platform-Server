@@ -19,6 +19,7 @@ SERVICE_TARGETS = {
     "artifact",
     "build-cache",
 }
+DISPATCH_STALE_SECONDS = 30
 
 
 def validate_selection(request):
@@ -81,8 +82,10 @@ def claim(db, request_id):
             (now, now),
         )
         row = db.execute(
-            "SELECT * FROM platform_deploy_requests WHERE id = ? AND status = 'approved' AND expires_at_unix > ?",
-            (request_id, now),
+            "SELECT * FROM platform_deploy_requests WHERE id = ? AND status = 'approved' "
+            "AND expires_at_unix > ? AND dispatch_state IN ('dispatching', 'queued') "
+            "AND dispatch_attempted_at_unix > ?",
+            (request_id, now, now - DISPATCH_STALE_SECONDS),
         ).fetchone()
         if row is None:
             db.execute("COMMIT")
@@ -103,7 +106,8 @@ def claim(db, request_id):
             print("null")
             return 0
         changed = db.execute(
-            "UPDATE platform_deploy_requests SET status = 'executing', version = version + 1 "
+            "UPDATE platform_deploy_requests SET status = 'executing', version = version + 1, "
+            "dispatch_state = 'claimed', dispatch_detail = NULL "
             "WHERE id = ? AND status = 'approved' AND version = ?",
             (row["id"], row["version"]),
         ).rowcount
@@ -125,7 +129,7 @@ def complete(db, request_id, version, result, detail):
     try:
         changed = db.execute(
             "UPDATE platform_deploy_requests SET status = ?, version = version + 1, "
-            "decided_at_unix = ?, result_detail = ? "
+            "decided_at_unix = ?, result_detail = ?, dispatch_state = 'completed', dispatch_detail = NULL "
             "WHERE id = ? AND status = 'executing' AND version = ?",
             (result, now, detail[:1000], request_id, version),
         ).rowcount
