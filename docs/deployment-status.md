@@ -945,3 +945,25 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   platform-specific skips). A local Linux cross-check could not run because
   this workstation has no `x86_64-linux-gnu-gcc`; the GitHub Linux CI job is
   the successful Linux evidence.
+
+## Temporary SSH sudo-policy guard follow-up (2026-11-07, 18:11 UTC)
+
+- Linux CI first caught that the new Unix-only regression test had not imported
+  its private scanner helper; the import was fixed. The next run then exposed a
+  real pattern bug: a direct `%vapor-temp-ssh` rule contains one percent sign,
+  while the original expression accidentally required two. The scanner now
+  catches both direct rules and aliases while ignoring ordinary comments.
+- A further review found that sudoers accepts `#include` and `@include` paths
+  outside `/etc/sudoers.d`. The installer and runtime helper now fail closed
+  on alternate include paths so their group-rule scan covers the active policy
+  files rather than silently missing an external include. The live host's
+  `/etc/sudoers` uses only `@includedir /etc/sudoers.d`; the temporary group is
+  empty, and the earlier `visudo -c` check passed.
+- Linux CI run `42399846154` for `0824036` passed both the Platform recipe
+  (including the Unix-only direct-rule, alias, comment, missing-path, and
+  include-layout tests) and the Windows recovery tests. Local checks passed the
+  deployment Python suite (91 tests, 10 skips), helper-target cargo tests
+  (12 tests), installer Bash syntax, and `git diff --check`.
+- These source changes remain on the review branch and have not been deployed.
+  The live pending main candidate still contains the legacy installer behavior
+  and must not be dispatched; no approval or deployment was performed.
