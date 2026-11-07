@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import io
 import pathlib
@@ -86,6 +87,33 @@ class RecoveryBundleMetadataTests(unittest.TestCase):
         self.assertEqual(metadata.domain, "vapor.example.test")
         self.assertEqual(metadata.architecture, "x86_64")
         self.assertEqual(metadata.operating_system, "Ubuntu 24.04.3 LTS")
+
+    def test_validates_host_compatibility_before_recovery_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = pathlib.Path(temporary) / "recovery.tar.gz"
+            make_bundle(bundle)
+            metadata = METADATA.read_recovery_metadata(bundle)
+
+        METADATA.validate_host_compatibility(
+            metadata, "24.04", "x86_64", "x86_64-unknown-linux-gnu"
+        )
+        for host in [
+            ("22.04", "x86_64", "x86_64-unknown-linux-gnu"),
+            ("24.04", "aarch64", "x86_64-unknown-linux-gnu"),
+            ("24.04", "x86_64", "aarch64-unknown-linux-gnu"),
+        ]:
+            with self.subTest(host=host):
+                with self.assertRaises(METADATA.MetadataError):
+                    METADATA.validate_host_compatibility(metadata, *host)
+        for incomplete in [
+            dataclasses.replace(metadata, rustc_version=None),
+            dataclasses.replace(metadata, cargo_version=None),
+        ]:
+            with self.subTest(metadata=incomplete):
+                with self.assertRaises(METADATA.MetadataError):
+                    METADATA.validate_host_compatibility(
+                        incomplete, "24.04", "x86_64", "x86_64-unknown-linux-gnu"
+                    )
 
     def test_rejects_bundle_and_manifest_revision_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

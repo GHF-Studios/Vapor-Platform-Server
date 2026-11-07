@@ -20,6 +20,9 @@ class RecoveryActivationOrderTests(unittest.TestCase):
         self.assertLess(coordinator.index(source_pin), coordinator.index(validate))
         self.assertLess(coordinator.index(validate), coordinator.index("apt-get update"))
         self.assertIn("preflight requires the Ubuntu-provided Python 3.11+ runtime", coordinator)
+        host_check = '--check-host "${BUNDLE}"'
+        self.assertIn(host_check, coordinator)
+        self.assertLess(coordinator.index(host_check), coordinator.index("apt-get update"))
 
         export = (REPO_ROOT / "deploy/scripts/export-state.sh").read_text()
         self.assertIn("state-bundle-validate.py", export)

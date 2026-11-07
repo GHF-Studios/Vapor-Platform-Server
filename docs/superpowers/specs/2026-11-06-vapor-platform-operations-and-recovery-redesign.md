@@ -408,11 +408,12 @@ service. Offline bootstrap is not a first-release requirement.
 
 Platform provides named operations for:
 
-1. **Setup/rebuild host:** validate supported Ubuntu/host prerequisites, install
-   OS packages/users/permissions, fetch exact approved source pins and
-   submodules, install per-service units and Caddy routes, provision paths from
-   protected configuration, start services in dependency order, then run local
-   and public route checks.
+1. **Setup/rebuild host:** validate the complete recovery bundle and confirm
+   its Ubuntu release, architecture, and Rust host match the fresh host before
+   installing or changing packages; then install OS packages/users/permissions,
+   fetch exact approved source pins and submodules, install per-service units
+   and Caddy routes, provision paths from protected configuration, start
+   services in dependency order, then run local and public route checks.
 2. **Export:** take coordinated service-owned state exports plus a composed
    manifest that records source revision, submodule pins, service schemas,
    host version, config references, and validation. Build caches and generated

@@ -150,6 +150,9 @@ if [ "${RESUME}" = false ] || [ "${marker_phase}" != awaiting_provider_checks ];
     || fail "bundle source commit could not be read"
   python3 "${SCRIPT_DIR}/state-bundle-validate.py" "${BUNDLE}" \
     || fail "bundle validation failed before package changes"
+  python3 "${SCRIPT_DIR}/recovery_bundle_metadata.py" \
+    --check-host "${BUNDLE}" "${VERSION_ID:-}" x86_64 x86_64-unknown-linux-gnu \
+    || fail "bundle host/toolchain is incompatible; no packages were changed"
 
   export DEBIAN_FRONTEND=noninteractive
   apt-get update

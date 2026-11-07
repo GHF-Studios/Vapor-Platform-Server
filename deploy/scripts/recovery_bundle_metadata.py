@@ -208,6 +208,47 @@ def read_recovery_metadata(path: pathlib.Path) -> RecoveryMetadata:
     )
 
 
+def validate_host_compatibility(
+    metadata: RecoveryMetadata,
+    ubuntu_release: str,
+    architecture: str,
+    rust_host_triple: str,
+) -> None:
+    """Reject a recovery bundle that cannot target the current host/toolchain."""
+    if metadata.rustc_version is None:
+        raise MetadataError(
+            "bundle has no exact Rust compiler observation; export a current recovery bundle"
+        )
+    if metadata.cargo_version is None:
+        raise MetadataError(
+            "bundle has no exact Cargo observation; export a current recovery bundle"
+        )
+    if architecture != "x86_64" or metadata.architecture != architecture:
+        raise MetadataError(
+            "bundle host architecture does not match this Ubuntu x86_64 recovery target"
+        )
+    if (
+        rust_host_triple != "x86_64-unknown-linux-gnu"
+        or metadata.rust_host_triple != rust_host_triple
+    ):
+        raise MetadataError(
+            "bundle compiler host does not match this Ubuntu x86_64 recovery target"
+        )
+    recorded_release = re.fullmatch(
+        r"Ubuntu ([0-9]+\.[0-9]+)(?:\.[0-9]+)?(?: LTS)?", metadata.operating_system
+    )
+    current_release = re.fullmatch(r"[0-9]+\.[0-9]+", ubuntu_release)
+    if (
+        recorded_release is None
+        or current_release is None
+        or recorded_release.group(1) != ubuntu_release
+    ):
+        raise MetadataError(
+            "bundle Ubuntu release does not match this host "
+            f"(bundle: {metadata.operating_system}; host: Ubuntu {ubuntu_release})"
+        )
+
+
 def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[1] == "--source-commit":
         try:
@@ -242,8 +283,18 @@ def main(argv: list[str]) -> int:
             return 1
         print(json.dumps(dataclasses.asdict(metadata), sort_keys=True))
         return 0
+    if len(argv) == 6 and argv[1] == "--check-host":
+        try:
+            metadata = read_recovery_metadata(pathlib.Path(argv[2]))
+            validate_host_compatibility(metadata, argv[3], argv[4], argv[5])
+        except MetadataError as error:
+            print(f"recovery-metadata: {error}", file=sys.stderr)
+            return 1
+        print("recovery-metadata: bundle host and toolchain match this recovery host")
+        return 0
     print(
         "usage: recovery_bundle_metadata.py --describe BUNDLE | "
+        "--check-host BUNDLE UBUNTU_RELEASE ARCHITECTURE RUST_HOST | "
         "--source-commit BUNDLE | --check-provider-readiness STATUS_JSON",
         file=sys.stderr,
     )
