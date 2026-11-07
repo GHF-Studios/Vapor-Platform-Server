@@ -927,3 +927,17 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - The CI run for review commit `5d48163` was still in progress at 17:34 UTC.
   The per-grant sudo policy regression tests added after that commit have not
   yet run in Linux CI.
+
+## Verification follow-up (2026-11-07, 17:47 UTC)
+
+- The live `deploy/scripts/health-check.sh` completed successfully over the
+  root SSH connection and reported all service-mode endpoint checks passed.
+  It did not deploy or restart any service.
+- CI run `42397727764` for review commit `31996ac` completed successfully,
+  including the Linux Platform recipe and Windows recovery job. The Linux run
+  compiled and executed the Unix-only per-grant sudo policy regression test.
+- Local Windows checks also passed: `cargo test --locked` (99 tests across
+  Platform/helper targets) and the deployment Python suite (91 tests, 10
+  platform-specific skips). A local Linux cross-check could not run because
+  this workstation has no `x86_64-linux-gnu-gcc`; the GitHub Linux CI job is
+  the successful Linux evidence.
