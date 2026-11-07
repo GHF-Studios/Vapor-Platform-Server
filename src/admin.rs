@@ -23,7 +23,7 @@ struct AdminSection {
     name: &'static str,
     path: Option<&'static str>,
     description: &'static str,
-    service_id: Option<&'static str>,
+    service_ids: &'static [&'static str],
     state: SectionState,
 }
 
@@ -41,7 +41,7 @@ const MODULES: &[AdminSection] = &[
         name: "Overview",
         path: Some("/admin"),
         description: "Service health and readiness",
-        service_id: Some("platform"),
+        service_ids: &["platform", "homepage", "docs", "identity", "diagnostics", "registry", "artifacts", "build-cache"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -49,7 +49,7 @@ const MODULES: &[AdminSection] = &[
         name: "Workshop / Registry",
         path: Some("/admin/workshop"),
         description: "Registry-owned catalog inventory",
-        service_id: Some("registry"),
+        service_ids: &["registry"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -57,7 +57,7 @@ const MODULES: &[AdminSection] = &[
         name: "Identity",
         path: Some("/admin/identity"),
         description: "Accounts and access administration",
-        service_id: Some("identity"),
+        service_ids: &["identity"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -65,7 +65,7 @@ const MODULES: &[AdminSection] = &[
         name: "Artifacts",
         path: Some("/admin/artifacts"),
         description: "Signed Vapor releases",
-        service_id: Some("artifacts"),
+        service_ids: &["artifacts"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -73,7 +73,7 @@ const MODULES: &[AdminSection] = &[
         group: "Distribution",
         path: Some("/admin/build-cache"),
         description: "Per-target compiler snapshots",
-        service_id: Some("build-cache"),
+        service_ids: &["build-cache"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -81,7 +81,7 @@ const MODULES: &[AdminSection] = &[
         name: "Native builders",
         path: None,
         description: "VPS-managed Linux and Windows build orchestration is not available yet",
-        service_id: None,
+        service_ids: &[],
         state: SectionState::Planned,
     },
     AdminSection {
@@ -89,7 +89,7 @@ const MODULES: &[AdminSection] = &[
         name: "Approvals",
         path: Some("/admin/approvals"),
         description: "Pending decisions from Platform and Identity",
-        service_id: Some("platform"),
+        service_ids: &["platform", "identity"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -97,7 +97,7 @@ const MODULES: &[AdminSection] = &[
         name: "Deployments",
         path: Some("/admin/deployments"),
         description: "Deployment lifecycle and execution stages",
-        service_id: Some("platform"),
+        service_ids: &["platform"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -105,7 +105,7 @@ const MODULES: &[AdminSection] = &[
         name: "SSH Access",
         path: Some("/admin/ssh-access"),
         description: "Temporary access grants and active sessions",
-        service_id: Some("platform"),
+        service_ids: &["platform"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -113,7 +113,7 @@ const MODULES: &[AdminSection] = &[
         name: "Hosting",
         path: Some("/admin/hosting"),
         description: "Service health and feature readiness",
-        service_id: Some("platform"),
+        service_ids: &["platform", "homepage", "docs", "identity", "diagnostics", "registry", "artifacts", "build-cache"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -121,7 +121,7 @@ const MODULES: &[AdminSection] = &[
         name: "History",
         path: Some("/admin/history"),
         description: "Recent owner-sourced request and operation history",
-        service_id: Some("platform"),
+        service_ids: &["platform", "identity"],
         state: SectionState::Implemented,
     },
 ];
@@ -144,6 +144,7 @@ body { margin:0; min-height:100vh; }
 .nav-status.status-unavailable { color:#ed7a80; }
 .nav-status.status-healthy { color:#6fc58a; }
 .nav-status.status-unknown { color:#9eacba; }
+.nav-status.status-degraded { color:#d4bd69; }
 .nav-status.status-planned { color:#d4bd69; }
 .service-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
 .service-card { background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
@@ -252,18 +253,23 @@ const JS: &str = r#"
       element.className = `status-pill status-${state}`;
     };
     const updateNavHealth = services => {
-      for (const link of document.querySelectorAll('[data-admin-service]')) {
+      for (const link of document.querySelectorAll('[data-admin-services]')) {
         const status = link.querySelector('[data-nav-status]');
         if (!status) continue;
-        const service = services && services.find(item => item.id === link.dataset.adminService);
-        if (!service || (service.health !== 'healthy' && service.health !== 'unavailable')) {
+        const requiredIds = link.dataset.adminServices.split(',').filter(Boolean);
+        const required = requiredIds.map(id => services && services.find(item => item.id === id));
+        if (!required.length || required.some(service => !service ||
+            (service.health !== 'healthy' && service.health !== 'unavailable'))) {
           status.textContent = 'Unknown';
           status.className = 'nav-status status-unknown';
           continue;
         }
-        const healthy = service.health === 'healthy';
-        status.textContent = healthy ? 'Healthy' : 'Offline';
-        status.className = `nav-status status-${healthy ? 'healthy' : 'unavailable'}`;
+        const healthyCount = required.filter(service => service.health === 'healthy').length;
+        const state = healthyCount === required.length ? 'healthy' :
+          healthyCount === 0 ? 'unavailable' : 'degraded';
+        status.textContent = state === 'healthy' ? 'Healthy' :
+          state === 'unavailable' ? 'Offline' : 'Degraded';
+        status.className = `nav-status status-${state}`;
       }
     };
     if (!response) {
@@ -285,16 +291,22 @@ const JS: &str = r#"
     setPill(operator, 'Root session verified', 'healthy');
     const services = Array.isArray(body && body.services) ? body.services : [];
     const platformService = services.find(service => service.id === 'platform');
-    const platformHealthy = platformService && platformService.health === 'healthy';
-    setPill(platform, platformHealthy ? 'Healthy' : 'Unavailable', platformHealthy ? 'healthy' : 'unavailable');
+    const platformState = platformService &&
+      (platformService.health === 'healthy' || platformService.health === 'unavailable')
+      ? platformService.health : 'unknown';
+    const platformLabel = platformState === 'healthy' ? 'Healthy' :
+      platformState === 'unavailable' ? 'Offline' : 'Unknown';
+    setPill(platform, platformLabel, platformState);
     updateNavHealth(services);
   };
   const overview = document.querySelector('#platform-overview, #operations-status');
-  if (overview) {
+  const hasServiceBadges = document.querySelector('[data-admin-services]');
+  if (overview || hasServiceBadges) {
     fetch('/api/admin/overview', { credentials: 'same-origin', cache: 'no-store' })
       .then(async response => ({ response, body: await response.json().catch(() => null) }))
       .then(({ response, body }) => {
         updateShellStatus(response, body);
+        if (!overview) return;
         overview.replaceChildren();
         if (!response.ok) {
           const message = document.createElement('p');
@@ -1152,10 +1164,15 @@ pub fn router() -> Router {
         .route("/admin/hosting", get(hosting))
         .route("/admin/history", get(history))
         .route("/api/admin/overview", get(overview))
+        .route("/api/admin/platform-healthz", get(platform_healthz))
         .route("/api/admin/operations", get(operations_status))
         .route("/admin/assets/admin.css", get(stylesheet))
         .route("/admin/assets/admin.js", get(script))
         .merge(crate::deploy_requests::router())
+}
+
+async fn platform_healthz() -> &'static str {
+    "ok\n"
 }
 
 /// Apply the shared, Platform-owned HTML frame to service-owned admin pages.
@@ -1270,12 +1287,12 @@ fn render_admin_navigation(current_path: &str) -> String {
                 } else {
                     ""
                 };
-                let service = section.service_id.unwrap_or("");
+                let services = section.service_ids.join(",");
                 html.push_str(&format!(
-                    "<a href=\"{}\" title=\"{}\" data-admin-service=\"{}\"{}><span>{}</span><small class=\"nav-status status-unknown\" data-nav-status>Checking</small></a>",
+                    "<a href=\"{}\" title=\"{}\" data-admin-services=\"{}\"{}><span>{}</span><small class=\"nav-status status-unknown\" data-nav-status>Checking</small></a>",
                     escape_html(path),
                     escape_html(section.description),
-                    escape_html(service),
+                    escape_html(&services),
                     current,
                     escape_html(section.name)
                 ));
@@ -1374,10 +1391,14 @@ async fn operations_view(headers: axum::http::HeaderMap, view: OperationsView) -
 fn operations_page(view: OperationsView) -> String {
     let content = match view {
         OperationsView::Approvals => "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Pending decisions</h2><p class=\"muted\">Review unanswered requests. Decisions are saved by Platform or Identity, the service that owns each request.</p></div><button id=\"approvals-refresh\" type=\"button\">Refresh</button></div><p id=\"approvals-feedback\" role=\"status\" aria-live=\"polite\"></p></section><section class=\"card\"><h2>Deployments</h2><div id=\"pending-deploy-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading deployment approvals…</p></div></section><section class=\"card\"><h2>SSH access</h2><div id=\"pending-ssh-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading SSH access requests…</p></div></section><section class=\"card\"><h2>Identity permissions</h2><div id=\"pending-identity-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading Identity permission requests…</p></div></section>".to_owned(),
-        OperationsView::Deployments => "<section class=\"card\"><h2>Deployment requests</h2><p class=\"muted\">Review the exact tested revision, CI result, and pinned service revisions. Approving records your decision and attempts to queue that deployment; the request card reports both stages.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment requests…</p></div></section>".to_owned(),
+        OperationsView::Deployments => concat!(
+            "<section class=\"card\"><h2>Deployment requests</h2><p class=\"muted\">Review the exact tested revision, CI result, and pinned service revisions. Approving records your decision and attempts to queue that deployment; the request card reports both stages.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment requests…</p></div></section>",
+            "<section class=\"card\"><h2>Latest deploy or restore result</h2><p class=\"muted\">This is the current Platform status pointer. Historical requests are listed separately under History.</p><div id=\"latest-operation-status\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>"
+        )
+        .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
         OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
-        OperationsView::History => "<section class=\"card\"><h2>Request history</h2><p class=\"muted\">A read-only view of recent Platform deployment/access requests and Identity permission requests. Each owning service remains authoritative for its records and decisions; a service that is unavailable is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><button id=\"history-refresh\" type=\"button\">Refresh records</button></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading request sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading request history…</p></div></section><section class=\"card\"><h2>Latest deploy or restore result</h2><p class=\"muted\">This is the Platform’s latest status pointer, not an event log. Request history above comes from the records retained by each owner.</p><div id=\"latest-operation-status\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
+        OperationsView::History => "<section class=\"card\"><h2>Request history</h2><p class=\"muted\">A read-only view of recent Platform deployment/access requests and Identity permission requests. Each owning service remains authoritative for its records and decisions; a service that is unavailable is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><button id=\"history-refresh\" type=\"button\">Refresh records</button></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading request sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading request history…</p></div></section>".to_owned(),
     };
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Platform · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>{}</h1>{content}</main></body></html>",
@@ -1389,7 +1410,7 @@ fn operations_page(view: OperationsView) -> String {
 
 fn operations_error_page(title: &str, message: &str) -> String {
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"error\">{}</p><a href=\"/admin/approvals\">Return to Approvals</a></main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Operations · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>Operations</h1><p class=\"error\">{}</p><a href=\"/admin/approvals\">Return to Approvals</a></main></body></html>",
         escape_html(title),
         escape_html(message)
     )
@@ -1677,7 +1698,20 @@ fn auth_unavailable_response(failure: crate::admin_auth::AuthFailure) -> Respons
 }
 
 async fn probe_services(client: &reqwest::Client, origin: &str) -> Vec<ServiceSummary> {
-    if std::env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services") {
+    probe_services_for_mode(
+        client,
+        origin,
+        std::env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services"),
+    )
+    .await
+}
+
+async fn probe_services_for_mode(
+    client: &reqwest::Client,
+    origin: &str,
+    services_mode: bool,
+) -> Vec<ServiceSummary> {
+    if services_mode {
         let (
             platform,
             homepage,
@@ -1709,7 +1743,8 @@ async fn probe_services(client: &reqwest::Client, origin: &str) -> Vec<ServiceSu
         ];
     }
 
-    let (platform, docs, identity, diagnostics, registry, artifacts, build_cache) = tokio::join!(
+    let (platform, homepage, docs, identity, diagnostics, registry, artifacts, build_cache) = tokio::join!(
+        probe_health(client, origin, "/api/admin/platform-healthz"),
         probe_health(client, origin, "/healthz"),
         probe_health(client, origin, "/docs/healthz"),
         probe_health(client, origin, "/api/identity/v1/status"),
@@ -1726,6 +1761,7 @@ async fn probe_services(client: &reqwest::Client, origin: &str) -> Vec<ServiceSu
             "not reported",
             Some("/admin"),
         ),
+        service("homepage", "Homepage", homepage, "not reported", None),
         service("docs", "Docs", docs, "not reported", None),
         service(
             "identity",
@@ -1909,6 +1945,15 @@ mod tests {
         (status, "private-probe-payload").into_response()
     }
 
+    async fn fake_monolith_health(uri: Uri) -> axum::response::Response {
+        let status = if uri.path() == "/api/admin/platform-healthz" {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::OK
+        };
+        (status, "private-probe-payload").into_response()
+    }
+
     async fn slow_health() -> &'static str {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         "ok"
@@ -1961,6 +2006,50 @@ mod tests {
         assert!(html.contains("href=\"/admin/artifacts\""));
         assert!(!html.contains("Workshop</span><small class=\"nav-status\">Planned"));
         assert!(html.contains("href=\"/admin/build-cache\""));
+    }
+
+    #[test]
+    fn aggregate_navigation_badges_name_all_required_services() {
+        let approvals = super::render_admin_navigation("/admin/approvals");
+        let hosting = super::render_admin_navigation("/admin/hosting");
+        assert!(approvals.contains("data-admin-services=\"platform,identity\""));
+        assert!(hosting.contains(
+            "data-admin-services=\"platform,homepage,docs,identity,diagnostics,registry,artifacts,build-cache\""
+        ));
+    }
+
+    #[tokio::test]
+    async fn monolith_probes_platform_and_homepage_as_distinct_services() {
+        let app = Router::new().fallback(any(fake_monolith_health));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let services = super::probe_services_for_mode(&reqwest::Client::new(), &origin, false).await;
+        let platform = services.iter().find(|service| service.id == "platform").unwrap();
+        let homepage = services.iter().find(|service| service.id == "homepage").unwrap();
+        assert_eq!(platform.health, "unavailable");
+        assert_eq!(homepage.health, "healthy");
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn platform_health_route_is_public_and_non_sensitive() {
+        let response = admin_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/platform-healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), b"ok\n");
     }
 
     #[tokio::test]
@@ -2139,6 +2228,22 @@ mod tests {
         assert_eq!(post_response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
+    #[test]
+    fn current_operation_pointer_lives_with_deployments_not_history() {
+        let deployments = super::operations_page(super::OperationsView::Deployments);
+        let history = super::operations_page(super::OperationsView::History);
+        assert!(deployments.contains("Latest deploy or restore result"));
+        assert!(deployments.contains("id=\"latest-operation-status\""));
+        assert!(!history.contains("latest-operation-status"));
+        assert!(history.contains("Request history"));
+    }
+
+    #[test]
+    fn operations_error_page_loads_shared_shell_status_script() {
+        let page = super::operations_error_page("Unavailable", "Try again later.");
+        assert!(page.contains("/admin/assets/admin.js"));
+    }
+
     #[tokio::test]
     async fn ssh_access_ui_distinguishes_authorization_failures_and_shows_safe_api_details() {
         let response = admin_app()
@@ -2194,6 +2299,25 @@ mod tests {
         assert!(script.contains("selectionValid && item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
+    }
+
+    #[tokio::test]
+    async fn aggregate_health_badges_refresh_on_every_shell_page() {
+        let response = admin_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/assets/admin.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let script = std::str::from_utf8(&body).unwrap();
+        assert!(script.contains("[data-admin-services]"));
+        assert!(script.contains("required.some(service => !service"));
+        assert!(script.contains("healthyCount === 0 ? 'unavailable' : 'degraded'"));
+        assert!(script.contains("if (!overview) return;"));
     }
 
     #[tokio::test]
@@ -2390,14 +2514,24 @@ mod tests {
             "private, no-store"
         );
         assert_eq!(authorization_requests.load(Ordering::SeqCst), 1);
-        assert_eq!(health_requests.load(Ordering::SeqCst), 7);
+        assert_eq!(health_requests.load(Ordering::SeqCst), 8);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let overview: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(overview["state"], "serving");
-        assert_eq!(overview["services"][0]["id"], "platform");
-        assert_eq!(overview["services"][0]["health"], "healthy");
-        assert_eq!(overview["services"][1]["health"], "unavailable");
-        assert_eq!(overview["services"][6]["health"], "healthy");
+        let service_health = |id: &str| {
+            overview["services"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|service| service["id"] == id)
+                .unwrap()["health"]
+                .as_str()
+                .unwrap()
+        };
+        assert_eq!(service_health("platform"), "healthy");
+        assert_eq!(service_health("homepage"), "healthy");
+        assert_eq!(service_health("docs"), "unavailable");
+        assert_eq!(service_health("build-cache"), "healthy");
         assert_eq!(overview["services"][0]["readiness"], "not reported");
         assert!(!body
             .windows(b"private-probe-payload".len())

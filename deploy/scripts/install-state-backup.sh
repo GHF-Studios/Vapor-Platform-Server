@@ -11,6 +11,12 @@ install -m 0644 "${DEPLOY_DIR}/systemd/vapor-state-export.service" /etc/systemd/
 install -m 0644 "${DEPLOY_DIR}/systemd/vapor-state-export.timer" /etc/systemd/system/vapor-state-export.timer
 
 systemctl daemon-reload
-systemctl enable --now vapor-state-export.timer
+if [ "${VAPOR_RECOVERY_STAGING:-0}" != "1" ]; then
+  systemctl enable --now vapor-state-export.timer
+fi
 
-echo "state-backup: installed and enabled vapor-state-export.timer"
+if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then
+  echo "state-backup: installed vapor-state-export.timer without starting it for recovery staging"
+else
+  echo "state-backup: installed and enabled vapor-state-export.timer"
+fi

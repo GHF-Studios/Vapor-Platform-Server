@@ -764,6 +764,7 @@ async fn dispatch_approved_authorized(
         expected_version: version,
         session_token,
     };
+    let mut dispatch_failure = None;
     let (dispatch_state, detail, output) = match invoke_platform_ops(&operation, id, "queued").await
     {
         Ok(value) => ("queued", "Approved deployment queued.", Some(value)),
@@ -772,7 +773,10 @@ async fn dispatch_approved_authorized(
                 "deploy request {id}: stage=dispatch category={} error={}",
                 error.category, error.technical
             );
-            (error.state, error.public_message, None)
+            let state = error.state;
+            let detail = error.public_message;
+            dispatch_failure = Some(error);
+            (state, detail, None)
         }
     };
     let recorded = match finish_dispatch_attempt(&state.pool, id, attempt, dispatch_state, detail)
@@ -812,18 +816,22 @@ async fn dispatch_approved_authorized(
         let retry_allowed = dispatch_retry_allowed(&state.pool, id, version, unix_now())
             .await
             .unwrap_or(false);
-        stage_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            if dispatch_state == "unknown" {
-                "dispatch_result_unknown"
-            } else {
-                "dispatch_failed"
-            },
-            "dispatch",
-            detail,
-            true,
-            retry_allowed,
-        )
+        if let Some(error) = dispatch_failure.as_ref() {
+            dispatch_failure_response(error, retry_allowed)
+        } else {
+            stage_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                if dispatch_state == "unknown" {
+                    "dispatch_result_unknown"
+                } else {
+                    "dispatch_failed"
+                },
+                "dispatch",
+                detail,
+                true,
+                retry_allowed,
+            )
+        }
     }
 }
 
@@ -851,11 +859,29 @@ async fn dispatch_retry_allowed(
     }))
 }
 
+#[derive(Debug)]
 struct DispatchFailure {
     state: &'static str,
     category: &'static str,
     technical: &'static str,
     public_message: &'static str,
+}
+
+fn dispatch_failure_response(error: &DispatchFailure, retry_allowed: bool) -> Response {
+    stage_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        if error.category == "helper_protocol_mismatch" {
+            "helper_protocol_mismatch"
+        } else if error.state == "unknown" {
+            "dispatch_result_unknown"
+        } else {
+            "dispatch_failed"
+        },
+        "dispatch",
+        error.public_message,
+        true,
+        retry_allowed,
+    )
 }
 
 fn stage_error(
@@ -1155,13 +1181,7 @@ async fn invoke_platform_ops(
 ) -> Result<PlatformOperationResult, DispatchFailure> {
     let operation_path = std::env::var_os("VAPOR_PLATFORM_OPS_PATH")
         .unwrap_or_else(|| "/usr/local/libexec/vapor-platform-ops".into());
-    let mut child = tokio::process::Command::new("/usr/bin/sudo")
-        .arg("-n")
-        .arg(operation_path)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
+    let mut child = platform_ops_command(operation_path)
         .spawn()
         .map_err(|_| DispatchFailure {
             state: "failed",
@@ -1169,20 +1189,7 @@ async fn invoke_platform_ops(
             technical: "failed to start fixed platform helper",
             public_message: "Approval is saved, but the deployment helper could not be started.",
         })?;
-    let bytes = serde_json::to_vec(operation).map_err(|_| DispatchFailure {
-        state: "failed",
-        category: "helper_request_encoding_failed",
-        technical: "could not encode helper request",
-        public_message: "Approval is saved, but the deployment request could not be prepared.",
-    })?;
-    if bytes.len() > 4096 {
-        return Err(DispatchFailure {
-            state: "failed",
-            category: "helper_request_too_large",
-            technical: "helper request exceeded size limit",
-            public_message: "Approval is saved, but the deployment request could not be prepared.",
-        });
-    }
+    let bytes = encode_platform_ops_request(operation)?;
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
         stdin.write_all(&bytes).await.map_err(|_| DispatchFailure { state: "unknown", category: "helper_request_write_failed", technical: "could not write helper request", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
@@ -1203,6 +1210,17 @@ async fn invoke_platform_ops(
             if let Ok(helper_result) =
                 serde_json::from_slice::<PlatformOperationResult>(&result.stdout)
             {
+                if helper_interactive_argv_mismatch(&helper_result) {
+                    eprintln!(
+                        "platform helper rejected request: category=helper_protocol_mismatch"
+                    );
+                    return Err(DispatchFailure {
+                        state: "failed",
+                        category: "helper_protocol_mismatch",
+                        technical: "installed helper treated the stdin request as interactive argv",
+                        public_message: "The installed Platform operation helper uses a different request protocol. Update Platform and its helper, then retry.",
+                    });
+                }
                 if helper_result.operation_id == expected_id
                     && !helper_result.ok
                     && helper_result.state == "failed"
@@ -1250,6 +1268,134 @@ async fn invoke_platform_ops(
             public_message:
                 "Approval is saved, but the deployment helper did not queue the deployment.",
         })
+    }
+}
+
+fn platform_ops_command(operation_path: std::ffi::OsString) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("/usr/bin/sudo");
+    command
+        .arg("-n")
+        .arg(operation_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    command
+}
+
+fn helper_interactive_argv_mismatch(result: &PlatformOperationResult) -> bool {
+    !result.ok
+        && result.operation_id.is_empty()
+        && result.state == "failed"
+        && result.detail == "arguments are not accepted for interactive operations"
+}
+
+fn encode_platform_ops_request(operation: &impl Serialize) -> Result<Vec<u8>, DispatchFailure> {
+    let bytes = serde_json::to_vec(operation).map_err(|_| DispatchFailure {
+        state: "failed",
+        category: "helper_request_encoding_failed",
+        technical: "could not encode helper request",
+        public_message: "Approval is saved, but the deployment request could not be prepared.",
+    })?;
+    if bytes.len() > 4096 {
+        return Err(DispatchFailure {
+            state: "failed",
+            category: "helper_request_too_large",
+            technical: "helper request exceeded size limit",
+            public_message: "Approval is saved, but the deployment request could not be prepared.",
+        });
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod platform_ops_contract_tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn helper_is_called_without_operation_arguments() {
+        let command = platform_ops_command(OsString::from("/test/vapor-platform-ops"));
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args, ["-n", "/test/vapor-platform-ops"]);
+    }
+
+    #[test]
+    fn operation_payload_is_bounded_json_for_stdin() {
+        #[derive(Serialize)]
+        struct Request<'a> {
+            operation: &'static str,
+            request_id: &'a str,
+        }
+        let bytes = encode_platform_ops_request(&Request {
+            operation: "dispatch_deploy",
+            request_id: "request-123",
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            serde_json::json!({"operation":"dispatch_deploy","request_id":"request-123"})
+        );
+        assert!(bytes.len() <= 4096);
+        assert!(encode_platform_ops_request(&"x".repeat(5000)).is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_dispatch_response_exposes_only_the_static_safe_message() {
+        let error = DispatchFailure {
+            state: "failed",
+            category: "helper_rejected",
+            technical: "host-secret diagnostic must not reach the browser",
+            public_message:
+                "Approval is saved, but the deployment helper did not queue the deployment.",
+        };
+        let response = dispatch_failure_response(&error, true);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("dispatch_failed"));
+        assert!(body.contains("Approval is saved"));
+        assert!(!body.contains("host-secret"));
+        assert!(body.contains("\"retry_eligible\":true"));
+    }
+
+    #[test]
+    fn legacy_interactive_argv_rejection_is_reported_as_helper_mismatch() {
+        let result = PlatformOperationResult {
+            ok: false,
+            operation_id: String::new(),
+            state: "failed".to_owned(),
+            detail: "arguments are not accepted for interactive operations".to_owned(),
+        };
+        assert!(helper_interactive_argv_mismatch(&result));
+        let mut wrong_id = result;
+        wrong_id.operation_id = "unexpected-request".to_owned();
+        assert!(!helper_interactive_argv_mismatch(&wrong_id));
+    }
+
+    #[tokio::test]
+    async fn helper_protocol_mismatch_has_a_specific_safe_response() {
+        let error = DispatchFailure {
+            state: "failed",
+            category: "helper_protocol_mismatch",
+            technical: "installed helper treated the stdin request as interactive argv",
+            public_message: "The installed Platform operation helper uses a different request protocol. Update Platform and its helper, then retry.",
+        };
+        let response = dispatch_failure_response(&error, true);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("helper_protocol_mismatch"));
+        assert!(body.contains("different request protocol"));
+        assert!(!body.contains("installed helper treated"));
     }
 }
 

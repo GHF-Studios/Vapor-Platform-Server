@@ -13,6 +13,55 @@ if ! grep -q '^ID=ubuntu$' /etc/os-release; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
+
+# Package maintainer scripts may start newly installed daemons. During a
+# fresh-host recovery, keep those services stopped until the saved state and
+# configuration have been restored by restore-state.sh. Never replace a host
+# policy supplied by the operator or base image.
+if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then
+  recovery_policy=/usr/sbin/policy-rc.d
+  recovery_policy_digest="${VAPOR_RECOVERY_BUNDLE_SHA256:-}"
+  [[ "${recovery_policy_digest}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "error: recovery staging requires the verified bundle digest" >&2
+    exit 1
+  }
+  recovery_policy_marker="# VAPOR_RECOVERY_STAGING ${recovery_policy_digest}"
+  expected_recovery_policy="$(printf '#!/bin/sh\n%s\nexit 101' "${recovery_policy_marker}")"
+  recovery_policy_tmp=""
+  if [ -e "${recovery_policy}" ] || [ -L "${recovery_policy}" ]; then
+    if [ -L "${recovery_policy}" ] || [ ! -f "${recovery_policy}" ] \
+      || [ "$(cat -- "${recovery_policy}")" != "${expected_recovery_policy}" ]; then
+      echo "error: existing policy-rc.d prevents controlled recovery package setup" >&2
+      exit 1
+    fi
+  else
+    recovery_policy_tmp="$(mktemp /usr/sbin/.policy-rc.d.recovery.XXXXXX)"
+    printf '%s\n' '#!/bin/sh' "${recovery_policy_marker}" 'exit 101' > "${recovery_policy_tmp}"
+    chmod 0755 "${recovery_policy_tmp}"
+    # Hard-link creation is atomic and fails if an operator policy appeared
+    # after the earlier check; never replace it during recovery setup.
+    if ! ln -- "${recovery_policy_tmp}" "${recovery_policy}"; then
+      rm -f -- "${recovery_policy_tmp}"
+      echo "error: policy-rc.d appeared during controlled recovery setup" >&2
+      exit 1
+    fi
+    rm -f -- "${recovery_policy_tmp}"
+  fi
+  cleanup_recovery_policy() {
+    if [ -n "${recovery_policy_tmp}" ]; then
+      rm -f -- "${recovery_policy_tmp}"
+    fi
+    if [ -f "${recovery_policy}" ] && [ ! -L "${recovery_policy}" ] \
+      && [ "$(cat -- "${recovery_policy}")" = "${expected_recovery_policy}" ]; then
+      rm -f -- "${recovery_policy}"
+    else
+      echo "error: recovery package-start policy changed during bootstrap; leaving it in place for review" >&2
+      return 1
+    fi
+  }
+  trap cleanup_recovery_policy EXIT
+fi
+
 apt-get update
 apt-get install --yes \
   apt-transport-https \
@@ -41,6 +90,12 @@ curl --fail --silent --show-error --location \
 chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
 apt-get update
 apt-get install --yes caddy
+
+if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then
+  systemctl disable --now caddy.service >/dev/null 2>&1 || true
+  trap - EXIT
+  cleanup_recovery_policy
+fi
 
 VAPOR_TOOLCHAIN_ROOT="${VAPOR_TOOLCHAIN_ROOT:-/opt/vapor/tools}"
 VAPOR_CARGO_HOME="${VAPOR_CARGO_HOME:-${VAPOR_TOOLCHAIN_ROOT}/cargo}"

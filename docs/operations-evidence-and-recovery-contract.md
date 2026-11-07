@@ -186,17 +186,36 @@ This is intentionally not a remote operations API.
 
 ## Fresh-host coordinator
 
-`deploy/scripts/recover-fresh-host.sh` composes the existing bootstrap,
-approved initial deployment, and transactional state restore for a newly
-provisioned Ubuntu x86_64 host. It checks the bundle checksum and schema,
-requires the same Ubuntu major/minor release and host architecture recorded in
-the bundle, checks out the exact root commit and recursive submodule pins,
-installs the recorded Rust toolchain, builds with the committed lockfiles, and
-then restores state/configuration. It refuses non-empty Vapor checkout, state,
-or config paths and an existing Caddyfile on a new run. It creates a root-owned
-marker bound to the bundle digest and source revision; an interrupted run may
-be resumed only with `--resume` and the same bundle. Resume rechecks the source
-checkout and replays build/deploy/restore. It never cleans unrelated paths.
+`deploy/scripts/recover-fresh-host.sh` composes bootstrap, a non-activating
+runtime build/install, and transactional state restore for a newly provisioned
+Ubuntu x86_64 host. It checks the bundle checksum and schema, requires the same
+Ubuntu major/minor release and host architecture recorded in the bundle,
+checks out the exact root commit and recursive submodule pins, installs the
+recorded Rust toolchain, and builds with the committed lockfiles. During this
+stage, package service starts are suppressed, service/Caddy units are installed
+but not enabled, and the state-export timer is not started. It then restores
+state/configuration; `restore-state.sh` starts the restored target units only
+after all files have been installed and validated. This avoids exposing a
+fresh default or partially restored Vapor stack before the recovery snapshot
+is in place.
+
+The coordinator refuses non-empty Vapor checkout, state, or config paths and
+an existing Caddyfile on a new run. It creates a root-owned marker bound to the
+bundle digest and source revision; an interrupted run may be resumed only with
+`--resume` and the same bundle. Resume rechecks the source checkout and replays
+staging and restore. It never cleans unrelated paths.
+
+The USB catch-up currently copies recovery archives, not the two bootstrap
+files (`recover-fresh-host.sh` and `recovery_bundle_metadata.py`) needed to
+start a clean-host recovery. Keep a trusted copy of those files on the recovery
+drive as an explicit operator step. To seed/update that copy, read the pinned
+root commit from `vapor-platform-recovery/source/root-commit.txt` in the
+archive, fetch that exact commit from the canonical GitHub repository on a
+trusted workstation, and copy both files from that checkout together. Do not
+mix bootstrap files from different commits. The coordinator then validates
+the archive and checks out its pinned source/submodules before using the
+archive's validator. A clean-host exercise remains necessary to verify this
+entire chain end to end.
 
 The final machine check requires Identity to report Steam identity, GitHub
 browser login, and dashboard as configured and ready. These booleans verify

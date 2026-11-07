@@ -153,8 +153,9 @@ for smoke testing only; the intended public endpoint remains
 - `scripts/recover-fresh-host.sh`: guarded fresh-host coordinator for supported
   Ubuntu x86_64 hosts. It validates the USB bundle and exact source/submodule
   pins, checks that the Vapor install/state/config paths are empty, installs
-  the recorded Rust/Cargo toolchain, rebuilds and deploys the pinned source,
-  restores the bundle, and checks configured Steam/GitHub/dashboard readiness.
+  the recorded Rust/Cargo toolchain, builds and stages the pinned runtime with
+  package/service activation held back, restores the bundle, then activates
+  restored units and checks configured Steam/GitHub/dashboard readiness.
   Run as root with `--bundle PATH --yes`. It refuses existing Vapor
   data/configuration on a new run; if interrupted after it creates its recovery
   marker, rerun with `--resume` and the same bundle. It requires the bundle to
@@ -163,7 +164,10 @@ for smoke testing only; the intended public endpoint remains
   site running but keeps a recovery marker until the owner signs in with Steam
   and GitHub and verifies the owner dashboard; then rerun with
   `--resume --confirm-provider-checks`. Exit code `3` means the restore is
-  complete and waiting for those owner checks. A failed post-deploy recovery
+  complete and waiting for those owner checks. Keep a trusted matching copy of
+  `recover-fresh-host.sh` and `recovery_bundle_metadata.py` on the recovery
+  drive: the USB sync copies archives only. Get both files from the same pinned
+  root commit named in the archive. A failed post-restore recovery
   disables and stops the newly deployed Vapor services, the export timer, and
   Caddy, and preserves its marker for review. This
   source path has not yet been exercised on a clean VPS; a successful local

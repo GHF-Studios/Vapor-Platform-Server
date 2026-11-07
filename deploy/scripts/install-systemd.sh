@@ -11,6 +11,11 @@ install -m 0644 "${DEPLOY_DIR}/systemd/vapor-platform-server.service" /etc/syste
 
 systemctl daemon-reload
 
+if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then
+  echo "systemd: installed the composed Platform unit without enabling it for recovery staging"
+  exit 0
+fi
+
 systemctl enable vapor-platform-server.service
 
 echo "systemd: installed and enabled the composed Vapor Platform Server process"

@@ -1,24 +1,25 @@
 # Vapor server deployment status
 
-## Latest candidate validation (2026-11-07 04:37 UTC)
+## Latest candidate validation (2026-11-07 05:01 UTC)
 
-- The approved service-scoped deployment implementation is on
-  `codex/platform-integration-20261102` at `94016b0451204cb91547ba00dfd6ffd404569dc6`.
-  It adds fixed-target deployments for Atlas and the seven service submodules,
-  while keeping Platform and shared-host changes on the existing full deploy
-  path.
-- The first Linux CI run exposed a test harness trying to set root ownership
-  when running as the unprivileged GitHub runner. Runtime ownership is now
-  applied only to the live executable; rollback copies do not receive runtime
-  ownership. The test harness mocks that privileged operation in integration
-  tests while keeping a focused test for the ownership helper itself.
-- GitHub Actions Ubuntu CI passed on the code commit (`42338788185`) and again
-  on the final documentation commit (`42338992496`). The Windows test recipe
-  also passed (69 Python tests; nine POSIX-only cases skipped there).
-- These are source and CI results only. No live VPS deployment was run; the
-  previously granted temporary SSH access has expired. A live service-scoped
-  deployment still needs a fresh approved request and installation of this
-  candidate through the deployment flow.
+- The candidate branch `codex/platform-integration-20261102` is at
+  `d525244c7191a8c528a2ce83ee540b275ad4a192` (`Serialize and test USB recovery
+  sync`). It adds a per-destination mutex to USB catch-up before stale partial
+  cleanup, four local sync scenarios, and a native Windows CI job.
+- GitHub Actions run `42340794300` passed both `root-ci` and
+  `windows-recovery-tests`. The Windows job exercised initial copy/catch-up,
+  invalid latest-pointer rejection, corrupt archive rejection while preserving
+  a prior verified copy, and overlapping-sync refusal while preserving the
+  active partial. The full root recipe also passed.
+- The preceding CI failures were from rollback integration tests attempting a
+  privileged ownership change on an unprivileged runner. The test boundary and
+  rollback ownership behavior were corrected; later CI runs passed. The email
+  received after the newest push may therefore refer to an earlier failed run;
+  run `42340794300` is the verified result for `d525244`.
+- These are source and CI results only. No live VPS deployment or physical USB
+  restore drill was performed. The previously granted temporary SSH access has
+  expired; a live operation needs a fresh approved request and installation
+  through the deployment flow.
 
 ## Latest follow-up (2026-11-07 03:24 UTC)
 

@@ -109,9 +109,24 @@
 
 - [x] Use local JSON/archive fixtures and test-only command adapters; do not contact the VPS or require the owner's USB.
 - [x] Cover initial copy and catch-up, latest-pointer/index mismatch, corrupt archive rejection while preserving an older verified copy, and same-destination overlap rejection.
-- [ ] Run the fixture suite in GitHub Actions on a native Windows runner.
+- [x] Run the fixture suite in GitHub Actions on a native Windows runner.
 - [ ] Register the owner-held scheduled task and verify a real copy on the owner's USB.
 - [ ] Run a clean-host restore from a USB generation.
+
+## Task 7: Stage fresh-host runtime before restoring state
+
+**Files:**
+- Modify: `deploy/scripts/recover-fresh-host.sh`
+- Modify: `deploy/scripts/deploy.sh`
+- Modify: the unit/Caddy/state-export installers
+- Modify: `deploy/scripts/bootstrap-ubuntu.sh`
+- Create: `deploy/tests/test_recovery_activation_order.py`
+
+- [x] Suppress package daemon starts during fresh-host recovery setup without overwriting an existing host `policy-rc.d`.
+- [x] Build and install the pinned runtime and operational helpers without enabling service, Caddy, or state-export units.
+- [x] Restore the saved state/configuration before `restore-state.sh` activates the restored units and runs readiness checks.
+- [x] Add regression checks for staging-before-restore and disabled pre-restore activation.
+- [ ] Run a clean-host restore drill to validate real systemd/package behavior.
 
 ## Execution Notes
 
@@ -139,6 +154,10 @@
   each sync; before capacity pruning it hashes every indexed candidate. Unknown
   or damaged local archives are preserved and can stop pruning. This source
   behavior has not been run against the owner's drive.
+- Fresh-host recovery now stages binaries and units with application services
+  disabled until the validated state/configuration import. This is
+  source-tested only; package scripts and systemd ordering still need a clean
+  Ubuntu recovery drill.
 - Compiler values in the bundle are observations from export time, not proven
   build provenance for the running executables. The clean-host coordinator
   reproduces those exact observed versions, but this repository does not own

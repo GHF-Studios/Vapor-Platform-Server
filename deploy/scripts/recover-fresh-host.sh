@@ -350,7 +350,8 @@ export VAPOR_TOOLCHAIN_ROOT="${TOOLCHAIN_ROOT}"
 export VAPOR_CARGO_HOME="${CARGO_HOME_PATH}"
 export VAPOR_RUSTUP_HOME="${RUSTUP_HOME_PATH}"
 
-bash "${DEPLOY_ROOT}/deploy/scripts/bootstrap-ubuntu.sh"
+VAPOR_RECOVERY_STAGING=1 VAPOR_RECOVERY_BUNDLE_SHA256="${BUNDLE_SHA256}" \
+  bash "${DEPLOY_ROOT}/deploy/scripts/bootstrap-ubuntu.sh"
 export CARGO_HOME="${CARGO_HOME_PATH}"
 export RUSTUP_HOME="${RUSTUP_HOME_PATH}"
 export PATH="${CARGO_HOME_PATH}/bin:${PATH}"
@@ -365,7 +366,8 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 [[ "${CARGO_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || fail "CARGO_BUILD_JOBS must be a positive integer"
 export VAPOR_PLATFORM_REVISION="${REVISION}"
 HOST_MUTATION_STARTED=true
-VAPOR_DEPLOY_BOOTSTRAP=1 bash "${DEPLOY_ROOT}/deploy/scripts/deploy.sh" --approved "${REVISION}"
+VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_RECOVERY_STAGING=1 \
+  bash "${DEPLOY_ROOT}/deploy/scripts/deploy.sh" --approved "${REVISION}"
 bash "${DEPLOY_ROOT}/deploy/scripts/restore-state.sh" --bundle "${BUNDLE}" --yes
 
 MARKER_TMP="$(mktemp "${RECOVERY_MARKER_ROOT}/fresh-host.pin.XXXXXX")"
@@ -374,6 +376,7 @@ chown root:root "${MARKER_TMP}"
 chmod 0600 "${MARKER_TMP}"
 mv -f -- "${MARKER_TMP}" "${RECOVERY_MARKER}"
 MARKER_TMP=""
+RECOVERY_AWAITING_CONFIRMATION=true
 
 if [ "${MODE}" = services ]; then
   IDENTITY_STATUS_URL=http://127.0.0.1:7113/v1/auth/status
@@ -390,5 +393,4 @@ python3 "${VALIDATOR_ROOT}/deploy/scripts/recovery_bundle_metadata.py" \
 
 echo "fresh-recovery: services restored and configured Steam/GitHub/dashboard readiness is present"
 echo "fresh-recovery: sign in with Steam and GitHub in a browser and verify the owner dashboard; rerun with --resume --confirm-provider-checks"
-RECOVERY_AWAITING_CONFIRMATION=true
 exit 3

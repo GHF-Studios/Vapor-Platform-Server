@@ -8,6 +8,16 @@ source "${SCRIPT_DIR}/lib.sh"
 require_root
 umask 022
 
+RECOVERY_STAGING="${VAPOR_RECOVERY_STAGING:-0}"
+if [ "${RECOVERY_STAGING}" != "0" ] && [ "${RECOVERY_STAGING}" != "1" ]; then
+  echo "error: VAPOR_RECOVERY_STAGING must be 0 or 1" >&2
+  exit 2
+fi
+if [ "${RECOVERY_STAGING}" = "1" ] && [ "${VAPOR_DEPLOY_BOOTSTRAP:-}" != "1" ]; then
+  echo "error: recovery staging is reserved for the trusted fresh-host coordinator" >&2
+  exit 2
+fi
+
 if [ "$#" -eq 1 ] && [ "$1" = "--bootstrap" ]; then
   if [ -e "${VAPOR_DEPLOY_ROOT}/.git" ] || [ -n "$(find "${VAPOR_DEPLOY_ROOT}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
     echo "error: --bootstrap is only for an empty first-install checkout; use an approved request for updates" >&2
@@ -74,6 +84,9 @@ record_deploy_operation() {
   local finished_at_utc
   trap - EXIT
   set +e
+  if [ "${RECOVERY_STAGING}" = "1" ]; then
+    exit "$status"
+  fi
   if [ "$status" -eq 0 ]; then
     result="success"
   fi
@@ -246,6 +259,11 @@ fi
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-approved-operations.sh"
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-platform-ops.sh"
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-state-backup.sh"
+
+if [ "${RECOVERY_STAGING}" = "1" ]; then
+  echo "deploy: recovery runtime staged; restore-state.sh owns activation"
+  exit 0
+fi
 
 if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
   systemctl restart vapor-platform-server.service

@@ -41,7 +41,9 @@ caddy validate --config "${candidate_caddyfile}"
 chown root:caddy "${candidate_caddyfile}"
 chmod 0640 "${candidate_caddyfile}"
 mv -f -- "${candidate_caddyfile}" /etc/caddy/Caddyfile
-systemctl enable caddy.service
+if [ "${VAPOR_RECOVERY_STAGING:-0}" != "1" ]; then
+  systemctl enable caddy.service
+fi
 
 echo "caddy: installed config for ${VAPOR_DOMAIN}"
 if [ -n "${VAPOR_HTTP_FALLBACK_HOST}" ]; then
