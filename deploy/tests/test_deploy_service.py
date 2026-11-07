@@ -195,7 +195,9 @@ class DeployServiceTests(unittest.TestCase):
         runner = FakeRunner()
         temporary, environment, stable, state, manifest, _ = self._fixture(runner)
         try:
-            with mock.patch.dict(os.environ, environment, clear=True), contextlib.redirect_stdout(io.StringIO()):
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                 mock.patch.object(DEPLOY, "set_runtime_owner_group"), \
+                 contextlib.redirect_stdout(io.StringIO()):
                 result = DEPLOY.deploy_service(
                     type("Args", (), {"approved": ROOT_COMMIT, "target": "identity"})(), runner
                 )
@@ -252,6 +254,7 @@ class DeployServiceTests(unittest.TestCase):
         original_manifest = manifest.read_bytes()
         try:
             with mock.patch.dict(os.environ, environment, clear=True), \
+                 mock.patch.object(DEPLOY, "set_runtime_owner_group"), \
                  mock.patch.object(DEPLOY, "update_target", side_effect=RuntimeError("manifest disk failure")), \
                  contextlib.redirect_stderr(io.StringIO()):
                 result = DEPLOY.deploy_service(
@@ -269,7 +272,9 @@ class DeployServiceTests(unittest.TestCase):
         temporary, environment, stable, state, manifest, _ = self._fixture(runner)
         original_manifest = manifest.read_bytes()
         try:
-            with mock.patch.dict(os.environ, environment, clear=True), contextlib.redirect_stderr(io.StringIO()):
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                 mock.patch.object(DEPLOY, "set_runtime_owner_group"), \
+                 contextlib.redirect_stderr(io.StringIO()):
                 result = DEPLOY.deploy_service(
                     type("Args", (), {"approved": ROOT_COMMIT, "target": "identity"})(), runner
                 )
@@ -286,7 +291,9 @@ class DeployServiceTests(unittest.TestCase):
         temporary, environment, stable, _, _, _ = self._fixture(runner)
         try:
             error = io.StringIO()
-            with mock.patch.dict(os.environ, environment, clear=True), contextlib.redirect_stderr(error):
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                 mock.patch.object(DEPLOY, "set_runtime_owner_group"), \
+                 contextlib.redirect_stderr(error):
                 result = DEPLOY.deploy_service(
                     type("Args", (), {"approved": ROOT_COMMIT, "target": "identity"})(), runner
                 )
@@ -303,6 +310,7 @@ class DeployServiceTests(unittest.TestCase):
         temporary, environment, stable, state, _, _ = self._fixture(runner)
         try:
             with mock.patch.dict(os.environ, environment, clear=True), \
+                 mock.patch.object(DEPLOY, "set_runtime_owner_group"), \
                  mock.patch.object(DEPLOY, "snapshot_tree", side_effect=DEPLOY.DeploymentError("snapshot copy failed")), \
                  contextlib.redirect_stderr(io.StringIO()):
                 result = DEPLOY.deploy_service(
