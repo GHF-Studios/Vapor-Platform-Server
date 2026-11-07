@@ -1426,9 +1426,7 @@ mod unix_impl {
         }
     }
 
-    fn temporary_group_sudoers_reference_present(
-        paths: &[&std::path::Path],
-    ) -> Result<bool, ()> {
+    fn temporary_group_sudoers_reference_present(paths: &[&std::path::Path]) -> Result<bool, ()> {
         let output = std::process::Command::new("/usr/bin/grep")
             .args(["-RIlE", "^[[:space:]]*[^#[:space:]].*vapor-temp-ssh"])
             .args(paths.iter().map(|path| path.as_os_str()))
@@ -1441,9 +1439,7 @@ mod unix_impl {
         }
     }
 
-    fn temporary_sudoers_include_layout_supported(
-        paths: &[&std::path::Path],
-    ) -> Result<bool, ()> {
+    fn temporary_sudoers_include_layout_supported(paths: &[&std::path::Path]) -> Result<bool, ()> {
         let Some(main_sudoers) = paths.first() else {
             return Err(());
         };
@@ -1751,10 +1747,8 @@ mod unix_impl {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let root = std::env::temp_dir().join(format!(
-                "vapor-sudoers-scan-{}-{nonce}",
-                std::process::id()
-            ));
+            let root = std::env::temp_dir()
+                .join(format!("vapor-sudoers-scan-{}-{nonce}", std::process::id()));
             let includes = root.join("sudoers.d");
             fs::create_dir_all(&includes).unwrap();
             let main = root.join("sudoers");
@@ -1768,8 +1762,11 @@ mod unix_impl {
                 Ok(false)
             );
 
-            fs::write(&includes.join("alias"), "User_Alias TEMP_ACCESS = %vapor-temp-ssh\n")
-                .unwrap();
+            fs::write(
+                &includes.join("alias"),
+                "User_Alias TEMP_ACCESS = %vapor-temp-ssh\n",
+            )
+            .unwrap();
             assert_eq!(
                 temporary_group_sudoers_reference_present(&[&main, &includes]),
                 Ok(true)
