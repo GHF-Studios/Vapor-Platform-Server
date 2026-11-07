@@ -648,6 +648,13 @@ const JS: &str = r#"
       parent.append(node);
       return node;
     };
+    const requestMetadata = content => {
+      const details = document.createElement('details');
+      details.className = 'request-metadata';
+      appendText(details, 'summary', 'Request metadata');
+      details.append(content);
+      return details;
+    };
     const humanTime = value => {
       const seconds = Number(value);
       return Number.isFinite(seconds) && seconds > 0 && seconds <= 8640000000000
@@ -712,7 +719,10 @@ const JS: &str = r#"
       const selectionValid = validDeploymentSelection(item);
       appendText(card, 'p', `Commit ${item.commit || 'unknown'} · ${deploymentSelectionLabel(item)}`, selectionValid ? 'muted' : 'error');
       appendText(card, 'p', item.summary || 'No request summary provided.');
-      appendText(card, 'p', `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · expires ${humanTime(item.expires_at_unix)}`, 'muted');
+      const metadata = document.createElement('p'); metadata.className = 'muted';
+      metadata.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
+      card.append(requestMetadata(metadata));
+      appendText(card, 'p', `Expires ${humanTime(item.expires_at_unix)}`, 'muted');
       try {
         const ciUrl = new URL(item.workflow_url);
         if (ciUrl.protocol === 'https:' && ciUrl.hostname === 'github.com' && ciUrl.pathname.startsWith('/GHF-Studios/')) {
@@ -733,7 +743,10 @@ const JS: &str = r#"
     const renderSsh = (item, card) => {
       appendText(card, 'h3', `${item.fingerprint || 'Unknown key'} · ${capabilityList(item.requested_capabilities) || 'Shell access'}`);
       appendText(card, 'p', item.purpose || 'No purpose provided.');
-      appendText(card, 'p', `Requested by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · requested ${humanTime(item.created_at_unix)} · duration ${formatDuration(item.requested_duration_seconds)}`, 'muted');
+      const metadata = document.createElement('p'); metadata.className = 'muted';
+      metadata.textContent = `Requested by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
+      card.append(requestMetadata(metadata));
+      appendText(card, 'p', `Requested ${humanTime(item.created_at_unix)} · duration ${formatDuration(item.requested_duration_seconds)}`, 'muted');
       const form = document.createElement('form');
       const fieldset = document.createElement('fieldset');
       appendText(fieldset, 'legend', 'Grant to issue');
@@ -780,7 +793,10 @@ const JS: &str = r#"
     const renderIdentity = (item, card) => {
       appendText(card, 'h3', `${item.action || 'permission change'} · ${item.role || 'unknown role'}`);
       appendText(card, 'p', `Steam ${item.steam_id64 || 'not linked'} · GitHub ${item.github_login || 'not linked'}`);
-      appendText(card, 'p', `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · expires ${humanTime(item.expires_at_unix)}`, 'muted');
+      const metadata = document.createElement('p'); metadata.className = 'muted';
+      metadata.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
+      card.append(requestMetadata(metadata));
+      appendText(card, 'p', `Expires ${humanTime(item.expires_at_unix)}`, 'muted');
       card.append(confirmationForm(item, `I reviewed this ${item.action || 'permission'} for ${item.github_login || item.steam_id64 || 'this account'}`, 'Approve', button => submitDecision(button, 'identity', item, 'approve', { expected_version: item.version, confirmed: true })));
       const form = document.createElement('form');
       const reason = document.createElement('textarea'); reason.required = true; reason.maxLength = 500; reason.rows = 2;
@@ -798,8 +814,10 @@ const JS: &str = r#"
     const renderExpiredIdentity = (item, card) => {
       appendText(card, 'h3', `${item.action || 'permission change'} · ${item.role || 'unknown role'}`);
       appendText(card, 'p', `Steam ${item.steam_id64 || 'not linked'} · GitHub ${item.github_login || 'not linked'}`);
-      appendText(card, 'p', `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · expired ${humanTime(item.expires_at_unix)}`, 'muted');
-      appendText(card, 'p', 'Expired by time · Identity has not yet recorded the transition', 'approval-state-warning');
+      const metadata = document.createElement('p'); metadata.className = 'muted';
+      metadata.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
+      card.append(requestMetadata(metadata));
+      appendText(card, 'p', `Expired at ${humanTime(item.expires_at_unix)} · Identity has not yet recorded the transition`, 'approval-state-warning');
     };
     const renderSource = source => {
       const container = containers[source.key];
@@ -2910,6 +2928,9 @@ mod tests {
             "This request source is temporarily unavailable or returned an invalid response."
         ));
         assert!(script.contains("records.filter(item => item && item.status === 'pending')"));
+        assert!(script.contains("const requestMetadata = content =>"));
+        assert!(script.contains("Request metadata"));
+        assert!(script.contains("card.append(requestMetadata(metadata))"));
         assert!(script.contains("const isExpiredByTime = item => Number(item.expires_at_unix) > 0"));
         assert!(script.contains("pending.filter(isExpiredByTime)"));
         assert!(script.contains("pending.filter(item => !isExpiredByTime(item))"));
