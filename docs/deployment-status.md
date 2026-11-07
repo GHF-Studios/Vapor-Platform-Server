@@ -1,5 +1,24 @@
 # Vapor server deployment status
 
+## Recovery preflight and one approval surface (2026-11-07 09:34 UTC)
+
+- Fresh-host recovery now validates the complete bundle and checks its Ubuntu
+  release, architecture, and recorded Rust/Cargo toolchain before package
+  changes. Platform commit `0628326` passed CI run `42359333223`.
+- Pending deploy, SSH, and Identity permission decisions now have one browser
+  surface: Approvals. Deployments omits pending requests but retains dispatch
+  retry/reconciliation; SSH and Identity pages show pending requests read-only
+  and link back to their inbox section. Owner APIs and their record ownership
+  are unchanged. Identity change `8154a79` is pinned by Platform `fec75f2`.
+- The full local Platform test recipe passed after these changes: 85 Python
+  tests (10 skipped) plus all Rust service tests. Platform CI run
+  `42360322183` has its Windows recovery job green; `root-ci` is still running.
+- No VPS deployment was performed.
+- The failure email most likely corresponds to run `42348443012`: `root-ci`
+  failed because the Linux helper called `record_stopped_deploy_failure`
+  without its module qualifier. Commit `d19c9be` fixed it; run `42348670442`
+  and later runs passed.
+
 ## Recovery and reconciled-deploy hardening (2026-11-07 06:45 UTC)
 
 - Recovery validation now rejects more than 100,000 archive entries, any
