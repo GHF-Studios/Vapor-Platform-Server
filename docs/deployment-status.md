@@ -32,6 +32,31 @@
   adds cursor paging for Platform deployment and SSH requests and explicitly
   identifies Identity's current 200-request endpoint cap.
 
+## Approved deployment retry and SSH button diagnosis (2026-11-07 11:37 UTC)
+
+- The active temporary SSH grant `240aab1d-8edc-49bd-bbd1-47706983e2c3` is
+  recorded as `local_operator` / `local-root`, so the grant was issued through
+  the typed host helper. This does not verify the web approval action.
+- The live JavaScript bundle still contains the old `Approve temporary access`
+  form. It returns without feedback if its required review checkbox is
+  unchecked, and it also silently returns if `host_admin` is selected without
+  the separate unrestricted-access confirmation. The current source removes
+  native validation from that checkbox so the handler can show an explicit
+  explanation. Commit `0c9da2e` passed `root-ci` and
+  `windows-recovery-tests` in run `42367204555`; it has not been deployed.
+- The already-approved request `7df36dcf-20cb-4d44-a027-09f48c4143f5` targeted
+  commit `9b32a020ce26917413752d79f916b3015149a4af`, but its stored request
+  predates `deployment_scope` and `service_target`. Retrying the guarded worker
+  checked out that approved source, then failed closed with
+  `executing request topology does not match the deployment argument`. The
+  request is now failed; no running service was restarted. A fresh CI request
+  using the current schema is required; do not retrofit scope into the
+  previously approved record.
+- After that failure, `/opt/vapor-platform-server` is checked out at `9b32a02`,
+  while the active service still runs the binary built at 02:11 UTC and started
+  at 10:51 UTC. Source checkout and running runtime therefore differ; the
+  current admin frontend has not reached the public site.
+
 ## Recovery preflight and one approval surface (2026-11-07 09:34 UTC)
 
 - Fresh-host recovery now validates the complete bundle and checks its Ubuntu
