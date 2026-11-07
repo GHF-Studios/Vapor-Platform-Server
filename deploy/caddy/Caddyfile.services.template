@@ -54,6 +54,10 @@
 		reverse_proxy 127.0.0.1:7113
 	}
 
+	handle /cli/ssh/* {
+		reverse_proxy 127.0.0.1:7113
+	}
+
 	handle {
 		reverse_proxy 127.0.0.1:7111
 	}
