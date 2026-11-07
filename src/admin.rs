@@ -230,7 +230,8 @@ form.inline { display:inline; }
 .notice { background:#163222; border-left:3px solid #42a56b; padding:8px 10px; }
 .error { background:#3a2024; border-left:3px solid #da626c; padding:8px 10px; }
 @media(max-width:720px) { .shell { grid-template-columns:1fr; } .shell > nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } .nav-group { display:inline-block; margin:8px 8px 4px; } .shell > nav a { display:inline-flex; } .admin-header { align-items:flex-start; flex-direction:column; padding:12px 14px; } .admin-statuses { justify-content:flex-start; } main { padding:20px 14px; } }
-@media(max-width:560px) { .history-controls { grid-template-columns:1fr; } .history-entry header { flex-direction:column; } }
+@media(max-width:620px) { .history-controls { grid-template-columns:1fr; } }
+@media(max-width:560px) { .history-entry header { flex-direction:column; } }
 "#;
 
 const JS: &str = r#"
@@ -1346,7 +1347,7 @@ fn render_admin_fragment_document(fragment: &str, current_path: &str) -> Option<
     html.push_str(&render_admin_navigation(current_path));
     html.push_str("<div class=\"admin-workspace\">");
     html.push_str(&render_admin_header(current_path));
-    html.push_str("<main id=\"admin-content\">");
+    html.push_str("<main id=\"admin-content\" tabindex=\"-1\">");
     html.push_str(fragment);
     html.push_str("</main></div></div></body></html>");
     Some(html)
@@ -2213,6 +2214,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_shell_skip_link_target_is_keyboard_focusable() {
+        let document = super::render_admin_fragment_document(
+            "<h1>Accessible page</h1>",
+            "/admin/operations",
+        )
+        .unwrap();
+        assert!(document.contains("href=\"#admin-content\">Skip to content</a>"));
+        assert!(document.contains("<main id=\"admin-content\" tabindex=\"-1\">"));
+    }
+
+    #[tokio::test]
+    async fn history_filters_stack_before_their_minimum_width_overflows() {
+        let response = super::stylesheet().await;
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let css = std::str::from_utf8(&body).unwrap();
+        assert!(css.contains("@media(max-width:620px) { .history-controls { grid-template-columns:1fr; }"));
+    }
+
+    #[tokio::test]
     async fn shared_shell_rejects_oversized_owner_fragments_with_a_bounded_error_page() {
         use axum::http::header::CONTENT_TYPE;
         use axum::routing::get;
@@ -2295,7 +2315,7 @@ mod tests {
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("<title>Build Cache · Vapor Admin</title>"));
         assert!(html.contains("<nav aria-label=\"Platform administration\">"));
-        assert!(html.contains("<main id=\"admin-content\">"));
+        assert!(html.contains("<main id=\"admin-content\" tabindex=\"-1\">"));
         assert!(html.contains("<h1>Owner-rendered snapshot table</h1>"));
         assert_eq!(html.matches("<body>").count(), 1);
     }
