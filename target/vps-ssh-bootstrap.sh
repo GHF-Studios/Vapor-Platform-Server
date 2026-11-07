@@ -6,7 +6,7 @@ umask 077
 # This script is intentionally pinned to the reviewed Platform/Identity commits.
 readonly ROOT=/opt/vapor-platform-server
 readonly REPOSITORY=https://github.com/GHF-Studios/Vapor-Platform-Server.git
-readonly TARGET_COMMIT=7d075905c49cdc769fc079eebbc97ceace52ba51
+readonly TARGET_COMMIT=96e650f26ac83c86014ad14c2b934dbaf3c87ee5
 readonly TARGET_IDENTITY=8e1b52790fc47ba94d952175882eff1ea0565952
 readonly STATE_ROOT=/var/lib/vapor-server
 readonly CONFIG_ROOT=/etc/vapor-server
