@@ -1672,7 +1672,7 @@ mod unix_impl {
 
     #[cfg(test)]
     mod sudoers_tests {
-        use super::sudoers_contents;
+        use super::{sudoers_contents, temporary_group_sudoers_reference_present};
 
         #[test]
         fn temporary_sudoers_are_limited_to_the_granted_capabilities() {
