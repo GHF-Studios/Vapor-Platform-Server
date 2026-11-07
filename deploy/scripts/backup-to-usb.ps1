@@ -10,7 +10,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$UsbPath,
 
-    [ValidateRange(1GB, 120GB)]
+    [ValidateRange(1MB, 120GB)]
     [long]$MaxStoredBytes = 100GB,
 
     [switch]$AllowFixedDrive
@@ -594,7 +594,7 @@ $report = [ordered]@{
     hash_checks_this_run = $hashChecks
     retained_archive_files = $allArchives.Count
     content_verified_this_run = $verifiedArchives.Count
-    retained_bytes = [long]((Get-ChildItem -LiteralPath $destination -File -Filter 'vapor-platform-recovery-*.tar.gz' |
+    retained_archive_payload_bytes = [long]((Get-ChildItem -LiteralPath $destination -File -Filter 'vapor-platform-recovery-*.tar.gz' |
         Measure-Object -Property Length -Sum).Sum)
     unverified_archives = $unverifiedArchives.Count
     latest_rehashed = $true

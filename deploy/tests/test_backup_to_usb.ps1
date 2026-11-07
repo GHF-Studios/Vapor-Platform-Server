@@ -56,7 +56,7 @@ function New-RecoveryArchive {
 }
 
 function New-Fixture {
-    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive, [switch]$LegacyKit)
+    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive, [switch]$LegacyKit, [switch]$LargeArchives)
 
     $root = Join-Path $scratch $Name
     $remote = Join-Path $root 'remote'
@@ -65,8 +65,14 @@ function New-Fixture {
 
     $olderName = 'vapor-platform-recovery-20261106T120000Z-111111111111.tar.gz'
     $latestName = 'vapor-platform-recovery-20261107T120000Z-222222222222.tar.gz'
-    $olderBytes = New-RecoveryArchive -Root $remote -ArchiveName $olderName -Payload "known-good-$Name" -WithoutKit:$WithoutRecoveryKit
-    $latestBytes = New-RecoveryArchive -Root $remote -ArchiveName $latestName -Payload "latest-good-$Name" -CorruptKit:$CorruptKit -WithoutKit:$WithoutRecoveryKit -IncompleteKit:$IncompleteKit -LegacyKit:$LegacyKit
+    $olderPayload = "known-good-$Name"
+    $latestPayload = "latest-good-$Name"
+    if ($LargeArchives.IsPresent) {
+        $olderPayload += [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(1MB))
+        $latestPayload += [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(1MB))
+    }
+    $olderBytes = New-RecoveryArchive -Root $remote -ArchiveName $olderName -Payload $olderPayload -WithoutKit:$WithoutRecoveryKit
+    $latestBytes = New-RecoveryArchive -Root $remote -ArchiveName $latestName -Payload $latestPayload -CorruptKit:$CorruptKit -WithoutKit:$WithoutRecoveryKit -IncompleteKit:$IncompleteKit -LegacyKit:$LegacyKit
     if ($TruncateLatestArchive.IsPresent) {
         [Array]::Resize([ref]$latestBytes, [Math]::Max(1, $latestBytes.Length - 32))
     }
@@ -136,11 +142,11 @@ $global:LASTEXITCODE = 0
 }
 
 function Invoke-Sync {
-    param($Fixture)
+    param($Fixture, [long]$MaxStoredBytes = 100GB)
     $env:VAPOR_USB_TEST_REMOTE = $Fixture.Remote
     $env:VAPOR_USB_TEST_SSH_EXECUTABLE = $Fixture.SshPath
     $env:VAPOR_USB_TEST_SCP_EXECUTABLE = $Fixture.ScpPath
-    & $scriptPath -Server 'example.test' -SshKey $PSCommandPath -UsbPath $Fixture.Destination -AllowFixedDrive
+    & $scriptPath -Server 'example.test' -SshKey $PSCommandPath -UsbPath $Fixture.Destination -MaxStoredBytes $MaxStoredBytes -AllowFixedDrive
 }
 
 try {
@@ -190,6 +196,8 @@ try {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $incoming 'old.partial'))) 'stale partial file was not cleaned'
     $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
     Assert-True ($report.copied_this_run -eq 2) 'first run should copy both indexed archives'
+    Assert-True ($report.retained_archive_payload_bytes -eq ($fixture.OlderBytes.Length + $fixture.LatestBytes.Length)) 'sync report archive-payload byte count is inaccurate'
+    Assert-True ($null -eq $report.PSObject.Properties['retained_bytes']) 'ambiguous total-byte field remains in sync report'
     $kitCommit = '0123456789abcdef0123456789abcdef01234567'
     $kitRoot = Join-Path $fixture.Destination (Join-Path 'Recovery-Kit' $kitCommit)
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'recover-fresh-host.sh') -PathType Leaf) 'fresh-host recovery script was not extracted'
@@ -255,6 +263,30 @@ try {
     Assert-True (-not $report.recovery_kit_available) 'legacy archive without an embedded kit was reported as kit-ready'
     $kitPointer = Get-Content -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json') -Raw | ConvertFrom-Json
     Assert-True (-not $kitPointer.available) 'legacy archive without an embedded kit published a ready pointer'
+
+    $fixture = New-Fixture -Name 'retention-prunes-oldest-verified' -LargeArchives
+    $retentionBudget = [long][Math]::Max(1MB, $fixture.LatestBytes.Length + [Math]::Floor($fixture.OlderBytes.Length / 2))
+    Assert-True ($retentionBudget -lt ($fixture.LatestBytes.Length + $fixture.OlderBytes.Length)) 'retention fixture budget must require pruning'
+    Invoke-Sync $fixture -MaxStoredBytes $retentionBudget | Out-Null
+    $latestPath = Join-Path $fixture.Destination $fixture.LatestName
+    Assert-True (Test-Path -LiteralPath $latestPath -PathType Leaf) 'retention removed the current archive'
+    Assert-True ((Get-FileHash -LiteralPath $latestPath -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $fixture.LatestHash) 'retained latest archive is not content-verified'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Destination $fixture.OlderName))) 'retention did not prune the oldest verified archive'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Destination ($fixture.OlderName + '.sha256')))) 'retention left a detached checksum for a pruned archive'
+
+    $fixture = New-Fixture -Name 'retention-preserves-unindexed' -LargeArchives
+    $manualName = 'vapor-platform-recovery-20261105T120000Z-333333333333.tar.gz'
+    $manualPath = Join-Path $fixture.Destination $manualName
+    $manualBytes = [Security.Cryptography.RandomNumberGenerator]::GetBytes(1MB)
+    [System.IO.File]::WriteAllBytes($manualPath, $manualBytes)
+    $retentionBudget = [long][Math]::Max(1MB, $fixture.LatestBytes.Length + 1)
+    $manualHash = (Get-FileHash -LiteralPath $manualPath -Algorithm SHA256).Hash
+    $rejected = $false
+    try { Invoke-Sync $fixture -MaxStoredBytes $retentionBudget | Out-Null } catch { $rejected = $_.Exception.Message -like '*latest archive plus unverified USB files exceed the storage budget*' }
+    Assert-True $rejected 'retention must refuse when the latest and unindexed archive exceed the budget'
+    Assert-True (Test-Path -LiteralPath $manualPath -PathType Leaf) 'retention deleted an unindexed/manual archive'
+    Assert-True ((Get-FileHash -LiteralPath $manualPath -Algorithm SHA256).Hash -ceq $manualHash) 'retention modified an unindexed/manual archive'
+    Assert-True (Test-Path -LiteralPath (Join-Path $fixture.Destination $fixture.OlderName) -PathType Leaf) 'refused retention deleted an older verified archive'
 
     $fixture = New-Fixture -Name 'invalid-pointer'
     $badPointer = [ordered]@{ schema_version = 1; archive = $fixture.LatestName; sha256 = ('0' * 64); size_bytes = 1 }
@@ -323,7 +355,7 @@ try {
             -ErrorAction SilentlyContinue
     }
 
-    Write-Output 'USB recovery sync tests passed (11 scenarios).'
+    Write-Output 'USB recovery sync tests passed.'
 } finally {
     Remove-Item Env:\VAPOR_USB_TEST_REMOTE -ErrorAction SilentlyContinue
     Remove-Item Env:\VAPOR_USB_TEST_SSH_EXECUTABLE, Env:\VAPOR_USB_TEST_SCP_EXECUTABLE -ErrorAction SilentlyContinue

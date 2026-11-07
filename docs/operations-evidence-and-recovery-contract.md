@@ -233,7 +233,9 @@ selected archive. The Windows USB sync extracts the kit
 from the latest content-verified archive into Recovery-Kit/<root-commit>/ and
 atomically updates Recovery-Kit/latest.json only after checking the embedded
 hashes. Its sync report states whether the latest archive supplied a usable
-kit and whether it supports pre-package validation. Complete previous kits
+kit and whether it supports pre-package validation. The reported
+`retained_archive_payload_bytes` counts only recovery archive payload files,
+not sidecars, extracted kits, or other USB contents. Complete previous kits
 remain usable with their matching archive but do not claim the newer preflight
 guarantee. Generations without the kit remain copyable but do not produce a
 ready kit pointer. The owner can move the matching kit folder, archive, and

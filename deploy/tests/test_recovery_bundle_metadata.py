@@ -93,6 +93,17 @@ class RecoveryBundleMetadataTests(unittest.TestCase):
             with self.assertRaisesRegex(METADATA.MetadataError, "does not match"):
                 METADATA.verify_archive_checksum(bundle)
 
+    def test_archive_checksum_bounds_sidecar_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = pathlib.Path(temporary) / "recovery.tar.gz"
+            bundle.write_bytes(b"the selected archive")
+            pathlib.Path(f"{bundle}.sha256").write_bytes(
+                b"0" * (METADATA.MAX_CHECKSUM_SIDECAR_BYTES + 1)
+            )
+
+            with self.assertRaisesRegex(METADATA.MetadataError, "exceeds its size limit"):
+                METADATA.verify_archive_checksum(bundle)
+
     def test_services_mode_requires_each_independent_service_binary(self) -> None:
         self.assertEqual(
             METADATA.runtime_binaries("services"),

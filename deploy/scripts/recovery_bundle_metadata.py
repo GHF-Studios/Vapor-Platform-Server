@@ -32,7 +32,8 @@ def verify_archive_checksum(bundle_path: pathlib.Path) -> None:
     if sidecar.is_symlink() or not sidecar.is_file():
         raise MetadataError("recovery archive checksum sidecar is missing or unsafe")
     try:
-        sidecar_bytes = sidecar.read_bytes()
+        with sidecar.open("rb") as stream:
+            sidecar_bytes = stream.read(MAX_CHECKSUM_SIDECAR_BYTES + 1)
         if len(sidecar_bytes) > MAX_CHECKSUM_SIDECAR_BYTES:
             raise MetadataError("recovery archive checksum sidecar exceeds its size limit")
         sidecar_text = sidecar_bytes.decode("ascii", errors="strict")

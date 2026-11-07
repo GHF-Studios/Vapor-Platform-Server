@@ -3,6 +3,14 @@
 **Status:** Approved by owner  
 **Date:** 2026-11-03
 
+> **Build snapshot update (2026-11-07):** The snapshot/worker topology in this
+> earlier design is superseded by
+> [`../vapor-build-snapshot-contract.md`](../vapor-build-snapshot-contract.md)
+> and the owner-approved
+> [`2026-11-06-vapor-platform-operations-and-recovery-redesign.md`](2026-11-06-vapor-platform-operations-and-recovery-redesign.md).
+> A second build worker is optional; local source builds, service deployment,
+> and primary-host recovery must remain available without it.
+
 ## Intent
 
 Reconcile Vapor Client, Vapor's server platform, Loo Cast, and Mad Max into one
@@ -257,9 +265,10 @@ Vapor distribution.
 - The dashboard presents the existing exact-revision deploy and
   service-owned permission-approval workflows; a confirmation checkbox alone
   never substitutes for the owning service's authorization decision.
-- Both target build snapshots are reproducible by VPS-managed isolated guests,
-  and a clean export/reinstall/import/recheckout flow restores the platform
-  without distributing licensed game content.
+- Both target builds retain a local source-build path; when an optional worker
+  is provisioned, it can produce candidates for service validation and
+  promotion. A clean export/reinstall/import/recheckout flow restores the
+  platform without distributing licensed game content.
 
 ## Decisions left open
 

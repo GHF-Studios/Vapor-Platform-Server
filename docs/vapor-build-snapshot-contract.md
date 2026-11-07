@@ -38,7 +38,7 @@ not interchangeable:
 
 | Workflow | Owner | Current behavior |
 | --- | --- | --- |
-| Developer's ordinary source build | Vapor Client | A missing or unavailable downloaded snapshot must not block a local build. The Client implementation and its canonical build recipe remain Client-owned. |
+| Developer's ordinary source build | Vapor Client | Contract: a missing or unavailable downloaded snapshot must not block local builds. Client implementation and the canonical build recipe are Client-owned and are not verified by this Platform checkout. |
 | Approved Platform service deployment | Platform Server | The approved deploy worker builds the selected service from its pinned source checkout on the primary host using local `cargo build --release --locked`; this does not call Build Cache and does not require the optional worker. |
 | Official target-snapshot publication | Platform orchestration + Build Cache | Build Cache validates and promotes candidates, but Platform does not yet implement candidate-build orchestration or worker lifecycle. A current cache entry is not evidence that a worker produced it. |
 

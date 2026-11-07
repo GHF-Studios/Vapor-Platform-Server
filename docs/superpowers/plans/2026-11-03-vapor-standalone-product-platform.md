@@ -6,7 +6,7 @@
 
 **Architecture:** This is a coordinating plan for the approved cross-repo design, not a replacement for the service-owned implementation plans listed below. Execute dependency lanes in order, preserve each repository’s ownership, and require a usable acceptance result at each phase before advancing. Vapor Client owns local install/source workflows; server submodules own their policy and business logic; Platform composes and operates those services.
 
-**Tech Stack:** Rust workspaces and Cargo, Steam depot/launch metadata, signed Vapor release artifacts, Rust/Axum/SQLite service modules, OpenSSH/systemd for VPS operations, and isolated VPS-managed Linux and Windows build guests.
+**Tech Stack:** Rust workspaces and Cargo, Steam depot/launch metadata, signed Vapor release artifacts, Rust/Axum/SQLite service modules, OpenSSH/systemd for VPS operations, and an optional target-build worker with a supported local fallback.
 
 **Spec:** `docs/superpowers/specs/2026-11-03-vapor-standalone-product-platform-design.md`
 
@@ -22,7 +22,7 @@
 - Keep the VPS admin toolbench distinct from the Vapor Client’s local game workflows.
 - Keep secrets out of source, ordinary state exports, logs, and public artifact feeds.
 - Keep the existing exact-revision deploy approval contract and service-owned Identity permission approval contract.
-- Use one current signed build snapshot per supported target and rolling lock; build through VPS-managed isolated guests, not the owner’s workstation.
+- Keep one current signed build snapshot per supported target and rolling lock. A second VPS worker is optional; source builds and service deployment retain a local fallback when it is absent. See [`../vapor-build-snapshot-contract.md`](../vapor-build-snapshot-contract.md) for the current boundary and implementation status.
 - Install Vapor independently under the user's Vapor home (`%USERPROFILE%\Vapor` or `$HOME/Vapor`); Steam must not own Vapor application files, tools, caches, configuration, or state.
 - The only local setup roles are `Player` and `Developer`. Developer setup always includes the development toolset, both supported targets, and managed cross-compilers; it cannot be skipped. Server-side ecosystem authorization is separate from these local roles.
 - The Loo Cast Steam mount is one depot-provided content artifact (`App.vapor.toml`, Engine, Game, Packagepack) plus only the small Steam launch locator/forwarder needed to find the separate Vapor installation and open its tools selector. The locator never bundles or installs Vapor.
@@ -233,20 +233,21 @@ permissions, or operational data into one UI.
 - [ ] Preserve useful error bodies, request IDs, audit attribution, and truthful unavailable states in all mutation/list failures.
 - [ ] Run section authorization tests, state-transition tests, navigation/readiness rendering checks, and operation error display checks; expected result is each action is owned and audited by its responsible service.
 
-## Task 8: Produce signed rolling target snapshots on VPS-managed guests
+## Task 8: Produce signed rolling target snapshots with an optional worker
 
 **Files:**
 - Owner: `Vapor-Build-Cache-Server` and Platform orchestration.
-- Reference: `docs/superpowers/plans/2026-11-02-vapor-target-build-snapshots-and-builders.md`.
+- Contract: `docs/vapor-build-snapshot-contract.md`.
 
 **Interfaces:**
 - Targets: `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-gnullvm`.
 - Output: one current signed snapshot per target and lock, fetched by Vapor Client after toolchain installation.
-- Build location: VPS-managed isolated guests; owner workstation is not a required builder.
+- Build location: optional second VPS worker when provisioned and verified; local source builds and service deployment remain available without it.
 
-- [ ] Perform read-only VPS resource, hypervisor, storage, and Windows guest licensing preflight; record whether the selected VPS can host both guests.
-- [ ] If capacity/licensing is insufficient, stop builder deployment and report the exact blocker; do not silently use an external host or owner PC.
-- [ ] Implement guest lifecycle, operation ledger, pinned images, build, signing, promotion, and cleanup through the existing target snapshot plan.
+- [ ] Keep the primary VPS as the sole public/policy authority; do not install virtualization or assume it can host build guests.
+- [ ] After the optional second node is selected, validate its OS, CPU/RAM/disk, network, isolation, and Windows toolchain licensing before provisioning.
+- [ ] Implement worker lifecycle, target-scoped operation records, pinned build inputs, candidate submission, and teardown without making worker availability a build/deploy prerequisite.
+- [ ] Until Platform candidate orchestration is implemented, report target snapshots unavailable/stale rather than implying they are being produced.
 - [ ] Integrate client snapshot verification/install under the single rolling Vapor/toolchain lock.
 - [ ] Verify each target produces and restores a matching snapshot and that a stale or wrong-target snapshot is rejected.
 

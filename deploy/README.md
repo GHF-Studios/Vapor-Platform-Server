@@ -119,9 +119,16 @@ for smoke testing only; the intended public endpoint remains
   every run, rotates a recheck through older copies, and can catch up after
   missed runs. A per-destination Windows mutex prevents a scheduled run and a
   manual catch-up from deleting or replacing each other's in-progress files.
+  `-MaxStoredBytes` defaults to 100 GiB and bounds archive payload bytes; it
+  accepts 1 MiB through 120 GiB. The current archive is never pruned, and
+  unverified/manual archives are preserved; if they leave no room for the
+  current archive, sync fails before deleting verified history. The report's
+  `retained_archive_payload_bytes` excludes sidecars, extracted kits, and other
+  USB contents.
   `deploy/tests/test_backup_to_usb.ps1` exercises catch-up, pointer rejection,
-  corrupt downloads, and overlapping runs using local fixtures. VPS checksums
-  detect corruption, not a compromised VPS replacing both the archive and index.
+  corrupt downloads, byte-budget pruning/refusal, and overlapping runs using
+  local fixtures. VPS checksums detect corruption, not a compromised VPS
+  replacing both the archive and index.
   For new archives, it also verifies and extracts the source-pinned recovery
   kit into `Recovery-Kit/<root-commit>/`, then atomically writes
   `Recovery-Kit/latest.json`. Its report marks when an older archive has no
