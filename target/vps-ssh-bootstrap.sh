@@ -284,7 +284,7 @@ if systemctl is-active --quiet vapor-state-export.timer; then
   state_timer_was_active=1
   systemctl stop vapor-state-export.timer || fail could_not_pause_state_export_timer
 fi
-state_backup="${backup}/state.tar.gz"
+state_backup="${BACKUP_ROOT}/vapor-platform-recovery-${stamp}-${old_commit:0:12}.tar.gz"
 if ! bash "${ROOT}/deploy/scripts/export-state.sh" "${state_backup}"; then
   state_backup=not_created
   fail state_export_failed
