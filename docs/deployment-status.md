@@ -827,3 +827,33 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   expected completed helper path. Root-owned Platform DB and system journal
   evidence are still required to distinguish interrupted or out-of-band
   cleanup from a helper/version mismatch.
+
+## Root SSH recovery and stale-grant cleanup (2026-11-07, 17:20 UTC)
+
+- The owner installed the workstation's designated root public key. An SSH
+  login as `root` succeeded, confirming this key is now usable for the
+  temporarily authorized recovery window. The private key remains only on the
+  workstation and is not recorded here.
+- Narrow host logs confirm request
+  `240aab1d-8edc-49bd-bbd1-47706983e2c3` was granted at 11:05 UTC and its
+  temporary account was created at 11:06 UTC. The account successfully ran
+  read-only helper commands at 11:07 and 11:43 UTC; SSH login attempts at
+  11:49 UTC and later were rejected because the account was absent.
+- `/etc/passwd` and `/etc/shadow` timestamps remain at the account creation
+  second (11:06:20 UTC), and the available journal/auth logs contain no
+  deletion event for this account. Auditd is inactive. The specific cause of
+  disappearance is therefore still unknown; the logs do not support attributing
+  it to a particular operator or cleanup path.
+- The request row still reported `active` while its account and home directory
+  were absent. Its full-UUID expiry timer was enabled for 19:05:58 UTC, but the
+  expiry service had never run. The separately observed failed transient
+  `vapor-codex-access-expire.service` attempted to remove `leslieghf` from a
+  group at 00:44 UTC, more than ten hours before this grant was created, and
+  failed with an invalid group-name error; it does not explain the later
+  account disappearance.
+- The installed typed operator's `ssh revoke` path was then used to reconcile
+  this unusable grant. It completed successfully, removing that grant's managed
+  timer/key/sudo policy/account artifacts and recording the grant as revoked.
+  This did not modify the separate `/root/.ssh/authorized_keys` recovery key.
+- CI for the current source branch through `e969970` is green. No application
+  deployment or service restart was performed during this host diagnosis.
