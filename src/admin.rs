@@ -2934,7 +2934,7 @@ mod tests {
         assert!(script.contains("const isExpiredByTime = item => Number(item.expires_at_unix) > 0"));
         assert!(script.contains("pending.filter(isExpiredByTime)"));
         assert!(script.contains("pending.filter(item => !isExpiredByTime(item))"));
-        assert!(script.contains("Expired by time · Identity has not yet recorded the transition"));
+        assert!(script.contains("Expired at ${humanTime(item.expires_at_unix)} · Identity has not yet recorded the transition"));
         assert!(script.contains("renderExpiredIdentity(item, card)"));
         assert!(script.contains("reason: reason.value.trim()"));
         assert!(script.contains("granted_capabilities: granted"));
