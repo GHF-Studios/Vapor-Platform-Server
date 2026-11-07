@@ -624,7 +624,7 @@ mod unix_impl {
         let request_json: String = row.get("request_json");
         let request: serde_json::Value = serde_json::from_str(&request_json)
             .map_err(|_| (id.to_string(), "approved deploy request is invalid"))?;
-        if !valid_deployment_target(
+        if !super::valid_deployment_target(
             request
                 .get("server_mode")
                 .and_then(serde_json::Value::as_str),
