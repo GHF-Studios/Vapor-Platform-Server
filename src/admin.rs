@@ -974,9 +974,16 @@ const JS: &str = r#"
           'Deploy approvals are temporarily unavailable.';
         return;
       }
-      const items = Array.isArray(requests) ? requests : (Array.isArray(requests?.items) ? requests.items : []);
+      const items = (Array.isArray(requests) ? requests : (Array.isArray(requests?.items) ? requests.items : []))
+        .filter(item => item && item.status !== 'pending');
       if (!items.length) {
-        deployRequests.textContent = 'No deploy requests have been recorded.';
+        const link = document.createElement('a'); link.href = '/admin/approvals#pending-deploy-approvals';
+        link.textContent = 'Approvals';
+        deployRequests.replaceChildren(
+          document.createTextNode('No deployment lifecycle records. Pending requests are in '),
+          link,
+          document.createTextNode('.')
+        );
         return;
       }
       for (const item of items) {
@@ -1045,19 +1052,18 @@ const JS: &str = r#"
         }
         details.append(summaryLabel, list);
         card.append(details);
-        const pendingActions = selectionValid ? ['approve', 'reject'] : ['reject'];
-        for (const decision of (item.status === 'pending' ? pendingActions : selectionValid && item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
+        for (const decision of (selectionValid && item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
           const form = document.createElement('form');
           form.className = 'inline';
           const label = document.createElement('label');
           const confirmed = document.createElement('input');
           confirmed.type = 'checkbox';
           confirmed.required = true;
-          const wording = decision === 'approve' ? 'I reviewed this exact revision' : decision === 'dispatch' ? 'Queue this already-approved revision now' : decision === 'reconcile' ? 'I confirmed this worker is no longer running; mark this execution failed without retrying it' : 'I intend to reject this request';
+          const wording = decision === 'dispatch' ? 'Queue this already-approved revision now' : 'I confirmed this worker is no longer running; mark this execution failed without retrying it';
           label.append(confirmed, document.createTextNode(` ${wording}`));
           const button = document.createElement('button');
           button.type = 'submit';
-          button.textContent = decision === 'approve' ? 'Approve deploy' : decision === 'dispatch' ? 'Retry deploy dispatch' : decision === 'reconcile' ? 'Reconcile stopped worker' : 'Reject';
+          button.textContent = decision === 'dispatch' ? 'Retry deploy dispatch' : 'Reconcile stopped worker';
           form.append(label, button);
           form.addEventListener('submit', async event => {
             event.preventDefault();
@@ -1067,10 +1073,7 @@ const JS: &str = r#"
               const result = await fetch(`/api/admin/deploy-requests/${encodeURIComponent(item.id)}/${decision}`, {
                 method: 'POST', credentials: 'same-origin', cache: 'no-store',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(['dispatch', 'reconcile'].includes(decision)
-                  ? { expected_version: item.version, confirmed: true }
-                  : { expected_version: item.version, confirmed: true,
-                      reason: decision === 'approve' ? 'approved in Platform Operations' : 'rejected in Platform Operations' })
+                body: JSON.stringify({ expected_version: item.version, confirmed: true })
               });
               const body = await result.clone().json().catch(() => null);
               const plainText = body ? '' : await result.text().catch(() => '');
@@ -1194,44 +1197,11 @@ const JS: &str = r#"
           card.append(granted);
         }
         if (item.status === 'pending') {
-          const form = document.createElement('form'); const fields = document.createElement('fieldset');
-          const legend = document.createElement('legend'); legend.textContent = 'Actual grant'; fields.append(legend);
-          const choices = [];
-          for (const value of ['vapor_deploy', 'vapor_service_control', 'host_admin']) {
-            const label = document.createElement('label'); const input = document.createElement('input');
-            input.type = 'checkbox'; input.value = value; input.checked = item.requested_capabilities.includes(value); choices.push(input);
-            label.append(input, document.createTextNode(` ${value}${value === 'host_admin' ? ' (full temporary sudo)' : ''}`)); fields.append(label);
-          }
-          const durationLabel = document.createElement('label'); durationLabel.textContent = 'Duration in seconds';
-          const duration = document.createElement('input'); duration.type = 'number'; duration.min = '1';
-          duration.max = String(8 * 60 * 60); duration.value = String(item.requested_duration_seconds); durationLabel.append(duration);
-          const adjustment = document.createElement('p'); adjustment.className = 'muted';
-          adjustment.textContent = 'Set the actual grant here. You may expand or reduce the requested scope and duration within server policy.';
-          fields.append(adjustment);
-          const confirmLabel = document.createElement('label'); const confirm = document.createElement('input'); confirm.type = 'checkbox'; confirm.required = true;
-          confirmLabel.append(confirm, document.createTextNode(' I reviewed the key, purpose, and actual grant'));
-          const adminLabel = document.createElement('label'); const adminConfirm = document.createElement('input'); adminConfirm.type = 'checkbox';
-          adminLabel.append(adminConfirm, document.createTextNode(' I approve unrestricted root access and understand it can disable its own expiry cleanup'));
-          const button = document.createElement('button'); button.type = 'submit'; button.textContent = 'Approve temporary access';
-          form.append(fields, durationLabel, confirmLabel, adminLabel, button);
-          form.addEventListener('submit', async event => {
-            event.preventDefault(); if (!confirm.checked) return;
-            const selected = choices.filter(input => input.checked).map(input => input.value);
-            if (selected.includes('host_admin') && (selected.length !== 1 || !adminConfirm.checked)) return;
-            await submitSshAction(button, item.id,
-              `/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/approve`,
-              { expected_version: item.version, confirmed: true, host_admin_confirmed: adminConfirm.checked,
-                granted_capabilities: selected, granted_duration_seconds: Number(duration.value) },
-              'Grant failed');
-          });
-          card.append(form);
-          const reject = document.createElement('button'); reject.type = 'button'; reject.textContent = 'Reject request';
-          reject.addEventListener('click', async () => {
-            await submitSshAction(reject, item.id,
-              `/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/reject`,
-              { expected_version: item.version, confirmed: true }, 'Rejection failed');
-          });
-          card.append(reject);
+          const review = document.createElement('p'); review.className = 'muted';
+          review.textContent = 'Pending requests can only be reviewed in Approvals.';
+          const link = document.createElement('a'); link.href = '/admin/approvals#pending-ssh-approvals';
+          link.textContent = 'Review this request in Approvals';
+          card.append(review, link);
         } else if (item.status === 'active' || item.status === 'failed') {
           const form = document.createElement('form'); const label = document.createElement('label');
           const confirm = document.createElement('input'); confirm.type = 'checkbox'; confirm.required = true;
@@ -2740,7 +2710,7 @@ mod tests {
             .contains("Sign in with an Identity root account to review temporary SSH requests."));
         assert!(script.contains("Your signed-in account does not have the Platform root role."));
         assert!(script.contains("const responseFailure = async (response, fallback) =>"));
-        assert!(script.contains("'Grant failed');"));
+        assert!(script.contains("Review this request in Approvals"));
         assert!(script
             .contains("const submitSshAction = async (button, itemId, path, body, fallback) =>"));
         assert!(script.contains("No response was received; the request may have completed."));
@@ -2789,14 +2759,61 @@ mod tests {
         assert!(script.contains("serviceDeployTargets.has(item.service_target)"));
         assert!(script.contains("document.querySelector('[data-deployment-targets]')"));
         assert!(script.contains("Target: ${deploymentSelectionLabel(item)}"));
-        assert!(script.contains(
-            "const pendingActions = selectionValid ? ['approve', 'reject'] : ['reject']"
-        ));
         assert!(
             script.contains("selectionValid && item.status === 'approved' && item.retry_eligible")
         );
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
+    }
+
+    #[tokio::test]
+    async fn approvals_are_the_only_mutation_surface_for_pending_requests() {
+        let response = admin_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/assets/admin.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let script = std::str::from_utf8(&body).unwrap();
+        let deployments = script
+            .split("const deployRequests = document.querySelector('#deploy-requests');")
+            .nth(1)
+            .unwrap()
+            .split("const sshAccess =")
+            .next()
+            .unwrap();
+        assert!(deployments.contains("item.status !== 'pending'"));
+        assert!(deployments.contains("/admin/approvals#pending-deploy-approvals"));
+        assert!(!deployments.contains("Approve deploy"));
+        assert!(!deployments.contains("Reject"));
+        assert!(deployments.contains("Retry deploy dispatch"));
+
+        let ssh_access = script
+            .split("const sshAccess = document.querySelector('#ssh-access');")
+            .nth(1)
+            .unwrap()
+            .split("const operationHistory =")
+            .next()
+            .unwrap();
+        assert!(ssh_access.contains("Review this request in Approvals"));
+        assert!(ssh_access.contains("/admin/approvals#pending-ssh-approvals"));
+        assert!(!ssh_access.contains("/requests/${encodeURIComponent(item.id)}/approve"));
+        assert!(!ssh_access.contains("/requests/${encodeURIComponent(item.id)}/reject"));
+        assert!(ssh_access.contains("/grants/${encodeURIComponent(item.id)}/revoke"));
+
+        let approvals = script
+            .split("const pendingDeployApprovals =")
+            .nth(1)
+            .unwrap()
+            .split("const operationHistory =")
+            .next()
+            .unwrap();
+        assert!(approvals.contains("Approve and queue"));
+        assert!(approvals.contains("Approve selected access"));
     }
 
     #[tokio::test]

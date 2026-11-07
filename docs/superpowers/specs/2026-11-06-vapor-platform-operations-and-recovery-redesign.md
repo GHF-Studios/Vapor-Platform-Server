@@ -230,13 +230,15 @@ a source-only approval from unexpectedly retaining or changing the live mode.
   SSH, and Identity permission requests. Each item identifies its owner, exact
   subject/target, requester provenance, requested effect, actual selected
   policy, expiry, and review action. Decision writes go directly to the owner
-  API. Per-source failure is shown without hiding other sources.
-- **Deployments:** requests and their immutable revisions, CI/submodule evidence,
-  approval decision, dispatch stage, execution progress, outcome, and retry or
-  reconciliation eligibility. Current deployment and history are separate
-  views.
-- **SSH access:** pending requests, active grants, selected capabilities and
-  duration, fingerprint, expiry, revoke/reconfigure actions, and grant events.
+  API. Per-source failure is shown without hiding other sources. This is the
+  only page that approves or rejects pending requests.
+- **Deployments:** approved requests and their immutable revisions,
+  CI/submodule evidence, dispatch stage, execution progress, outcome, and retry
+  or reconciliation eligibility. Pending requests stay in Approvals; current
+  deployment and history are separate views.
+- **SSH access:** request and grant history, active grants, selected
+  capabilities and duration, fingerprint, expiry, revoke/reconfigure actions,
+  and grant events. Pending requests are read-only here and link to Approvals.
   Private key material is never rendered. Full `host_admin` is a distinct,
   explicit escalation.
 - **Identity:** people/providers, roles, permission requests, credentials,
