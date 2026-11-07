@@ -116,6 +116,53 @@ class SshExpiryQuiescenceTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("could not inspect temporary SSH expiry timers", result.stderr)
 
+    def test_non_quiescing_expiry_work_times_out_and_keeps_timer_restartable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            calls = root / "calls.log"
+            systemctl = fake_bin / "systemctl"
+            systemctl.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$*\" >> \"$FAKE_SYSTEMCTL_LOG\"\n"
+                "case \"$1 $2\" in\n"
+                "  'list-units --type=timer') printf '%s\\n' 'vapor-ssh-expire-a.timer loaded active waiting' ;;\n"
+                "  'stop vapor-ssh-expire-a.timer'|'start vapor-ssh-expire-a.timer'|'list-jobs --no-legend') exit 0 ;;\n"
+                "  'list-units --type=service') printf '%s\\n' 'vapor-ssh-expire-a.service loaded activating start' ;;\n"
+                "  *) exit 2 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            systemctl.chmod(0o755)
+            script = root / "run.sh"
+            script.write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\n"
+                f"source {shlex.quote(posix_path(HELPER))}\n"
+                "ACTIVE_SSH_EXPIRY_TIMERS=()\n"
+                "sleep() { SECONDS=$((SECONDS + 61)); }\n"
+                "if pause_temporary_ssh_expiry; then exit 3; fi\n"
+                "restart_temporary_ssh_expiry\n"
+                "printf 'restartable=%s\\n' \"${ACTIVE_SSH_EXPIRY_TIMERS[*]}\"\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [bash_executable(), posix_path(script)],
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PATH": shell_path_list(fake_bin, os.environ["PATH"]),
+                    "FAKE_SYSTEMCTL_LOG": posix_path(calls),
+                },
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("did not quiesce", result.stderr)
+            self.assertEqual(result.stdout.strip(), "restartable=vapor-ssh-expire-a.timer")
+            self.assertTrue(calls.read_text(encoding="utf-8").splitlines()[-1].startswith("start "))
+
 
 if __name__ == "__main__":
     unittest.main()
