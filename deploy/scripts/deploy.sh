@@ -306,8 +306,6 @@ if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
   for service in homepage docs identity diagnostics registry artifact build-cache; do
     retire_service_unit "vapor-${service}.service"
   done
-else
-  retire_service_unit vapor-platform-server.service
 fi
 
 python3 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/deployed_source_manifest.py" \
