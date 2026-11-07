@@ -38,6 +38,29 @@ applying=0
 
 line() { printf '%s=%s\n' "$1" "$2" >>"${report}"; }
 fail() { detail="$1"; echo "bootstrap: ${detail}" >&2; exit 1; }
+set_server_mode() {
+  local mode="$1" temporary
+  temporary="$(mktemp "${CONFIG_ROOT}/platform.env.ssh-bootstrap.${stamp}.XXXXXX")" || return 1
+  if ! awk -v mode="${mode}" '
+    BEGIN { found = 0 }
+    /^VAPOR_SERVER_MODE=/ {
+      if (!found) print "VAPOR_SERVER_MODE=" mode
+      found = 1
+      next
+    }
+    { print }
+    END { if (!found) print "VAPOR_SERVER_MODE=" mode }
+  ' "${CONFIG_ROOT}/platform.env" > "${temporary}"; then
+    rm -f -- "${temporary}"
+    return 1
+  fi
+  if ! chown --reference="${CONFIG_ROOT}/platform.env" "${temporary}" ||
+    ! chmod --reference="${CONFIG_ROOT}/platform.env" "${temporary}" ||
+    ! mv -f -- "${temporary}" "${CONFIG_ROOT}/platform.env"; then
+    rm -f -- "${temporary}"
+    return 1
+  fi
+}
 
 restore_directory() {
   local source="$1" destination="$2" failed_copy="${destination}.ssh-bootstrap-failed-${stamp}"
@@ -70,12 +93,13 @@ rollback() {
   fi
 
   if [ -d "${ROOT}/.git" ] && [ "${old_commit}" != unknown ]; then
-    if ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE="${old_server_mode}" VAPOR_BRANCH=main \
+    if ! restore_directory "${backup}/config/vapor-server" /etc/vapor-server; then
+      rollback_failed=1
+    elif ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE="${old_server_mode}" VAPOR_BRANCH=main \
       VAPOR_REPO_URL="${REPOSITORY}" CARGO_BUILD_JOBS=1 \
       bash "${ROOT}/deploy/scripts/deploy.sh" --approved "${old_commit}"; then
       rollback_failed=1
     fi
-    restore_directory "${backup}/config/vapor-server" /etc/vapor-server || rollback_failed=1
     restore_directory "${backup}/config/caddy" /etc/caddy || rollback_failed=1
     if [ "${atlas_existed}" -eq 1 ]; then
       restore_directory "${backup}/atlas-web" "${ATLAS_ROOT}" || rollback_failed=1
@@ -190,6 +214,7 @@ grep -q '^ID=ubuntu$' /etc/os-release || fail expected_ubuntu
 for command in git python3 curl flock systemctl visudo sshd df awk groupadd groupdel getent; do
   command -v "${command}" >/dev/null 2>&1 || fail "missing_${command}"
 done
+command -v runuser >/dev/null 2>&1 || fail missing_runuser
 exec 9>/run/vapor-ssh-endpoint-bootstrap.lock
 flock -n 9 || fail another_ssh_endpoint_bootstrap_is_running
 [ -d "${ROOT}/.git" ] && [ ! -L "${ROOT}" ] || fail existing_platform_checkout_missing_or_not_regular
@@ -209,7 +234,7 @@ fi
 if [ ! -f "${CONFIG_ROOT}/platform.env" ] || [ -L "${CONFIG_ROOT}/platform.env" ]; then
   fail platform_environment_file_missing_or_not_regular
 fi
-old_server_mode="$(awk -F= '$1 == "VAPOR_SERVER_MODE" {value=$2; gsub(/^[[:space:]\"]+|[[:space:]\"]+$/, "", value); print value; exit}' "${CONFIG_ROOT}/platform.env")"
+old_server_mode="$(awk -F= '$1 == "VAPOR_SERVER_MODE" {value=$2; gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", value); print value; exit}' "${CONFIG_ROOT}/platform.env")"
 case "${old_server_mode}" in
   monolith|services) ;;
   *) fail prior_server_mode_missing_or_invalid ;;
@@ -245,7 +270,7 @@ if [ -e "${candidate}" ] || [ -L "${candidate}" ] || [ -e "${legacy}" ] || [ -L 
   fail staging_or_backup_path_already_exists
 fi
 if [ -e "${backup}" ] || [ -L "${backup}" ]; then fail backup_path_already_exists; fi
-atlas_config="$(awk -F= '$1 == "VAPOR_ATLAS_WEB_ROOT" {value=$2; gsub(/^[[:space:]\"]+|[[:space:]\"]+$/, "", value); print value; exit}' "${CONFIG_ROOT}/platform.env")"
+atlas_config="$(awk -F= '$1 == "VAPOR_ATLAS_WEB_ROOT" {value=$2; gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", value); print value; exit}' "${CONFIG_ROOT}/platform.env")"
 if [ -n "${atlas_config}" ] && [ "${atlas_config}" != "${ATLAS_ROOT}" ]; then fail atlas_root_differs_from_guarded_path; fi
 
 install -d -o root -g root -m 0700 "${backup}" "${backup}/config" "${backup}/sudoers"
@@ -292,17 +317,21 @@ fi
 python3 "${ROOT}/deploy/scripts/state-bundle-validate.py" "${state_backup}" >/dev/null || fail state_bundle_validation_failed
 systemctl start vapor-state-export.timer || fail could_not_resume_state_export_timer_after_backup
 
+umask 022
 git clone --no-checkout "${REPOSITORY}" "${candidate}" >/dev/null || fail candidate_clone_failed
 git -C "${candidate}" fetch --no-tags origin refs/heads/main:refs/remotes/origin/main >/dev/null || fail candidate_fetch_failed
 [[ "$(git -C "${candidate}" rev-parse origin/main)" = "${TARGET_COMMIT}" ]] || fail main_advanced_while_candidate_was_staged
 git -C "${candidate}" checkout --detach "${TARGET_COMMIT}" >/dev/null || fail candidate_checkout_failed
 git -C "${candidate}" submodule sync --recursive >/dev/null || fail submodule_sync_failed
 git -C "${candidate}" submodule update --init --recursive || fail submodule_update_failed
+umask 077
 python3 "${candidate}/deploy/scripts/verify-deploy-source.py" --root "${candidate}" --commit "${TARGET_COMMIT}" >/dev/null \
   || fail candidate_source_verification_failed
 candidate_identity="$(git -C "${candidate}/Vapor-Identity-Server" rev-parse HEAD)"
 [ "${candidate_identity}" = "${TARGET_IDENTITY}" ] || fail candidate_identity_revision_mismatch
 [ -z "$(git -C "${candidate}" status --porcelain --untracked-files=all)" ] || fail candidate_checkout_not_clean
+runuser -u vapor -- test -r "${candidate}/deploy/scripts/operation_history.py" \
+  || fail candidate_helper_not_readable_to_service_user
 
 line preflight passed
 line target_on_main yes
@@ -315,6 +344,7 @@ mv -- "${ROOT}" "${legacy}" || fail could_not_preserve_existing_checkout
 old_root_moved=1
 mv -- "${candidate}" "${ROOT}" || fail could_not_install_candidate_checkout
 new_root_installed=1
+set_server_mode services || fail platform_mode_update_failed
 
 if ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE=services VAPOR_BRANCH=main \
   VAPOR_REPO_URL="${REPOSITORY}" CARGO_BUILD_JOBS=1 \
@@ -325,6 +355,12 @@ fi
 
 systemctl is-active --quiet vapor-platform-server.service || fail platform_service_not_active
 systemctl is-active --quiet caddy.service || fail caddy_service_not_active
+mode_after_deploy="$(awk -F= '$1 == "VAPOR_SERVER_MODE" {value=$2; gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", value); print value; exit}' "${CONFIG_ROOT}/platform.env")"
+[ "${mode_after_deploy}" = services ] || fail services_mode_not_persisted
+for unit in vapor-homepage.service vapor-docs.service vapor-identity.service vapor-diagnostics.service \
+  vapor-registry.service vapor-artifact.service vapor-build-cache.service; do
+  systemctl is-active --quiet "${unit}" || fail "independent_service_not_active_${unit%.service}"
+done
 local_health="$(curl --silent --show-error --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:7110/healthz)"
 [ "${local_health}" = 200 ] || fail platform_local_health_failed
 ssh_route="$(curl --silent --show-error --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
