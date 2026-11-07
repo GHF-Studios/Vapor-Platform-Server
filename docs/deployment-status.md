@@ -792,3 +792,9 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   before the timer's scheduled expiry remains unexplained; this is a lifecycle
   inconsistency, not evidence that the user supplied the wrong key. No host
   state was changed.
+- Source review confirms the normal revoke/expiry helper stops and disables
+  the timer before deleting the account, then removes the timer units. The
+  observed combination (account absent, timer active) is therefore not the
+  expected completed helper path. Root-owned Platform DB and system journal
+  evidence are still required to distinguish interrupted or out-of-band
+  cleanup from a helper/version mismatch.
