@@ -91,7 +91,7 @@ if [ -e "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ]; then
   fi
   rm -- "${legacy_sudoers}"
 fi
-if grep -RIlE '^[[:space:]]*%vapor-temp-ssh[[:space:]]' \
+if grep -RIlE '^[[:space:]]*[^#].*%vapor-temp-ssh' \
   /etc/sudoers /etc/sudoers.d >/dev/null 2>&1; then
   echo "error: unexpected group-wide temporary-access sudo rule remains; refusing to enable access" >&2
   exit 1

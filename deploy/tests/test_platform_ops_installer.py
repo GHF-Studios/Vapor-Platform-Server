@@ -24,6 +24,7 @@ class PlatformOpsInstallerTests(unittest.TestCase):
         self.assertEqual(source.count(LEGACY_GROUP_RULE), 1)
         self.assertNotRegex(source, r"(?m)^\s*%vapor-temp-ssh\s+ALL\s*=")
         self.assertIn("grep -RIlE", source)
+        self.assertIn("^[[:space:]]*[^#].*%vapor-temp-ssh", source)
         self.assertIn("unexpected group-wide temporary-access sudo rule remains", source)
         self.assertIn("visudo -c >/dev/null", source)
 
