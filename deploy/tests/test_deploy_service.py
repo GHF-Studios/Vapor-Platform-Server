@@ -207,9 +207,16 @@ class DeployServiceTests(unittest.TestCase):
             self.assertIn(ROOT_COMMIT, manifest.read_text(encoding="utf-8"))
             builds = [call for call in runner.calls if call[0] == "cargo"]
             self.assertEqual(len(builds), 1)
-            manifest_path = pathlib.Path(builds[0][builds[0].index("--manifest-path") + 1])
+            build = builds[0]
+            self.assertEqual(build[1:4], ["build", "--release", "--locked"])
+            manifest_path = pathlib.Path(build[build.index("--manifest-path") + 1])
             self.assertEqual(manifest_path.parent.name, "Vapor-Identity-Server")
             self.assertEqual(manifest_path.name, "Cargo.toml")
+            self.assertEqual(
+                pathlib.Path(build[build.index("--target-dir") + 1]),
+                pathlib.Path(environment["VAPOR_APPROVED_SOURCE_ROOT"]) / "target",
+            )
+            self.assertNotIn("--target", build)
             unit_calls = [call[-1] for call in runner.calls if call[0] == "systemctl"]
             self.assertEqual(unit_calls, [
                 "vapor-identity.service", "vapor-identity.service",

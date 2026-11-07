@@ -228,7 +228,8 @@ checked-out source revision before changing application state. Preflight needs
 the base Ubuntu image to supply Python 3.11+ and stops without package changes
 if that runtime is absent. Kit/archive checksums detect corruption but are not
 signatures: the operator must run a kit from the trusted, owner-held recovery
-copy. The Windows USB sync extracts the kit
+copy. An archive sidecar must contain one digest entry naming exactly the
+selected archive. The Windows USB sync extracts the kit
 from the latest content-verified archive into Recovery-Kit/<root-commit>/ and
 atomically updates Recovery-Kit/latest.json only after checking the embedded
 hashes. Its sync report states whether the latest archive supplied a usable

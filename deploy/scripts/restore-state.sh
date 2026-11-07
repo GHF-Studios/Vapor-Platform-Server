@@ -127,16 +127,8 @@ if ! command -v flock >/dev/null 2>&1; then
   exit 1
 fi
 
+python3 "${SCRIPT_DIR}/recovery_bundle_metadata.py" --check-archive-checksum "${BUNDLE_PATH}"
 python3 "${SCRIPT_DIR}/state-bundle-validate.py" "${BUNDLE_PATH}"
-if [ ! -f "${BUNDLE_PATH}.sha256" ]; then
-  echo "error: recovery archive is missing its detached SHA-256 file" >&2
-  exit 1
-fi
-if ! (cd -- "$(dirname -- "${BUNDLE_PATH}")" && \
-  sha256sum --check --status "$(basename -- "${BUNDLE_PATH}").sha256"); then
-  echo "error: recovery archive checksum does not match" >&2
-  exit 1
-fi
 MODE="$(python3 - "${BUNDLE_PATH}" <<'PY'
 import sys
 import tarfile

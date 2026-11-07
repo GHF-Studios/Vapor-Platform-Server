@@ -43,6 +43,15 @@ class RecoveryActivationOrderTests(unittest.TestCase):
         self.assertLess(staged, deploy.index('systemctl restart vapor-platform-server.service'))
         self.assertLess(staged, deploy.index('"${VAPOR_DEPLOY_ROOT}/deploy/scripts/health-check.sh"'))
 
+    def test_restore_binds_checksum_sidecar_to_bundle_before_archive_validation(self) -> None:
+        restore = (REPO_ROOT / "deploy/scripts/restore-state.sh").read_text()
+        checksum = 'recovery_bundle_metadata.py" --check-archive-checksum "${BUNDLE_PATH}"'
+        validate = 'state-bundle-validate.py" "${BUNDLE_PATH}"'
+        self.assertIn(checksum, restore)
+        self.assertIn(validate, restore)
+        self.assertLess(restore.index(checksum), restore.index(validate))
+        self.assertLess(restore.index(validate), restore.index('MODE="$(python3 -'))
+
     def test_recovery_staging_does_not_enable_units_or_start_package_services(self) -> None:
         bootstrap = (REPO_ROOT / "deploy/scripts/bootstrap-ubuntu.sh").read_text()
         self.assertIn("policy-rc.d", bootstrap)

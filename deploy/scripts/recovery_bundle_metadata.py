@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import pathlib
 import re
@@ -15,10 +16,46 @@ import tomllib
 ROOT = "vapor-platform-recovery"
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_REVISION_BYTES = 256
+MAX_CHECKSUM_SIDECAR_BYTES = 512
 
 
 class MetadataError(RuntimeError):
     pass
+
+
+def verify_archive_checksum(bundle_path: pathlib.Path) -> None:
+    """Verify the adjacent checksum file binds exactly one digest to this archive."""
+    bundle = pathlib.Path(bundle_path)
+    sidecar = pathlib.Path(f"{bundle}.sha256")
+    if bundle.is_symlink() or not bundle.is_file():
+        raise MetadataError("recovery bundle is not a regular file")
+    if sidecar.is_symlink() or not sidecar.is_file():
+        raise MetadataError("recovery archive checksum sidecar is missing or unsafe")
+    try:
+        sidecar_bytes = sidecar.read_bytes()
+        if len(sidecar_bytes) > MAX_CHECKSUM_SIDECAR_BYTES:
+            raise MetadataError("recovery archive checksum sidecar exceeds its size limit")
+        sidecar_text = sidecar_bytes.decode("ascii", errors="strict")
+        entries = sidecar_text.splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        raise MetadataError("recovery archive checksum sidecar is unreadable") from error
+    if len(entries) != 1:
+        raise MetadataError("recovery archive checksum sidecar must contain exactly one entry")
+    match = re.fullmatch(r"([0-9a-f]{64})  ([^/\\\r\n]+)", entries[0])
+    if match is None:
+        raise MetadataError("recovery archive checksum sidecar entry is malformed")
+    expected_name = bundle.name
+    if match.group(2) != expected_name:
+        raise MetadataError("recovery archive checksum sidecar names a different archive")
+    digest = hashlib.sha256()
+    try:
+        with bundle.open("rb") as archive:
+            for chunk in iter(lambda: archive.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise MetadataError("recovery bundle cannot be read for checksum verification") from error
+    if digest.hexdigest() != match.group(1):
+        raise MetadataError("recovery archive checksum does not match")
 
 
 def missing_provider_readiness(status: object) -> tuple[str, ...]:
@@ -250,6 +287,14 @@ def validate_host_compatibility(
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) == 3 and argv[1] == "--check-archive-checksum":
+        try:
+            verify_archive_checksum(pathlib.Path(argv[2]))
+        except MetadataError as error:
+            print(f"recovery-checksum: {error}", file=sys.stderr)
+            return 1
+        print("recovery-checksum: archive checksum and filename match")
+        return 0
     if len(argv) == 3 and argv[1] == "--source-commit":
         try:
             print(read_bundle_source_commit(pathlib.Path(argv[2])))
@@ -295,7 +340,8 @@ def main(argv: list[str]) -> int:
     print(
         "usage: recovery_bundle_metadata.py --describe BUNDLE | "
         "--check-host BUNDLE UBUNTU_RELEASE ARCHITECTURE RUST_HOST | "
-        "--source-commit BUNDLE | --check-provider-readiness STATUS_JSON",
+        "--check-archive-checksum BUNDLE | --source-commit BUNDLE | "
+        "--check-provider-readiness STATUS_JSON",
         file=sys.stderr,
     )
     return 2

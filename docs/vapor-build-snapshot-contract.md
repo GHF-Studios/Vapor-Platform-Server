@@ -31,6 +31,25 @@ below has passed.
   submit only the candidate named by its target-scoped build operation; it
   cannot select or replace a current snapshot directly.
 
+## Separate build paths and implementation status
+
+These workflows share the canonical source and toolchain inputs, but they are
+not interchangeable:
+
+| Workflow | Owner | Current behavior |
+| --- | --- | --- |
+| Developer's ordinary source build | Vapor Client | A missing or unavailable downloaded snapshot must not block a local build. The Client implementation and its canonical build recipe remain Client-owned. |
+| Approved Platform service deployment | Platform Server | The approved deploy worker builds the selected service from its pinned source checkout on the primary host using local `cargo build --release --locked`; this does not call Build Cache and does not require the optional worker. |
+| Official target-snapshot publication | Platform orchestration + Build Cache | Build Cache validates and promotes candidates, but Platform does not yet implement candidate-build orchestration or worker lifecycle. A current cache entry is not evidence that a worker produced it. |
+
+The local build fallback is therefore a correctness and availability path for
+source workflows, not an automatic snapshot publisher. The optional worker is
+only an accelerator for a future snapshot-candidate workflow; it must not become
+a prerequisite for approved service deployments, local source builds, or
+primary-host recovery. Until snapshot orchestration is implemented and
+exercised, do not describe target snapshots as automatically rebuilt or
+available for either target.
+
 ## Supported target identities
 
 The first supported targets, taken from the current Vapor app-source manifest,

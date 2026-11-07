@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import importlib.util
 import io
 import pathlib
@@ -54,6 +55,44 @@ def make_bundle(path: pathlib.Path, *, mode: str = "services", source_commit: st
 
 
 class RecoveryBundleMetadataTests(unittest.TestCase):
+    def test_archive_checksum_requires_one_entry_naming_the_selected_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = pathlib.Path(temporary) / "recovery.tar.gz"
+            bundle.write_bytes(b"the selected archive")
+            digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+            sidecar = pathlib.Path(f"{bundle}.sha256")
+            sidecar.write_text(f"{digest}  {bundle.name}\n", encoding="ascii")
+
+            METADATA.verify_archive_checksum(bundle)
+
+    def test_archive_checksum_rejects_sidecar_that_names_another_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = pathlib.Path(temporary) / "recovery.tar.gz"
+            bundle.write_bytes(b"the selected archive")
+            digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+            pathlib.Path(f"{bundle}.sha256").write_text(
+                f"{digest}  different.tar.gz\n", encoding="ascii"
+            )
+
+            with self.assertRaisesRegex(METADATA.MetadataError, "names a different archive"):
+                METADATA.verify_archive_checksum(bundle)
+
+    def test_archive_checksum_rejects_multiple_entries_and_wrong_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = pathlib.Path(temporary) / "recovery.tar.gz"
+            bundle.write_bytes(b"the selected archive")
+            digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+            sidecar = pathlib.Path(f"{bundle}.sha256")
+            sidecar.write_text(
+                f"{digest}  {bundle.name}\n{digest}  {bundle.name}\n", encoding="ascii"
+            )
+            with self.assertRaisesRegex(METADATA.MetadataError, "exactly one entry"):
+                METADATA.verify_archive_checksum(bundle)
+
+            sidecar.write_text(f"{'0' * 64}  {bundle.name}\n", encoding="ascii")
+            with self.assertRaisesRegex(METADATA.MetadataError, "does not match"):
+                METADATA.verify_archive_checksum(bundle)
+
     def test_services_mode_requires_each_independent_service_binary(self) -> None:
         self.assertEqual(
             METADATA.runtime_binaries("services"),

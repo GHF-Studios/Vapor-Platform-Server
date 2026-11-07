@@ -271,6 +271,10 @@ latest safe cutover attempt, not a fresh direct SSH inspection.
   inventory. The VPS-hosted Linux and Windows snapshot builder orchestration
   remains an outstanding infrastructure phase; the present Build Cache
   contract is not proof that either target snapshot is being produced.
+- Approved Platform service deployment remains independent of that future
+  snapshot/worker lane: it builds the selected pinned service locally on the
+  primary host with `cargo build --release --locked`. Snapshot unavailability
+  therefore does not block current service deployment or fresh-host recovery.
 
 An additional public read-only probe on 2026-11-03 returned `200 ok` for
 `/healthz`, but `404` for `/admin/operations`, `/api/admin/operations`,
