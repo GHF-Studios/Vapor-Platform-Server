@@ -231,6 +231,9 @@ hardening work.
   during that run. Before any capacity pruning, it hashes every indexed
   candidate and only removes the oldest whose content matches the current VPS
   index. Unknown or damaged files count against capacity and are left untouched.
+  A per-destination OS mutex serializes the scheduled task with manual catch-up
+  before stale partial files are removed; the Windows fixture test covers
+  initial copy, catch-up, pointer mismatch, hash failure, and overlapping runs.
   The VPS index and sidecars provide corruption checks, not authenticity
   against a compromised VPS.
 - The root SSH private key is held separately from the USB backup. It is the

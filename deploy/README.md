@@ -117,8 +117,11 @@ for smoke testing only; the intended public endpoint remains
   selected USB directory over the owner's existing SSH key. The script
   verifies SHA-256 before retaining a copy, rechecks the latest generation on
   every run, rotates a recheck through older copies, and can catch up after
-  missed runs. VPS checksums detect corruption, not a compromised VPS replacing
-  both the archive and index.
+  missed runs. A per-destination Windows mutex prevents a scheduled run and a
+  manual catch-up from deleting or replacing each other's in-progress files.
+  `deploy/tests/test_backup_to_usb.ps1` exercises catch-up, pointer rejection,
+  corrupt downloads, and overlapping runs using local fixtures. VPS checksums
+  detect corruption, not a compromised VPS replacing both the archive and index.
 - `scripts/install-usb-backup-task.ps1`: register an hourly current-user
   Task Scheduler job plus a logon catch-up trigger once the USB and SSH key
   paths are known. The job runs while that Windows account is signed in;

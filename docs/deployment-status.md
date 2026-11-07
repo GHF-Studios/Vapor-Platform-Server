@@ -232,9 +232,14 @@ host still runs `monolith` mode; independent service routing and gateway
 behavior have not been activated and runtime-verified. The gateway still uses
 the existing shared HTML shell middleware for service pages; replacing that
 HTML marker/buffering contract with the explicit shared-layout contract in the
-approved design remains open. USB integrity revalidation is implemented in
-source but has not run on the owner's drive. Fresh-host bootstrap/restore
-remains open; the current recovery scripts are not a proven rebuild path.
+approved design remains open. The Windows USB sync now takes a per-destination
+mutex before stale-partial cleanup, preventing overlap between the hourly task
+and manual catch-up. A fixture suite covers initial copy/catch-up, pointer
+mismatch, bad archive hashes, and overlapping runs; it passed locally on
+PowerShell 7.6.9. CI is configured to run it on Windows. This does not verify
+the owner's removable drive, scheduled task, or a fresh-host restore. Fresh-host
+bootstrap/restore remains open; the current recovery scripts are not a proven
+rebuild path.
 
 The current source pins the deployment topology (`services` or
 `monolith`) inside each immutable approval request. New CI requests target the

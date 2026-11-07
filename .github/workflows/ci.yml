@@ -23,3 +23,13 @@ jobs:
 
       - name: Run Platform Server test recipe
         run: deploy/scripts/test.sh
+
+  windows-recovery-tests:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Test owner-held USB recovery sync
+        shell: pwsh
+        run: ./deploy/tests/test_backup_to_usb.ps1

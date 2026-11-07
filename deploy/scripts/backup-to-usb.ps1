@@ -20,8 +20,21 @@ $ErrorActionPreference = 'Stop'
 $remoteRoot = '/var/backups/vapor-server'
 $remoteUser = 'root'
 $target = "$remoteUser@$Server"
-$ssh = Get-Command ssh.exe -ErrorAction Stop | Select-Object -ExpandProperty Source
-$scp = Get-Command scp.exe -ErrorAction Stop | Select-Object -ExpandProperty Source
+$sshCommand = if ([string]::IsNullOrWhiteSpace($env:VAPOR_USB_TEST_SSH_EXECUTABLE)) {
+    Get-Command ssh.exe -CommandType Application -ErrorAction Stop
+} else {
+    Get-Command -Name $env:VAPOR_USB_TEST_SSH_EXECUTABLE -CommandType Application, ExternalScript -ErrorAction Stop
+}
+$scpCommand = if ([string]::IsNullOrWhiteSpace($env:VAPOR_USB_TEST_SCP_EXECUTABLE)) {
+    Get-Command scp.exe -CommandType Application -ErrorAction Stop
+} else {
+    Get-Command -Name $env:VAPOR_USB_TEST_SCP_EXECUTABLE -CommandType Application, ExternalScript -ErrorAction Stop
+}
+$ssh = $sshCommand.Source
+$scp = $scpCommand.Source
+if ([string]::IsNullOrWhiteSpace($ssh) -or [string]::IsNullOrWhiteSpace($scp)) {
+    throw 'SSH and SCP must resolve to executable commands or script paths.'
+}
 $keyPath = (Resolve-Path -LiteralPath $SshKey).Path
 
 $driveRoot = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($UsbPath))
@@ -40,6 +53,29 @@ if (-not (Test-Path -LiteralPath $UsbPath -PathType Container)) {
 }
 $destination = (Resolve-Path -LiteralPath $UsbPath).Path
 
+$canonicalDestination = $destination.TrimEnd([char[]]@('\', '/')).ToUpperInvariant()
+$pathHash = [Security.Cryptography.SHA256]::Create()
+try {
+    $pathBytes = [System.Text.Encoding]::UTF8.GetBytes($canonicalDestination)
+    $mutexHash = ([BitConverter]::ToString($pathHash.ComputeHash($pathBytes))).Replace('-', '').ToLowerInvariant()
+} finally {
+    $pathHash.Dispose()
+}
+$syncMutex = [System.Threading.Mutex]::new($false, "Local\VaporRecoveryUsbSync_$mutexHash")
+$mutexAcquired = $false
+try {
+    $mutexAcquired = $syncMutex.WaitOne(0)
+} catch [System.Threading.AbandonedMutexException] {
+    # An interrupted sync released its OS mutex when PowerShell exited. Its
+    # partial files are safe to remove now because this process owns the lock.
+    $mutexAcquired = $true
+}
+if (-not $mutexAcquired) {
+    $syncMutex.Dispose()
+    throw "A recovery sync is already running for this destination: $destination"
+}
+
+try {
 $incoming = Join-Path $destination '.incoming'
 New-Item -ItemType Directory -Path $incoming -Force | Out-Null
 Get-ChildItem -LiteralPath $incoming -File -Filter '*.partial' -ErrorAction SilentlyContinue |
@@ -327,3 +363,9 @@ $report | ConvertTo-Json -Compress | Set-Content -LiteralPath $reportTemp -Encod
 Move-Item -LiteralPath $reportTemp -Destination $reportPath -Force
 
 Write-Output "USB recovery sync complete: copied $copied archive(s); content-verified $($verifiedArchives.Count) generation(s) this run."
+} finally {
+    if ($mutexAcquired) {
+        $syncMutex.ReleaseMutex()
+    }
+    $syncMutex.Dispose()
+}

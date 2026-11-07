@@ -88,6 +88,7 @@
 - [x] Resume missed generations on later runs; detect missing USB, missing tools/key, SSH failure, hash mismatch, and low space without deleting the last known-good copy.
 - [x] Retain generations by a configurable maximum byte budget, deleting oldest verified copies only after a newer verified generation is safely present.
 - [x] Document a Task Scheduler setup that runs hourly while the USB is mounted, and a manual one-command catch-up path.
+- [x] Serialize scheduled/manual syncs per destination before cleanup of partial files; keep test-only SSH/SCP adapters out of the normal command interface.
 
 ## Task 5: Recovery readiness and deployment handoff
 
@@ -99,6 +100,18 @@
 - [x] Describe incident recovery separately: preserve evidence and rotate provider/SSH credentials before restoring an image suspected of compromise.
 - [x] Mark the second VPS as optional build/replica capacity; make local builds an explicit supported fallback and shared cache freshness a separate status.
 - [x] Leave clean-host restore and USB-copy drills as uncompleted acceptance gates until the owner has the drive and second host available.
+
+## Task 6: Exercise the Windows copy path without real infrastructure
+
+**Files:**
+- Create: `deploy/tests/test_backup_to_usb.ps1`
+- Modify: `.github/workflows/ci.yml`
+
+- [x] Use local JSON/archive fixtures and test-only command adapters; do not contact the VPS or require the owner's USB.
+- [x] Cover initial copy and catch-up, latest-pointer/index mismatch, corrupt archive rejection while preserving an older verified copy, and same-destination overlap rejection.
+- [ ] Run the fixture suite in GitHub Actions on a native Windows runner.
+- [ ] Register the owner-held scheduled task and verify a real copy on the owner's USB.
+- [ ] Run a clean-host restore from a USB generation.
 
 ## Execution Notes
 
@@ -117,6 +130,10 @@
   stderr/systemd journal output.
 - The Windows pull/task scripts exist, but no scheduled task has been registered
   on the owner's PC and no USB copy has been exercised.
+- The Windows fixture suite uses fake SSH/SCP commands and passed locally on
+  PowerShell 7.6.9; CI is configured to run it on `windows-latest`. This
+  verifies the copy logic and overlap guard without proving removable-media
+  behavior or a real network transfer.
 - The pull path follows the VPS `latest.json` pointer and checks it against the
   generation index. It hashes the latest plus one rotating historical archive
   each sync; before capacity pruning it hashes every indexed candidate. Unknown
