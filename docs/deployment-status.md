@@ -20,9 +20,9 @@
   revision.
 - SSH read-only probes using both the root key and the same key for `leslieghf`
   were rejected. No VPS changes were made.
-- The follow-up UI wording was validated by the full local recipe and is queued
-  for its own CI run. CI run `42349045185` passed both `root-ci` and
-  `windows-recovery-tests` for commit `8c68f25`.
+- The follow-up UI wording passed the full local recipe and CI run
+  `42349045185`. The status-record follow-up also passed both jobs in run
+  `42349265994`.
 
 ## Approval dispatch lifecycle follow-up (2026-11-07 06:30 UTC)
 
