@@ -897,3 +897,33 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - GitHub Actions reports success for the current documentation branch through
   `a2b78b4` in CI run `42395734773`. This run succeeded. The deployment-status
   update in this section is documentation-only and was added after that run.
+
+## Root recovery and deployment queue recheck (2026-11-07, 17:36 UTC)
+
+- The owner-installed root SSH key now authenticates successfully. This was a
+  read-only verification; no root login policy or key was changed by the agent.
+- The stale temporary grant `240aab1d-8edc-49bd-bbd1-47706983e2c3` is recorded
+  as revoked, its Linux account is absent, `vapor-temp-ssh` has no members, and
+  `visudo -c` succeeds. The old broad group sudoers file was removed during
+  the earlier root-assisted reconciliation. The source installer fix that
+  prevents recreating it is committed on the review branch but has not been
+  deployed.
+- At this check, the Platform checkout is detached at
+  `12192d85348432ee24d1ce7c02ff2dab6eeded84`; Platform and all seven service
+  units plus Caddy report active. The Platform process has been running since
+  16:59 UTC. The release binary timestamp is 14:56 UTC, so this is still the
+  previously deployed build, not the newer main candidate.
+- Four full-deployment requests remain pending. The newest is
+  `96b44a5a-c3c4-4d7c-a4ae-c05d9e5042f9` for `b1e2d3c`; the three older
+  requests target ancestors and should not be selected as rollback revisions.
+  No approval or dispatch was performed in this check.
+- Historical request
+  `5338a3de-fd38-4c89-94ed-5afba23722ab` records a successful deployment in
+  `result_detail` while retaining `dispatch_state=failed` and a generic helper
+  failure in `dispatch_detail`. This is internally inconsistent historical
+  reporting from the older deployed lifecycle; current source has explicit
+  race handling for worker progress, but the live database row should remain
+  historical rather than be rewritten to imply a verified dispatch outcome.
+- The CI run for review commit `5d48163` was still in progress at 17:34 UTC.
+  The per-grant sudo policy regression tests added after that commit have not
+  yet run in Linux CI.

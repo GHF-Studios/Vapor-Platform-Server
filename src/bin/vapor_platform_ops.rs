@@ -1634,6 +1634,41 @@ mod unix_impl {
             .map(|duration| duration.as_secs() as i64)
             .unwrap_or(0)
     }
+
+    #[cfg(test)]
+    mod sudoers_tests {
+        use super::sudoers_contents;
+
+        #[test]
+        fn temporary_sudoers_are_limited_to_the_granted_capabilities() {
+            assert_eq!(sudoers_contents("vpsssh_test", &[]), "");
+            assert_eq!(
+                sudoers_contents("vpsssh_test", &["vapor_deploy".to_owned()]),
+                "vpsssh_test ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy\n"
+            );
+            assert_eq!(
+                sudoers_contents("vpsssh_test", &["vapor_service_control".to_owned()]),
+                "vpsssh_test ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-service-control\n"
+            );
+            assert_eq!(
+                sudoers_contents(
+                    "vpsssh_test",
+                    &[
+                        "vapor_service_control".to_owned(),
+                        "vapor_deploy".to_owned()
+                    ]
+                ),
+                concat!(
+                    "vpsssh_test ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy\n",
+                    "vpsssh_test ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-service-control\n"
+                )
+            );
+            assert_eq!(
+                sudoers_contents("vpsssh_test", &["host_admin".to_owned()]),
+                "vpsssh_test ALL=(ALL:ALL) NOPASSWD: ALL\n"
+            );
+        }
+    }
 }
 
 #[cfg(unix)]
