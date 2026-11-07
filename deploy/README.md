@@ -267,7 +267,10 @@ sudo /usr/local/libexec/vapor-platform-ops ssh reconfigure <request-id>
 
 Grant prints the fingerprint, purpose, requested and selected scope, and expiry;
 the operator must type the fingerprint exactly. `host_admin` is exclusive and
-requires a second `UNRESTRICTED ROOT` confirmation. Revoke requires typing
+requires a second `UNRESTRICTED ROOT` confirmation. It provisions a request-
+specific account with unrestricted sudo; connect as the displayed temporary
+account and use `sudo -i` for a root shell. It does not grant `root@host` SSH.
+Revoke requires typing
 `YES`. Reconfigure explains the revoke-and-new-request process and makes no
 change. `verify` is read-only and compares an active grant with its managed
 account, authorized key, sudo policy, and expiry timer; it never prints key

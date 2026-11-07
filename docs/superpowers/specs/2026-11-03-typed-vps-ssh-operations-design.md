@@ -49,6 +49,9 @@ session token.
   both before prompting and in the atomic status transition.
 - `... ssh revoke <request-id>` removes the managed account and terminates its
   sessions through the existing cleanup path.
+- `host_admin` grants root-equivalent privilege through the request-specific
+  temporary account: SSH as the displayed account, then use `sudo -i`. It does
+  not enable direct SSH as the Linux `root` user.
 - `... ssh reconfigure <request-id>` is read-only guidance. Grant scope and
   duration are immutable after approval; changing them requires revoking the
   current grant and submitting a new requester-authenticated request. This

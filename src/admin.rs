@@ -628,7 +628,7 @@ const JS: &str = r#"
         input.type = 'checkbox'; input.value = capability;
         input.checked = (item.requested_capabilities || []).includes(capability);
         choices.push(input);
-        label.append(input, document.createTextNode(` ${capability}${capability === 'host_admin' ? ' (full temporary sudo)' : ''}`));
+        label.append(input, document.createTextNode(` ${capability}${capability === 'host_admin' ? ' (temporary account + unrestricted sudo)' : ''}`));
         fieldset.append(label);
       }
       const durationLabel = document.createElement('label'); durationLabel.textContent = 'Granted duration in seconds ';
@@ -638,7 +638,7 @@ const JS: &str = r#"
       const reviewLabel = document.createElement('label'); const review = document.createElement('input'); review.type = 'checkbox'; review.required = false;
       reviewLabel.append(review, document.createTextNode(' I reviewed the key, purpose, and actual grant'));
       const hostLabel = document.createElement('label'); const hostConfirm = document.createElement('input'); hostConfirm.type = 'checkbox';
-      hostLabel.append(hostConfirm, document.createTextNode(' I approve unrestricted root access and understand expiry cleanup can be disabled'));
+      hostLabel.append(hostConfirm, document.createTextNode(' I approve a temporary account with unrestricted root-equivalent sudo (not direct root SSH)'));
       const approve = document.createElement('button'); approve.type = 'submit'; approve.textContent = 'Approve selected access';
       form.append(fieldset, durationLabel, reviewLabel, hostLabel, approve);
       form.addEventListener('submit', event => {
@@ -1601,7 +1601,7 @@ fn operations_page(view: OperationsView) -> String {
         )
         .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
-        OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
+        OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately. A host_admin grant connects through that temporary account and provides unrestricted sudo; it does not enable direct root SSH.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
         OperationsView::History => "<section class=\"card\"><h2>Request and operation history</h2><p class=\"muted\">Read-only Platform deploy/restore outcomes and owner-sourced deployment, access, and Identity request records. Each owning service remains authoritative for its records and decisions; an unavailable source is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><div><button id=\"history-load-more\" type=\"button\" hidden>Load older records</button> <button id=\"history-refresh\" type=\"button\">Refresh records</button></div></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Platform operation</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>success</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option><option value=\"dispatch-claimed\">claimed by worker</option><option value=\"dispatch-completed\">worker completed</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading history sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading history…</p></div></section>".to_owned(),
     };
     format!(
@@ -2830,6 +2830,8 @@ mod tests {
         );
         assert!(script.contains("Access history"));
         assert!(script.contains("if (item.granted_duration_seconds != null)"));
+        assert!(script.contains("temporary account + unrestricted sudo"));
+        assert!(script.contains("not direct root SSH"));
     }
 
     #[tokio::test]

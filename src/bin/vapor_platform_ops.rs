@@ -315,6 +315,12 @@ mod unix_impl {
                 println!(
                     "\nGrant preview: account {username}@{host}; scope [{capabilities_display}]; duration {duration_seconds} seconds; expires {expires_display}."
                 );
+                if capabilities
+                    .iter()
+                    .any(|capability| capability == "host_admin")
+                {
+                    println!("Connect as this temporary account, then use sudo -i. This does not grant direct root@ SSH login.");
+                }
                 let fingerprint: String = row.get("fingerprint");
                 println!("Type the displayed fingerprint exactly to create this temporary SSH account, key file, sudo policy, and expiry timer:");
                 confirm_stdin(&fingerprint)?;
@@ -322,7 +328,7 @@ mod unix_impl {
                     .iter()
                     .any(|capability| capability == "host_admin")
                 {
-                    eprintln!("WARNING: this grants unrestricted root access until expiry.");
+                    eprintln!("WARNING: this grants unrestricted root-equivalent sudo through the temporary account until expiry.");
                     println!("Type UNRESTRICTED ROOT to confirm:");
                     confirm_stdin("UNRESTRICTED ROOT")?;
                     true
