@@ -1,5 +1,18 @@
 # Vapor server deployment status
 
+## Public web surface spot-check (2026-11-07 17:06 UTC)
+
+- Public `/`, `/downloads`, and `/healthz` returned `200`; `/healthz` returned
+  `ok`. The homepage now serves the product overview and links to Downloads,
+  Docs, License, and Impressum. Downloads explains that Mad Max and Loo Cast
+  files are acquired separately and locally, and that the current Artifact
+  bundle is an application archive rather than an installer; guided install
+  and one-click updates are still in progress.
+- Unauthenticated `/admin/approvals` returned `401`, as expected for a
+  protected owner page. This spot-check did not re-check the running Platform
+  revision or service topology; the full host snapshot below remains dated
+  15:13 UTC.
+
 ## Current live state (2026-11-07 15:13 UTC)
 
 This is the newest verified state; older entries below are historical snapshots
