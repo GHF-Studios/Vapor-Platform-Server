@@ -23,6 +23,11 @@ and must not be read as current host status.
   endpoints (`windows-x86_64` and `linux-x86_64`) currently return `404`, so
   no installer/archive is advertised as downloadable. The root page remains a
   minimal link page; the detailed first-run journey is at `/downloads`.
+- Public Build Cache status returns `200` and lists both supported target
+  triples, but reports `configured=false` and `current=false` for each. There
+  is no promoted Linux or Windows target snapshot and no worker is producing
+  them; approved Platform service deploys still build locally on the primary
+  VPS, as required by the fallback path.
 - The successful bootstrap created a root-only pre-cutover archive at
   `/var/backups/vapor-server/vapor-platform-recovery-20261107T143242Z-6f6756d3ec6b.tar.gz`.
   The hourly exporter subsequently published a newer recovery generation for
