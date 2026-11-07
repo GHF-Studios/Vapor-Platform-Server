@@ -27,6 +27,7 @@ report=""
 result=preflight_failed
 detail=not_started
 old_commit=unknown
+old_server_mode=unknown
 state_backup=not_created
 state_timer_was_active=0
 old_root_moved=0
@@ -69,7 +70,7 @@ rollback() {
   fi
 
   if [ -d "${ROOT}/.git" ] && [ "${old_commit}" != unknown ]; then
-    if ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE=services VAPOR_BRANCH=main \
+    if ! VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_SERVER_MODE="${old_server_mode}" VAPOR_BRANCH=main \
       VAPOR_REPO_URL="${REPOSITORY}" CARGO_BUILD_JOBS=1 \
       bash "${ROOT}/deploy/scripts/deploy.sh" --approved "${old_commit}"; then
       rollback_failed=1
@@ -208,6 +209,11 @@ fi
 if [ ! -f "${CONFIG_ROOT}/platform.env" ] || [ -L "${CONFIG_ROOT}/platform.env" ]; then
   fail platform_environment_file_missing_or_not_regular
 fi
+old_server_mode="$(awk -F= '$1 == "VAPOR_SERVER_MODE" {value=$2; gsub(/^[[:space:]\"]+|[[:space:]\"]+$/, "", value); print value; exit}' "${CONFIG_ROOT}/platform.env")"
+case "${old_server_mode}" in
+  monolith|services) ;;
+  *) fail prior_server_mode_missing_or_invalid ;;
+esac
 
 git -C "${ROOT}" fetch --no-tags origin refs/heads/main:refs/remotes/origin/main >/dev/null || fail fetch_main_failed
 [[ "$(git -C "${ROOT}" rev-parse origin/main)" = "${TARGET_COMMIT}" ]] || fail main_advanced_or_differs_from_reviewed_commit
@@ -301,6 +307,7 @@ candidate_identity="$(git -C "${candidate}/Vapor-Identity-Server" rev-parse HEAD
 line preflight passed
 line target_on_main yes
 line source_ci verified_previously_for_exact_commit
+line previous_server_mode "${old_server_mode}"
 line platform_mode services
 line state_timer_was_active "${state_timer_was_active}"
 applying=1
