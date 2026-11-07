@@ -1061,7 +1061,7 @@ async fn normalize_stale_dispatches(pool: &SqlitePool, now: i64) -> Result<(), s
         "UPDATE platform_deploy_requests
          SET dispatch_state = 'unknown',
              dispatch_detail = 'Previous dispatch attempt stopped responding; retry is available.'
-         WHERE status = 'approved' AND dispatch_state = 'dispatching'
+         WHERE status = 'approved' AND dispatch_state IN ('dispatching', 'queued')
            AND dispatch_attempted_at_unix <= ?",
     )
     .bind(now - DISPATCH_STALE_SECONDS)
@@ -1300,19 +1300,11 @@ mod dispatch_tests {
     }
 
     #[tokio::test]
-    async fn stale_dispatching_becomes_retryable_but_queued_and_claimed_work_remain_untouched() {
+    async fn stale_queued_attempt_becomes_retryable_but_claimed_work_is_untouched() {
         let pool = pool_with_approved_request().await;
         sqlx::query(
             "UPDATE platform_deploy_requests SET dispatch_state='queued', dispatch_attempts=1,
              dispatch_attempted_at_unix=100 WHERE id='r1'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO platform_deploy_requests
-             (id, status, version, dispatch_state, dispatch_attempts, dispatch_attempted_at_unix)
-             VALUES ('dispatching', 'approved', 3, 'dispatching', 1, 100)",
         )
         .execute(&pool)
         .await
@@ -1335,29 +1327,13 @@ mod dispatch_tests {
         .await
         .unwrap();
         assert_eq!(queued.get::<String, _>("status"), "approved");
-        assert_eq!(queued.get::<String, _>("dispatch_state"), "queued");
-        assert!(queued.get::<Option<String>, _>("dispatch_detail").is_none());
-        assert!(!retry_eligible(
-            queued.get("status"),
-            queued.get("dispatch_state"),
-            Some(100),
-            130
-        ));
-
-        let dispatching = sqlx::query(
-            "SELECT status, dispatch_state, dispatch_detail FROM platform_deploy_requests WHERE id='dispatching'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(dispatching.get::<String, _>("status"), "approved");
-        assert_eq!(dispatching.get::<String, _>("dispatch_state"), "unknown");
-        assert!(dispatching
+        assert_eq!(queued.get::<String, _>("dispatch_state"), "unknown");
+        assert!(queued
             .get::<String, _>("dispatch_detail")
             .contains("retry is available"));
         assert!(retry_eligible(
-            dispatching.get("status"),
-            dispatching.get("dispatch_state"),
+            queued.get("status"),
+            queued.get("dispatch_state"),
             Some(100),
             130
         ));

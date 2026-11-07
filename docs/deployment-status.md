@@ -8,19 +8,29 @@
   reports both supported target triples as unconfigured and not current. The
   current Platform source registers these admin routes, so the live host has
   not yet been brought to this source revision.
-- A new Identity browser authorization was started for this workstation's
-  existing public SSH key, requesting `host_admin` for eight hours. This is
-  only permission to submit the request; the actual Platform SSH grant has not
-  been approved, and no SSH login was retried.
+- The resulting temporary `host_admin` SSH request was granted through the
+  root-only typed helper for eight hours. The named account and sudo access
+  were verified; direct root SSH login remains disabled.
 - Windows CI initially exposed two Atlas tests that require Linux atomic
   directory-symlink replacement. The tests now skip only on Windows. Commit
   `ea61cdc` passed both CI jobs in run `42365193600`.
-- Source review found stale dispatch normalization was also changing an old
-  `queued` deployment to `unknown` solely by age, despite successful helper
-  acceptance and a worker that may still be waiting on the shared lock. The
-  regression test now distinguishes accepted `queued` work from uncertain
-  `dispatching` work. The code change is locally verified but awaits its own
-  CI run; this source-only fix has not been deployed.
+- A review of dispatch recovery found that the existing stale `queued` →
+  `unknown` normalization is intentional: a request-specific worker can be
+  waiting on the shared lock after helper acceptance, while the worker only
+  claims attempts within the 30-second freshness window. Converting stale
+  queued work makes a manual retry refresh that window; removing this behavior
+  would strand it. A follow-up source correction restores the original queue
+  behavior; the correction is not yet deployed.
+
+## Live approval surface check (2026-11-07 11:09 UTC)
+
+- The live Platform checkout is at `072c87cb8cd90493c2a818b5493f721bfc0f6fa6`
+  and the service is active. Its public `/admin/assets/admin.js` bundle does
+  not contain the current Approvals inbox or SSH approval controls in source.
+  This confirms the reported no-op approval button is a stale live frontend,
+  not evidence that the pending request failed to exist. The updated source
+  adds cursor paging for Platform deployment and SSH requests and explicitly
+  identifies Identity's current 200-request endpoint cap.
 
 ## Recovery preflight and one approval surface (2026-11-07 09:34 UTC)
 

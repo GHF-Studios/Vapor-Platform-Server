@@ -470,11 +470,16 @@ const JS: &str = r#"
       ssh: pendingSshApprovals,
       identity: pendingIdentityApprovals
     };
+    const pageButtons = {
+      deploy: document.querySelector('#approvals-more-deploy'),
+      ssh: document.querySelector('#approvals-more-ssh')
+    };
     const sourceDefinitions = [
       { key: 'deploy', url: '/api/admin/deploy-requests?limit=200', label: 'Platform deployment approvals' },
       { key: 'ssh', url: '/api/admin/ssh-access/requests?limit=200', label: 'Platform SSH access requests' },
       { key: 'identity', url: '/api/identity/v1/admin/permission-requests', label: 'Identity permission requests' }
     ];
+    const sourceState = Object.fromEntries(sourceDefinitions.map(source => [source.key, { records: [], cursor: null }]));
     const endpoint = (kind, id, action) => {
       const encodedId = encodeURIComponent(id);
       if (kind === 'deploy') return `/api/admin/deploy-requests/${encodedId}/${action}`;
@@ -620,7 +625,7 @@ const JS: &str = r#"
       const duration = document.createElement('input'); duration.type = 'number'; duration.min = '1'; duration.max = String(8 * 60 * 60);
       duration.value = String(Math.min(Number(item.requested_duration_seconds) || 3600, 8 * 60 * 60));
       duration.required = true; durationLabel.append(duration);
-      const reviewLabel = document.createElement('label'); const review = document.createElement('input'); review.type = 'checkbox'; review.required = true;
+      const reviewLabel = document.createElement('label'); const review = document.createElement('input'); review.type = 'checkbox'; review.required = false;
       reviewLabel.append(review, document.createTextNode(' I reviewed the key, purpose, and actual grant'));
       const hostLabel = document.createElement('label'); const hostConfirm = document.createElement('input'); hostConfirm.type = 'checkbox';
       hostLabel.append(hostConfirm, document.createTextNode(' I approve unrestricted root access and understand expiry cleanup can be disabled'));
@@ -628,7 +633,12 @@ const JS: &str = r#"
       form.append(fieldset, durationLabel, reviewLabel, hostLabel, approve);
       form.addEventListener('submit', event => {
         event.preventDefault();
-        if (!review.checked || !duration.reportValidity()) return;
+        if (!review.checked) {
+          feedback.textContent = 'Confirm the review before approving this SSH request.';
+          review.focus();
+          return;
+        }
+        if (!duration.reportValidity()) return;
         const granted = choices.filter(input => input.checked).map(input => input.value);
         if (granted.includes('host_admin') && (granted.length !== 1 || !hostConfirm.checked)) {
           feedback.textContent = 'Full temporary sudo requires its separate confirmation and cannot be combined with other capabilities.';
@@ -665,45 +675,81 @@ const JS: &str = r#"
       appendText(card, 'p', `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · expired ${humanTime(item.expires_at_unix)}`, 'muted');
       appendText(card, 'p', 'Expired by time · Identity has not yet recorded the transition', 'approval-state-warning');
     };
+    const renderSource = source => {
+      const container = containers[source.key];
+      const state = sourceState[source.key];
+      const records = state.records;
+      const pending = records.filter(item => item && item.status === 'pending');
+      const expiredIdentity = source.key === 'identity' ? pending.filter(isExpiredByTime) : [];
+      const actionable = source.key === 'identity'
+        ? pending.filter(item => !isExpiredByTime(item))
+        : pending;
+      container.replaceChildren();
+      if (!pending.length) appendText(container, 'p', 'No pending requests in the loaded records.', 'muted');
+      for (const item of actionable) {
+        const card = document.createElement('article'); card.className = 'card';
+        if (source.key === 'deploy') renderDeploy(item, card);
+        else if (source.key === 'ssh') renderSsh(item, card);
+        else renderIdentity(item, card);
+        container.append(card);
+      }
+      for (const item of expiredIdentity) {
+        const card = document.createElement('article'); card.className = 'card';
+        renderExpiredIdentity(item, card);
+        container.append(card);
+      }
+      if (pageButtons[source.key]) {
+        pageButtons[source.key].hidden = !state.cursor;
+        pageButtons[source.key].disabled = false;
+        pageButtons[source.key].textContent = 'Load older requests';
+      }
+    };
+    const readSourcePage = async (source, cursor) => {
+      const state = sourceState[source.key];
+      const url = new URL(source.url, window.location.href);
+      if (cursor) {
+        url.searchParams.set('limit', '200');
+        url.searchParams.set('cursor', cursor);
+      }
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        state.error = response.status === 401 ? 'Sign in required.' : response.status === 403 ? 'Root access required.' : `Unavailable (HTTP ${response.status}).`;
+        throw new Error(state.error);
+      }
+      const items = Array.isArray(body) ? body : body?.items;
+      if (!Array.isArray(items)) throw new Error('invalid response');
+      state.records.push(...items);
+      state.cursor = Array.isArray(body) ? null : (typeof body.next_cursor === 'string' ? body.next_cursor : null);
+      state.error = null;
+    };
     const refreshSource = async source => {
       const container = containers[source.key];
+      const state = sourceState[source.key];
+      state.records = [];
+      state.cursor = null;
       container.textContent = 'Loading…';
       try {
-        const response = await fetch(source.url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
-        const items = await response.json().catch(() => null);
-        if (!response.ok) {
-          container.replaceChildren();
-          appendText(container, 'p', response.status === 401 ? 'Sign in required.' : response.status === 403 ? 'Root access required.' : `Unavailable (HTTP ${response.status}).`, 'error');
-          return;
-        }
-        const records = Array.isArray(items) ? items : items?.items;
-        if (!Array.isArray(records)) throw new Error('invalid response');
-        const pending = records.filter(item => item && item.status === 'pending');
-        const expiredIdentity = source.key === 'identity' ? pending.filter(isExpiredByTime) : [];
-        const actionable = source.key === 'identity'
-          ? pending.filter(item => !isExpiredByTime(item))
-          : pending;
-        container.replaceChildren();
-        if (!pending.length) { appendText(container, 'p', 'No pending requests.', 'muted'); return; }
-        if (!actionable.length && !expiredIdentity.length) {
-          appendText(container, 'p', 'No pending requests.', 'muted');
-          return;
-        }
-        for (const item of actionable) {
-          const card = document.createElement('article'); card.className = 'card';
-          if (source.key === 'deploy') renderDeploy(item, card);
-          else if (source.key === 'ssh') renderSsh(item, card);
-          else renderIdentity(item, card);
-          container.append(card);
-        }
-        for (const item of expiredIdentity) {
-          const card = document.createElement('article'); card.className = 'card';
-          renderExpiredIdentity(item, card);
-          container.append(card);
-        }
+        await readSourcePage(source, null);
+        renderSource(source);
       } catch (_) {
         container.replaceChildren();
         appendText(container, 'p', 'This request source is temporarily unavailable or returned an invalid response.', 'error');
+      }
+    };
+    const loadMoreSource = async source => {
+      const button = pageButtons[source.key];
+      const state = sourceState[source.key];
+      if (!button || button.disabled || !state.cursor) return;
+      button.disabled = true;
+      button.textContent = 'Loading…';
+      try {
+        await readSourcePage(source, state.cursor);
+        renderSource(source);
+      } catch (_) {
+        button.disabled = false;
+        button.textContent = 'Retry loading older requests';
+        feedback.textContent = `${source.label} could not load another page. Existing requests remain visible.`;
       }
     };
     const refreshInbox = async () => {
@@ -713,6 +759,8 @@ const JS: &str = r#"
       if (refreshButton) { refreshButton.disabled = false; refreshButton.textContent = 'Refresh'; }
     };
     refreshButton?.addEventListener('click', refreshInbox);
+    pageButtons.deploy?.addEventListener('click', () => loadMoreSource(sourceDefinitions[0]));
+    pageButtons.ssh?.addEventListener('click', () => loadMoreSource(sourceDefinitions[1]));
     refreshInbox();
   }
 
@@ -1487,7 +1535,7 @@ async fn operations_view(headers: axum::http::HeaderMap, view: OperationsView) -
 
 fn operations_page(view: OperationsView) -> String {
     let content = match view {
-        OperationsView::Approvals => "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Pending decisions</h2><p class=\"muted\">Review unanswered requests. Decisions are saved by Platform or Identity, the service that owns each request.</p></div><button id=\"approvals-refresh\" type=\"button\">Refresh</button></div><p id=\"approvals-feedback\" role=\"status\" aria-live=\"polite\"></p></section><section class=\"card\"><h2>Deployments</h2><div id=\"pending-deploy-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading deployment approvals…</p></div></section><section class=\"card\"><h2>SSH access</h2><div id=\"pending-ssh-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading SSH access requests…</p></div></section><section class=\"card\"><h2>Identity permissions</h2><div id=\"pending-identity-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading Identity permission requests…</p></div></section>".to_owned(),
+        OperationsView::Approvals => "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Pending decisions</h2><p class=\"muted\">Review unanswered requests. Decisions are saved by Platform or Identity, the service that owns each request.</p></div><button id=\"approvals-refresh\" type=\"button\">Refresh</button></div><p id=\"approvals-feedback\" role=\"status\" aria-live=\"polite\"></p></section><section class=\"card\"><h2>Deployments</h2><div id=\"pending-deploy-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading deployment approvals…</p></div><button id=\"approvals-more-deploy\" type=\"button\" hidden>Load older requests</button></section><section class=\"card\"><h2>SSH access</h2><div id=\"pending-ssh-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading SSH access requests…</p></div><button id=\"approvals-more-ssh\" type=\"button\" hidden>Load older requests</button></section><section class=\"card\"><h2>Identity permissions</h2><p class=\"muted\">Identity list is currently limited to the newest 200 requests.</p><div id=\"pending-identity-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading Identity permission requests…</p></div></section>".to_owned(),
         OperationsView::Deployments => concat!(
             "<section class=\"card\"><h2>Deployment requests</h2><p class=\"muted\">Review the exact tested revision, CI result, and pinned service revisions. Approving records your decision and attempts to queue that deployment; the request card reports both stages.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment requests…</p></div></section>",
             "<section class=\"card\"><h2>Latest deploy or restore result</h2><p class=\"muted\">This is the current Platform status pointer. Historical requests are listed separately under History.</p><div id=\"latest-operation-status\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>"
@@ -2503,6 +2551,9 @@ mod tests {
         assert!(html.contains("id=\"pending-deploy-approvals\""));
         assert!(html.contains("id=\"pending-ssh-approvals\""));
         assert!(html.contains("id=\"pending-identity-approvals\""));
+        assert!(html.contains("id=\"approvals-more-deploy\""));
+        assert!(html.contains("id=\"approvals-more-ssh\""));
+        assert!(html.contains("Identity list is currently limited to the newest 200 requests"));
         assert!(html.contains("Decisions are saved by Platform or Identity"));
         assert!(html.contains("<h1>Approvals</h1>"));
         let nav = super::render_admin_navigation("/admin/approvals");
@@ -2815,6 +2866,11 @@ mod tests {
             .unwrap();
         assert!(approvals.contains("Approve and queue"));
         assert!(approvals.contains("Approve selected access"));
+        assert!(approvals.contains("approvals-more-deploy"));
+        assert!(approvals.contains("approvals-more-ssh"));
+        assert!(approvals.contains("next_cursor"));
+        assert!(approvals.contains("Confirm the review before approving this SSH request."));
+        assert!(approvals.contains("review.required = false"));
     }
 
     #[tokio::test]
