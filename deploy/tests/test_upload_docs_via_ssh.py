@@ -4,11 +4,12 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
 
-from shell_test_support import bash_executable, posix_path, shell_path_list, write_python3_shim
+from shell_test_support import bash_executable, posix_path
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -19,13 +20,12 @@ class UploadDocsViaSshTests(unittest.TestCase):
     def test_stages_public_bundle_and_keeps_token_access_server_side(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
-            fake_bin = root / "bin"
-            fake_bin.mkdir()
             capture = root / "capture"
             capture.mkdir()
             bundle = root / "docs.tar.gz"
             bundle.write_bytes(b"public docs archive")
-            (fake_bin / "ssh").write_text(
+            fake_ssh = capture / "fake-ssh.py"
+            fake_ssh.write_text(
                 textwrap.dedent(
                     """\
                     #!/usr/bin/env python3
@@ -43,21 +43,32 @@ class UploadDocsViaSshTests(unittest.TestCase):
                         import base64
                         (capture / "remote.sh").write_bytes(base64.b64decode(encoded))
                     """
-                )
+                ),
+                encoding="utf-8",
+                newline="\n",
             )
-            (fake_bin / "scp").write_text(
-                "#!/usr/bin/env python3\n"
+            fake_scp = capture / "fake-scp.py"
+            fake_scp.write_text(
                 "import json, os, pathlib, sys\n"
                 "with (pathlib.Path(os.environ['MOCK_CAPTURE']) / 'scp.jsonl').open('a') as f:\n"
-                "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n",
+                encoding="utf-8",
+                newline="\n",
             )
-            for executable in (fake_bin / "ssh", fake_bin / "scp"):
-                executable.chmod(0o755)
-            write_python3_shim(fake_bin)
+            bash_env = root / "ssh-functions.sh"
+            bash_env.write_text(
+                'ssh() { "$PYTHON_FOR_TEST" "$MOCK_FAKE_SSH" "$@"; }\n'
+                'scp() { "$PYTHON_FOR_TEST" "$MOCK_FAKE_SCP" "$@"; }\n',
+                encoding="utf-8",
+                newline="\n",
+            )
 
             environment = os.environ.copy()
-            environment["PATH"] = shell_path_list(fake_bin, environment["PATH"])
             environment["MOCK_CAPTURE"] = str(capture)
+            environment["MOCK_FAKE_SSH"] = posix_path(fake_ssh)
+            environment["MOCK_FAKE_SCP"] = posix_path(fake_scp)
+            environment["PYTHON_FOR_TEST"] = posix_path(sys.executable)
+            environment["BASH_ENV"] = posix_path(bash_env)
             result = subprocess.run(
                 [
                     bash_executable(),

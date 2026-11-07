@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from shell_test_support import bash_executable, posix_path, shell_path_list
+from shell_test_support import bash_executable, posix_path
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -19,34 +19,29 @@ class HttpReadinessTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = pathlib.Path(temporary.name)
-        fake_bin = root / "bin"
-        fake_bin.mkdir()
         call_count = root / "curl-count"
         calls = root / "calls"
         diagnostics = root / "diagnostics"
-
-        (fake_bin / "curl").write_text(
-            "#!/bin/bash\n"
-            "url=\"${@: -1}\"\n"
-            "printf '%s\\n' \"$*\" >> \"$READINESS_CALLS\"\n"
-            "count=0; [ ! -f \"$READINESS_COUNT\" ] || count=$(cat \"$READINESS_COUNT\")\n"
-            "count=$((count + 1)); printf '%s' \"$count\" > \"$READINESS_COUNT\"\n"
-            "[ \"$count\" -gt \"$READINESS_FAIL_BEFORE\" ]\n"
+        bash_env = root / "readiness-functions.sh"
+        bash_env.write_text(
+            """curl() {
+  printf '%s\\n' "$*" >> "$READINESS_CALLS"
+  count=0; [ ! -f "$READINESS_COUNT" ] || count=$(command cat "$READINESS_COUNT")
+  count=$((count + 1)); printf '%s' "$count" > "$READINESS_COUNT"
+  [ "$count" -gt "$READINESS_FAIL_BEFORE" ]
+}
+sleep() { :; }
+systemctl() { printf 'systemctl %s\\n' "$*" >> "$READINESS_DIAGNOSTICS"; }
+journalctl() { printf 'journalctl %s\\n' "$*" >> "$READINESS_DIAGNOSTICS"; }
+""",
+            encoding="utf-8",
+            newline="\n",
         )
-        (fake_bin / "sleep").write_text("#!/bin/sh\nexit 0\n")
-        (fake_bin / "systemctl").write_text(
-            "#!/bin/sh\nprintf 'systemctl %s\\n' \"$*\" >> \"$READINESS_DIAGNOSTICS\"\n"
-        )
-        (fake_bin / "journalctl").write_text(
-            "#!/bin/sh\nprintf 'journalctl %s\\n' \"$*\" >> \"$READINESS_DIAGNOSTICS\"\n"
-        )
-        for executable in fake_bin.iterdir():
-            executable.chmod(0o755)
 
         environment = os.environ.copy()
         environment.update(
             {
-                "PATH": shell_path_list(fake_bin, environment["PATH"]),
+                "BASH_ENV": posix_path(bash_env),
                 "VAPOR_CONFIG_DIR": str(root / "no-config"),
                 "VAPOR_HEALTH_CHECK_ATTEMPTS": str(attempts),
                 "VAPOR_HEALTH_CHECK_INTERVAL_SECONDS": "0",
