@@ -1430,7 +1430,7 @@ mod unix_impl {
         paths: &[&std::path::Path],
     ) -> Result<bool, ()> {
         let output = std::process::Command::new("/usr/bin/grep")
-            .args(["-RIlE", "^[[:space:]]*[^#].*%vapor-temp-ssh"])
+            .args(["-RIlE", "^[[:space:]]*[^#[:space:]].*vapor-temp-ssh"])
             .args(paths.iter().map(|path| path.as_os_str()))
             .output()
             .map_err(|_| ())?;

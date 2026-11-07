@@ -24,7 +24,11 @@ class PlatformOpsInstallerTests(unittest.TestCase):
         self.assertEqual(source.count(LEGACY_GROUP_RULE), 1)
         self.assertNotRegex(source, r"(?m)^\s*%vapor-temp-ssh\s+ALL\s*=")
         self.assertIn("grep -RIlE", source)
-        self.assertIn("^[[:space:]]*[^#].*%vapor-temp-ssh", source)
+        self.assertIn("^[[:space:]]*[^#[:space:]].*vapor-temp-ssh", source)
+        scan = re.compile(r"^\s*[^#\s].*vapor-temp-ssh", re.MULTILINE)
+        self.assertIsNotNone(scan.search("%vapor-temp-ssh ALL=(root) NOPASSWD: ALL"))
+        self.assertIsNotNone(scan.search("User_Alias TEMP = %vapor-temp-ssh"))
+        self.assertIsNone(scan.search("  # %vapor-temp-ssh ALL=(root) NOPASSWD: ALL"))
         self.assertIn("unexpected group-wide temporary-access sudo rule remains", source)
         self.assertIn("visudo -c >/dev/null", source)
 
