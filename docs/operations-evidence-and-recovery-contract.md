@@ -292,14 +292,20 @@ hardening work.
 - Do not claim a clean-host restore or USB catch-up is proven until each has
   actually been exercised on a disposable host and the owner's drive.
 
-## Independent admin gateway source status
+## Independent admin gateway current status (verified 2026-11-07)
 
-The services-mode source now keeps Platform running as a narrow shared admin
-gateway. Caddy sends `/admin*` and `/api/admin*` to Platform; Platform serves
-its own routes and proxies only fixed service-admin prefixes to loopback owner
-services. Owner APIs and action authorization remain service-owned. This source
-change is not deployed or verified. The current HTML marker wrapper remains a
-known gap against the approved explicit shared-layout contract.
+Platform commit `12192d85348432ee24d1ce7c02ff2dab6eeded84` is deployed in
+services mode. Caddy sends `/admin*` and `/api/admin*` to Platform; Platform
+serves its own routes and proxies fixed service-admin prefixes to loopback
+owner services. Owner APIs and action authorization remain service-owned. The
+shared shell uses the explicit
+`application/vnd.vapor.admin-page.v1+html; charset=utf-8` fragment contract;
+the earlier marker-based whole-page wrapper described in the original baseline
+is no longer current. The deployed `deploy/scripts/health-check.sh` passed
+service, fixed admin-route, unauthenticated-contract, Atlas-through-Caddy, and
+state-export-timer checks on the live host. See
+[`deployment-status.md`](deployment-status.md) for the latest request queue,
+backup generation, and public release-feed state.
 
 New source-level recovery exports record the Rust and Cargo versions plus the
 compiler host triple observed at export time in `source/toolchain.txt` and the
