@@ -18,7 +18,7 @@
 - Do not depend on Loo-Cast, Steam App ID `2122620`, its app root, depots, or content.
 - Vapor itself is publicly downloadable from Vapor's VPS and updates through Vapor's own release feed; Steam/Loo-Cast alpha access is never an entitlement gate.
 - Use the stable Vapor identity and prerequisite contracts from `Vapor#2` and `Vapor#4`; do not create temporary IDs or duplicate their migrations.
-- Preserve a single-process, one-VPS Vapor server deployment with explicit internal domain boundaries as selected by the existing standalone ecosystem workstream.
+- Preserve the one-VPS Vapor platform deployment with independently running services and explicit internal domain boundaries; this replaces the earlier single-process assumption.
 - Ordinary user actions remain in the Vapor GUI; any helper process is a managed internal adapter, not a required user-facing CLI.
 - Build and validate through Vapor-managed commands from the owning workspace; do not invoke raw Cargo.
 
@@ -153,7 +153,7 @@ Existing source inspection found the current asset workbench is local, extracts 
 2. Task 2 can be developed against current local tool fixtures while Task 1 is gated.
 3. Tasks 3 and 4 follow Task 1 and Task 2. They should be implemented in the Vapor client feature workspace, not in the server orchestration repository.
 4. Task 5 follows the provider-neutral release contract and remains a dry-run/resolution feature; actual composition installation is covered by the existing receipt-backed client/package plans.
-5. Server catalog/API and one-process deployment remain covered by `2026-11-01-vapor-catalog-server-execution.md`; no game file extraction or cache operation belongs on the VPS.
+5. Server catalog/API and service deployment remain covered by the current Platform design and owning service repositories; no game file extraction or cache operation belongs on the VPS.
 6. Standalone Vapor bootstrap and self-update are a distinct app-release lifecycle; they must be available before this workbench is distributed and are not Mad Max mod packages.
 
 ## Self-Review
@@ -168,7 +168,7 @@ Existing source inspection found the current asset workbench is local, extracts 
 
 This is a supplementary local-content plan; the already approved umbrella,
 client/core, catalog-server, and first-package plans remain authoritative for
-standalone distribution, the one-process server, and reversible game-folder
+standalone distribution, the independent-service server, and reversible game-folder
 installation. Implementation method is inline/native as requested; do not use
 subagents. Source changes belong in the Vapor Client and Mad Max repositories,
 not this server checkout. Before execution, the implementation workspace must

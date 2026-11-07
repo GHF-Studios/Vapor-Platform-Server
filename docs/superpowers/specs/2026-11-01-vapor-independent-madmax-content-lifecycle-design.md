@@ -2,7 +2,9 @@
 
 Status: approved for implementation on 2026-11-01. Implementation must follow
 the approved repository-specific plans and preserve their owner-controlled
-deployment and publication gates.
+  deployment and publication gates. Its one-process VPS assumption was
+  superseded by the independent-service topology in
+  [`2026-11-07-independent-service-deployments.md`](2026-11-07-independent-service-deployments.md).
 
 ## Intent
 
@@ -36,8 +38,8 @@ applied. Switching compositions must be reversible and recoverable.
 - Make profile switching transactional: interruption or failure must be
   detectable and recoverable without guessing which files belong to which
   composition.
-- Keep platform service responsibilities and state boundaries explicit inside
-  the previously selected one-process VPS deployment; the platform root remains
+- Keep platform service responsibilities and state boundaries explicit across
+  independently deployable services on the VPS; the Platform root remains
   responsible for deployment/orchestration rather than absorbing service
   business rules.
 
@@ -123,8 +125,8 @@ making the installed composition explicit and recoverable.
 - Does not perform game archive extraction, repacking, patching, or launch.
 - Keeps the root repository responsible for deployment/orchestration and
   whole-system export/import composition, not domain-specific catalog or asset
-  business logic. The approved deployment is one process; service-domain
-  modules and their state ownership remain explicit within it.
+  business logic. Services run independently behind the shared gateway and
+  retain their own modules and state ownership.
 
 The existing Registry is the likely home for provider-neutral ecosystem and
 composition metadata, subject to its own contract and implementation review.

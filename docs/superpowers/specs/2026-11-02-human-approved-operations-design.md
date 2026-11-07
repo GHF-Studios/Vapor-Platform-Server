@@ -8,7 +8,13 @@ dashboard. The dashboard and APIs should provide an auditable, usable path for
 Leslie and later approved automation without making a request credential an
 approval credential.
 
-## Current state
+## Baseline when drafted (2026-11-02; superseded)
+
+This section records the state before the approval worker and independent
+service deployment work. For current behavior and architecture, use
+[`2026-11-06-vapor-platform-operations-and-recovery-redesign.md`](2026-11-06-vapor-platform-operations-and-recovery-redesign.md),
+[`2026-11-07-independent-service-deployments.md`](2026-11-07-independent-service-deployments.md),
+and [`../../deployment-status.md`](../../deployment-status.md).
 
 - Platform deployment automation follows `main`: pushes can trigger the
   workflow, and the VPS timer periodically invokes the deployment service.
@@ -37,8 +43,9 @@ approval credential.
   shared admin toolbench.
 - Existing bootstrap/emergency access remains available only for first-root
   recovery and documented server-local break-glass operations.
-- The deployment remains one VPS / one Platform process with service-owned
-  state, APIs, and rules.
+- The deployment remains on one VPS, with independently running and
+  deployable services behind the shared Platform gateway. Each service owns
+  its state, APIs, and rules.
 
 ## Non-goals
 

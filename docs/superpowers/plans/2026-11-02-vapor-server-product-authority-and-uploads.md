@@ -109,7 +109,7 @@
 
 **Interfaces:**
 - Public API is nested at `/api/content-upload/`; policy/admin internals remain service-owned and protected.
-- The service exposes its own readiness and export/import contract. Platform composes it into the existing one-process runtime and whole-system recovery bundle.
+- The service exposes its own readiness and export/import contract. Platform deploys it independently and composes its export/import into whole-system recovery.
 
 - [ ] **Step 1: Add failing Platform tests** `content_upload_routes_are_composed`, `content_upload_health_degrades_without_root_failure`, and `content_upload_state_is_in_export_import`; assert the router is mounted only under `/api/content-upload/` and recovery manifest includes only service-owned state.
 - [ ] **Step 2: Run the focused Platform tests** and confirm Content Upload is not composed.

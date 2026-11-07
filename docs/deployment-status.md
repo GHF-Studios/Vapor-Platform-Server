@@ -14,11 +14,22 @@
 - Local verification passed: all 76 Python tests (9 platform skips), the Rust
   Platform test suite (63 unit tests plus 3 CLI integration tests), all
   workspace Rust tests through `deploy/scripts/test.sh`, and the shell,
-  Python-syntax, and Atlas checks. Existing Rust dead-code warnings remain.
-- This is source-only; no VPS deployment was performed. GitHub Actions for the
-  new source revision must pass before treating it as a validated candidate.
+  Python-syntax, Atlas, embedded-JavaScript syntax, and changed-document local
+  link checks. Existing Rust dead-code warnings remain.
+- GitHub Actions run `42347119929` passed both `root-ci` and
+  `windows-recovery-tests` for commit `620c5b07632fe12cc295b56398b44c697a1676aa`.
+- This is source-only; no VPS deployment was performed. The follow-up inbox
+  feedback and documentation cleanup are newer local changes and still need
+  their own CI run before they are a validated candidate.
+- The latest read-only SSH attempt with the designated workstation key was
+  rejected by the VPS (`Permission denied (publickey)`). No live files or
+  services were changed; the VPS remains on its prior deployed revision.
+- The inbox now preserves and explains the dispatch stage returned by
+  deployment approval, with a direct link to Deployments. The November 1–3
+  workstream docs now point readers to the current service topology and
+  approval sources instead of presenting superseded assumptions as current.
 
-## Latest candidate validation (2026-11-07 06:10 UTC)
+## Prior recovery candidate validation (2026-11-07 06:10 UTC)
 
 - The latest validated candidate is
   `cc80245b5d33100bcadd4cbe603ba6e451f7d51a` on

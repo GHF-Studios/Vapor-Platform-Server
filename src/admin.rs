@@ -467,6 +467,27 @@ const JS: &str = r#"
       if (response.status === 403) return 'Your signed-in account is not authorized to review this request.';
       return `${fallback} (HTTP ${response.status})${clean ? `: ${clean}` : ''}`;
     };
+    const showDeploymentFeedback = message => {
+      feedback.replaceChildren(document.createTextNode(`${message} `));
+      const link = document.createElement('a'); link.href = '/admin/deployments';
+      link.textContent = 'Open Deployments'; feedback.append(link);
+    };
+    const deploymentApprovalMessage = body => {
+      if (body?.status === 'executing' || body?.dispatch?.status === 'claimed')
+        return 'Approval saved; the worker claimed the deployment and it is running.';
+      if (body?.status === 'succeeded') return 'Approval saved; deployment succeeded.';
+      if (body?.status === 'failed') return 'Approval saved; deployment failed.';
+      if (body?.dispatch?.status === 'queued') return 'Approval saved; deployment is queued for the worker.';
+      if (body?.dispatch?.status === 'dispatching') return 'Approval saved; deployment dispatch is in progress.';
+      if (body?.dispatch?.status === 'unknown') return 'Approval saved; dispatch result is unknown.';
+      if (body?.dispatch?.status === 'failed') return 'Approval saved; dispatch failed before the worker claimed the deployment.';
+      return 'Approval saved; check the current deployment stage.';
+    };
+    const dispatchProblem = code => ({
+      dispatch_result_unknown: 'has an unknown result',
+      dispatch_attempt_superseded: 'was superseded by a newer request state',
+      dispatch_state_unavailable: 'could not read the current state'
+    })[code] || 'failed';
     const appendText = (parent, tag, text, className) => {
       const node = document.createElement(tag);
       if (className) node.className = className;
@@ -520,7 +541,9 @@ const JS: &str = r#"
         });
         const resultBody = await response.clone().json().catch(() => null);
         if (kind === 'deploy' && resultBody?.error?.decision_saved === true) {
-          feedback.textContent = `Approval was saved, but deployment dispatch ${resultBody.error.code === 'dispatch_result_unknown' ? 'has an unknown result' : 'failed'}: ${String(resultBody.error.message || 'check Deployments for the current stage').slice(0, 240)}`;
+          showDeploymentFeedback(`Approval was saved, but deployment dispatch ${dispatchProblem(resultBody.error.code)}: ${String(resultBody.error.message || 'check Deployments for the current stage').slice(0, 240)}`);
+        } else if (kind === 'deploy' && action === 'approve' && response.ok) {
+          showDeploymentFeedback(deploymentApprovalMessage(resultBody));
         } else if (response.ok) {
           feedback.textContent = `${kind === 'identity' ? 'Identity' : 'Platform'} recorded the ${action} decision. Refreshing pending requests…`;
         } else {
@@ -2300,6 +2323,11 @@ mod tests {
         assert!(script.contains("claimed: 'worker claimed deployment'"));
         assert!(script.contains("completed: 'worker finished deployment'"));
         assert!(script.contains("secondaryLabel: 'Dispatch needs attention'"));
+        assert!(script.contains("Approval saved; deployment is queued for the worker."));
+        assert!(script.contains("Approval saved; the worker claimed the deployment and it is running."));
+        assert!(script.contains("Approval saved; deployment succeeded."));
+        assert!(script.contains("dispatch_attempt_superseded: 'was superseded by a newer request state'"));
+        assert!(script.contains("const link = document.createElement('a'); link.href = '/admin/deployments';"));
         assert!(script.contains("? '; retry available' : '';"));
         assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const validDeploymentSelection = item =>"));

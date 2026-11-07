@@ -96,7 +96,7 @@
 - Consumes: Identity and Registry environment configuration from Tasks 1–2.
 - Produces: one documented internal authorization route, unavailable through unauthenticated client calls, with shared server-only credential configuration.
 
-- [x] Wire Identity and Registry routes through the existing one-process platform root without moving authorization business logic into the root.
+- [x] Route Identity and Registry through the shared Platform gateway without moving authorization business logic into Platform; the services remain independently deployable.
 - [x] Add environment variable names and purpose to deployment docs/systemd environment configuration; use placeholders only and do not add real secrets.
 - [x] Update the cross-service contract to distinguish product entitlement checks from local source prerequisites and to record the internal authorization request/response shape.
 - [x] Update the standalone-install contract: public Vapor install/update remains ungated; Loo-Cast premium resources require the configured entitlement; Mad Max dependencies require a local mount only.

@@ -1,6 +1,6 @@
 # Vapor Standalone Distribution and Updates Implementation Plan
 
-> **Status: Superseded on 2026-11-02.** The owner-approved standalone product-boundary design changes the Steam app-root and Steam Workshop ownership model, and the target snapshot/native-builder plan now owns standalone install, website release, and self-update sequencing. Keep this file as historical context; do not execute it in parallel. Use [`2026-11-02-vapor-target-build-snapshots-and-builders.md`](2026-11-02-vapor-target-build-snapshots-and-builders.md) and the approved standalone product-boundary design instead.
+> **Status: Superseded on 2026-11-02.** The owner-approved standalone product-boundary design changes the Steam app-root and Steam Workshop ownership model, and the target snapshot/native-builder plan now owns standalone install, website release, and self-update sequencing. Its one-process server assumptions are also superseded by the November 7 independent-service design. Keep this file as historical context; do not execute it in parallel. Use [`2026-11-02-vapor-target-build-snapshots-and-builders.md`](2026-11-02-vapor-target-build-snapshots-and-builders.md) for the product work and the current Platform sources in [`../README.md`](../README.md) for server topology.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Architecture:** Treat Vapor application releases as a separate immutable release domain from Mad Max mods and content compositions. The VPS serves public version metadata and signed artifacts; a small trusted bootstrap verifies, stages, applies, and recovers client updates in Vapor's own app root. Existing Steam distribution remains a separate optional path for products that still need it.
 
-**Tech Stack:** Existing Rust Vapor Client/Installer/GUI workspaces, the one-process Axum/Tokio server deployment, immutable release artifacts, and a cross-platform signature verification library selected after dependency review.
+**Tech Stack:** Existing Rust Vapor Client/Installer/GUI workspaces, the Platform gateway and independently deployed release-owning services, immutable release artifacts, and a cross-platform signature verification library selected after dependency review.
 
 **Spec:** `docs/superpowers/specs/2026-11-01-vapor-independent-madmax-content-lifecycle-design.md`.
 
@@ -21,7 +21,7 @@
 - Release artifacts are immutable; corrections publish a new version.
 - Verify authenticity and digest before staging; do not run an update artifact as an unverified installer.
 - Never include Mad Max executable, archives, or extracted game assets in Vapor app releases.
-- Keep the one-process, one-VPS deployment and explicit internal domain/state boundaries.
+- Keep the one-VPS deployment, independent service lifecycle, and explicit internal domain/state boundaries.
 - Keep signing private keys off the server repository and outside ordinary VPS configuration.
 
 ## Review Focus
@@ -45,7 +45,7 @@
 
 ### Vapor Platform Server
 
-- Consume the one-process host and immutable artifact boundaries from `docs/superpowers/plans/2026-11-01-vapor-catalog-server-execution.md`.
+- Consume the current Platform gateway and immutable artifact boundaries from the owning service deployment designs.
 - Add an app-release route/module to the existing provider-neutral release/catalog composition or its separately owned module after the host mapping task identifies the exact source crate. Do not put release business logic in this orchestration root.
 - Keep public artifact bytes in the server's immutable artifact store; metadata identifies the correct platform artifact and signature.
 
@@ -67,7 +67,7 @@
 
 **Exit condition:** client and server have one versioned app-release contract that cannot be confused with Mad Max mod packages.
 
-## Task 2: Serve public Vapor app releases from the one-process VPS
+## Task 2: Serve public Vapor app releases through the one-VPS platform
 
 **Files:**
 - Modify: the server-domain module and host route identified by the approved catalog-server plan's source mapping task.
@@ -81,7 +81,7 @@
 - [ ] Add route cases for available release, unsupported platform, no release, revoked release, and exact immutable artifact retrieval.
 - [ ] Publish metadata only after the artifact is uploaded and its byte size/digest and signature verify.
 - [ ] Keep app update routes distinct from mod catalog routes and Mad Max local-game endpoints.
-- [ ] Verify unauthenticated download and authenticated/maintainer-only publication policy within the local one-process host.
+- [ ] Verify unauthenticated download and authenticated/maintainer-only publication policy across the owning service and shared gateway.
 - [ ] Verify route behavior using the server plan's local API test workflow; do not deploy to the VPS as part of this plan.
 
 **Exit condition:** the public VPS release feed serves a signed Vapor client artifact and metadata without Steam or Loo-Cast credentials.
@@ -127,7 +127,7 @@
 ## Ordering
 
 1. Task 1 defines the release/signature contract.
-2. Task 2 is implemented inside the approved one-process server plan after its route/module mapping step.
+2. Task 2 is implemented by the release-owning service and its Platform gateway route.
 3. Task 3 consumes the contract and public server routes.
 4. Task 4 publishes only after signing, staging, and recovery behavior is validated.
 5. The Mad Max local data workbench may be developed in parallel, but it is not considered distributable to players until this standalone bootstrap/update path is available.

@@ -58,10 +58,11 @@ checkout cleanup.
 - A content manifest cannot grant itself publish rights. Trusted product and
   source policy, enforced by Vapor Identity/Registry authority, decides whether
   content is local-only, publishable, or gated.
-- One VPS is the platform control plane. The Platform host may compose
-  service-owned modules in the agreed monolithic runtime while preserving
+- One VPS is the platform control plane. Independently running service
+  processes sit behind the shared Platform gateway. Platform preserves
   root-level service submodules, independent service build/deploy boundaries,
-  service-owned state/policy, and composed export/import.
+  service-owned state/policy, and composed export/import. This later topology
+  supersedes the earlier monolithic-runtime assumption.
 - The admin toolbench is one coherent operator experience with a shared shell
   and service-owned sections. Local game discovery, mounting, launching, and
   asset workbenches belong in the Vapor Client, not in the VPS dashboard.
