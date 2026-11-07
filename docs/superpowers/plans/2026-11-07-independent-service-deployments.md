@@ -150,11 +150,13 @@ tests, and GitHub Actions.
 
 ## Validation limits
 
-- The complete repository test recipe passed on Windows. Ten POSIX-specific
-  cases were skipped by the existing test suite; Linux CI must execute the
-  symlink-backed Atlas and service-state ownership/rollback cases.
-- No live deployment was run. The prior temporary SSH grant expired, and the
-  current implementation must first pass Linux CI and then be installed through
-  the approved deployment flow.
+- The complete repository test recipe passed on Windows (69 Python tests;
+  nine POSIX-specific cases skipped) and on GitHub Actions Ubuntu 24.04
+  (69 Python tests plus the Rust suites for Platform and all service
+  submodules). The Linux CI run is
+  [42338788185](https://github.com/GHF-Studios/Vapor-Platform-Server/actions/runs/42338788185).
+- No live deployment was run. The prior temporary SSH grant expired; installing
+  this on the VPS still requires the approved deployment flow and a fresh
+  authorization.
 - A full VPS export/restore round-trip was not executed. The optional manifest
   is validated in schema-v2 bundles and remains ordinary state-tree data.
