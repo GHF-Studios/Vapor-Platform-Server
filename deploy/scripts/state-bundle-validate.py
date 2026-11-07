@@ -9,6 +9,9 @@ import sys
 import tarfile
 import tomllib
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from deployed_source_manifest import ManifestError, validate_manifest_text as validate_deployed_source_manifest
+
 
 class ValidationError(RuntimeError):
     pass
@@ -107,6 +110,7 @@ def validate_bundle(path: pathlib.Path) -> None:
     submodule_member: tarfile.TarInfo | None = None
     saw_caddyfile = False
     service_units: set[str] = set()
+    deployed_sources_member: tarfile.TarInfo | None = None
 
     try:
         with tarfile.open(path, "r:gz") as archive:
@@ -119,6 +123,8 @@ def validate_bundle(path: pathlib.Path) -> None:
 
                 if normalized_name == f"{ROOT}/manifest.toml":
                     manifest_member = member
+                if normalized_name == f"{ROOT}/state/operations/deployed-sources.json" and member.isfile():
+                    deployed_sources_member = member
                 if len(parts) >= 2 and parts[1] in REQUIRED_CATEGORIES:
                     categories_seen.add(parts[1])
                 if len(parts) > 2 and parts[1] == "state" and member.isfile():
@@ -144,6 +150,16 @@ def validate_bundle(path: pathlib.Path) -> None:
 
             if manifest_member is None:
                 raise ValidationError("bundle is missing its manifest")
+            if deployed_sources_member is not None:
+                deployed_sources_stream = archive.extractfile(deployed_sources_member)
+                if deployed_sources_stream is None:
+                    raise ValidationError("deployed-source manifest cannot be read")
+                try:
+                    validate_deployed_source_manifest(
+                        deployed_sources_stream.read(64 * 1024).decode("utf-8", errors="strict")
+                    )
+                except (ManifestError, UnicodeDecodeError) as error:
+                    raise ValidationError("bundle deployed-source manifest is invalid") from error
             manifest_file = archive.extractfile(manifest_member)
             if manifest_file is None:
                 raise ValidationError("bundle manifest cannot be read")

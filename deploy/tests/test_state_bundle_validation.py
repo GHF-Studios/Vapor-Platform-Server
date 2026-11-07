@@ -92,6 +92,33 @@ class StateBundleValidationTests(unittest.TestCase):
         bundle = make_bundle(valid_members())
         validator.validate_bundle(bundle)
 
+    def test_accepts_old_bundle_without_deployed_source_manifest(self) -> None:
+        bundle = make_bundle(valid_members())
+        validator.validate_bundle(bundle)
+
+    def test_validates_deployed_source_manifest_when_present(self) -> None:
+        members = valid_members()
+        members.append((
+            f"{ROOT}/state/operations/deployed-sources.json",
+            "file",
+            b'{"schema_version":1,"targets":{"identity":{"composition_commit":"'
+            + ("a" * 40).encode()
+            + b'","source_commit":"'
+            + ("b" * 40).encode()
+            + b'","deployed_at_utc":"2026-11-07T00:00:00Z"}}}',
+        ))
+        validator.validate_bundle(make_bundle(members))
+
+    def test_rejects_invalid_optional_deployed_source_manifest(self) -> None:
+        members = valid_members()
+        members.append((
+            f"{ROOT}/state/operations/deployed-sources.json",
+            "file",
+            b'{"schema_version":1,"targets":{"identity":{"source_commit":"bad"}}}',
+        ))
+        with self.assertRaisesRegex(validator.ValidationError, "deployed-source manifest"):
+            validator.validate_bundle(make_bundle(members))
+
     def test_rejects_parent_directory_escape(self) -> None:
         members = valid_members()
         members.append((f"{ROOT}/state/../escape", "file", b"bad"))

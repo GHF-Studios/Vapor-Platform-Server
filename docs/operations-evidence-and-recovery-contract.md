@@ -119,6 +119,16 @@ root Identity session and is private/no-store. The record is a current status
 pointer, not an append-only audit log or proof that every service feature is
 ready; detailed operator evidence remains in the deployment logs and runbooks.
 
+Independent deployments also maintain
+`${VAPOR_STATE_ROOT}/operations/deployed-sources.json`. Schema version 1 maps
+each deployed target to the exact Platform composition commit, pinned target
+commit, and deployment timestamp. Full-stack deploys replace the complete
+inventory; an approved single-service deploy updates only its target after
+health checks. The file is non-secret, written atomically as `root:vapor`
+mode `0640`, and included through the existing state-tree export. Recovery
+validation checks its schema when present; older bundles without it remain
+valid and do not receive invented deployment records.
+
 Restore writes a `success` or `failed` status after its final recovery action,
 so the restore result replaces any pre-restore record that was included in the
 state bundle. On failure, stderr/systemd journal output distinguishes a

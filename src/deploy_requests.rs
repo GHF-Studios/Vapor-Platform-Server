@@ -49,6 +49,8 @@ struct SubmodulePin {
 #[serde(deny_unknown_fields)]
 struct CreateDeployRequest {
     server_mode: String,
+    deployment_scope: String,
+    service_target: Option<String>,
     repository: String,
     branch: String,
     commit: String,
@@ -77,6 +79,8 @@ struct DeployRequestSummary {
     tree: String,
     submodules: Vec<SubmodulePin>,
     server_mode: Option<String>,
+    deployment_scope: Option<String>,
+    service_target: Option<String>,
     workflow_url: String,
     summary: String,
     status: String,
@@ -99,6 +103,11 @@ struct CreatedRequest {
     status: String,
     version: i64,
     expires_at_unix: i64,
+}
+
+struct ActiveRequest {
+    created: CreatedRequest,
+    request_json: String,
 }
 
 #[derive(Deserialize)]
@@ -247,8 +256,10 @@ async fn create_request(
     let now = unix_now();
     let expires_at = now + REQUEST_TTL_SECONDS;
     let submodules = serde_json::to_string(&request.submodules).unwrap_or_default();
-    if let Some(existing) = active_request_for_commit(&state.pool, &request.commit).await {
-        return (StatusCode::ACCEPTED, Json(existing)).into_response();
+    match active_request_for_commit(&state.pool, &request.commit).await {
+        Ok(Some(existing)) => return existing_request_response(existing, &request),
+        Ok(None) => {}
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
     let id = uuid::Uuid::new_v4().to_string();
     let result = sqlx::query(
@@ -262,8 +273,10 @@ async fn create_request(
     .bind(&request.summary).bind(credential.credential_id).bind(credential.actor_profile_id).bind(now).bind(expires_at)
     .execute(&state.pool).await;
     if result.is_err() {
-        if let Some(existing) = active_request_for_commit(&state.pool, &request.commit).await {
-            return (StatusCode::ACCEPTED, Json(existing)).into_response();
+        match active_request_for_commit(&state.pool, &request.commit).await {
+            Ok(Some(existing)) => return existing_request_response(existing, &request),
+            Ok(None) => {}
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         }
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -279,21 +292,48 @@ async fn create_request(
         .into_response()
 }
 
-async fn active_request_for_commit(pool: &SqlitePool, commit: &str) -> Option<CreatedRequest> {
+async fn active_request_for_commit(
+    pool: &SqlitePool,
+    commit: &str,
+) -> Result<Option<ActiveRequest>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT id, status, version, expires_at_unix FROM platform_deploy_requests
+        "SELECT id, status, version, expires_at_unix, request_json FROM platform_deploy_requests
          WHERE commit_hash = ? AND status IN ('pending','approved','executing') LIMIT 1",
     )
     .bind(commit)
     .fetch_optional(pool)
-    .await
-    .ok()??;
-    Some(CreatedRequest {
-        id: row.get("id"),
-        status: row.get("status"),
-        version: row.get("version"),
-        expires_at_unix: row.get("expires_at_unix"),
-    })
+    .await?;
+    Ok(row.map(|row| ActiveRequest {
+        created: CreatedRequest {
+            id: row.get("id"),
+            status: row.get("status"),
+            version: row.get("version"),
+            expires_at_unix: row.get("expires_at_unix"),
+        },
+        request_json: row.get("request_json"),
+    }))
+}
+
+fn existing_request_response(existing: ActiveRequest, incoming: &CreateDeployRequest) -> Response {
+    if same_request_shape(&existing.request_json, incoming) {
+        (StatusCode::ACCEPTED, Json(existing.created)).into_response()
+    } else {
+        (
+            StatusCode::CONFLICT,
+            "another active deployment request already exists for this root commit with a different topology, scope, or target; wait for it to finish before submitting another\n",
+        )
+            .into_response()
+    }
+}
+
+fn same_request_shape(stored_json: &str, incoming: &CreateDeployRequest) -> bool {
+    let Ok(stored) = serde_json::from_str::<CreateDeployRequest>(stored_json) else {
+        return false;
+    };
+    stored.commit == incoming.commit
+        && stored.server_mode == incoming.server_mode
+        && stored.deployment_scope == incoming.deployment_scope
+        && stored.service_target == incoming.service_target
 }
 
 async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderMap) -> Response {
@@ -344,6 +384,8 @@ async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderM
                 tree: row.get("tree_hash"),
                 submodules,
                 server_mode: request_server_mode(row.get("request_json")),
+                deployment_scope: request_scope(row.get("request_json")),
+                service_target: request_service_target(row.get("request_json")),
                 workflow_url: row.get("workflow_url"),
                 summary: row.get("summary"),
                 status: row.get("status"),
@@ -1334,6 +1376,23 @@ fn validate_request(request: &CreateDeployRequest) -> Result<(), &'static str> {
     if !matches!(request.server_mode.as_str(), "monolith" | "services") {
         return Err("server_mode must be 'monolith' or 'services'\n");
     }
+    match (request.deployment_scope.as_str(), request.service_target.as_deref()) {
+        ("full", None) => {}
+        ("service", Some(target)) if request.server_mode == "services" => {
+            if !matches!(
+                target,
+                "atlas" | "homepage" | "docs" | "identity" | "diagnostics" | "registry" | "artifact" | "build-cache"
+            ) {
+                return Err("service_target is not an allowlisted deployment target\n");
+            }
+        }
+        ("service", Some(_)) => {
+            return Err("service scope requires server_mode='services'\n");
+        }
+        ("service", None) => return Err("service scope requires service_target\n"),
+        ("full", Some(_)) => return Err("full scope must not have service_target\n"),
+        _ => return Err("deployment_scope must be 'full' or 'service'\n"),
+    }
     if request.repository != SOURCE_REPOSITORY || request.branch != DEPLOY_BRANCH {
         return Err("unsupported deployment source\n");
     }
@@ -1373,9 +1432,21 @@ fn validate_request(request: &CreateDeployRequest) -> Result<(), &'static str> {
 }
 
 fn request_server_mode(request_json: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(request_json).ok()?;
-    let mode = value.get("server_mode")?.as_str()?;
-    matches!(mode, "monolith" | "services").then(|| mode.to_owned())
+    let request: CreateDeployRequest = serde_json::from_str(request_json).ok()?;
+    validate_request(&request).ok()?;
+    Some(request.server_mode)
+}
+
+fn request_scope(request_json: &str) -> Option<String> {
+    let request: CreateDeployRequest = serde_json::from_str(request_json).ok()?;
+    validate_request(&request).ok()?;
+    Some(request.deployment_scope)
+}
+
+fn request_service_target(request_json: &str) -> Option<String> {
+    let request: CreateDeployRequest = serde_json::from_str(request_json).ok()?;
+    validate_request(&request).ok()?;
+    request.service_target
 }
 
 fn valid_hash(value: &str) -> bool {
@@ -1415,7 +1486,8 @@ async fn no_store(request: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        read_bounded_identity_response, request_server_mode, validate_request, CreateDeployRequest,
+        read_bounded_identity_response, request_server_mode, request_scope,
+        request_service_target, same_request_shape, validate_request, CreateDeployRequest,
         IdentityCredentialDecision, SubmodulePin, SUBMODULES,
     };
     use axum::routing::get;
@@ -1425,6 +1497,8 @@ mod tests {
     fn valid_request() -> CreateDeployRequest {
         CreateDeployRequest {
             server_mode: "services".to_string(),
+            deployment_scope: "full".to_string(),
+            service_target: None,
             repository: "GHF-Studios/Vapor-Platform-Server".to_string(),
             branch: "main".to_string(),
             commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
@@ -1459,12 +1533,87 @@ mod tests {
     }
 
     #[test]
+    fn accepts_all_allowlisted_service_targets_and_rejects_bad_scope_shapes() {
+        for target in [
+            "atlas",
+            "homepage",
+            "docs",
+            "identity",
+            "diagnostics",
+            "registry",
+            "artifact",
+            "build-cache",
+        ] {
+            let mut request = valid_request();
+            request.deployment_scope = "service".to_string();
+            request.service_target = Some(target.to_string());
+            assert!(validate_request(&request).is_ok(), "target {target}");
+        }
+
+        let mut request = valid_request();
+        request.deployment_scope = "service".to_string();
+        assert!(validate_request(&request).is_err());
+
+        let mut request = valid_request();
+        request.service_target = Some("identity".to_string());
+        assert!(validate_request(&request).is_err());
+
+        let mut request = valid_request();
+        request.deployment_scope = "service".to_string();
+        request.service_target = Some("arbitrary-command".to_string());
+        assert!(validate_request(&request).is_err());
+
+        let mut request = valid_request();
+        request.server_mode = "monolith".to_string();
+        request.deployment_scope = "service".to_string();
+        request.service_target = Some("identity".to_string());
+        assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
+    fn request_summary_selection_fails_closed_for_old_or_invalid_bodies() {
+        let full = serde_json::to_string(&valid_request()).unwrap();
+        assert_eq!(request_scope(&full), Some("full".to_string()));
+        assert_eq!(request_service_target(&full), None);
+
+        let mut scoped = valid_request();
+        scoped.deployment_scope = "service".to_string();
+        scoped.service_target = Some("identity".to_string());
+        let scoped = serde_json::to_string(&scoped).unwrap();
+        assert_eq!(request_scope(&scoped), Some("service".to_string()));
+        assert_eq!(request_service_target(&scoped), Some("identity".to_string()));
+
+        assert_eq!(request_scope(r#"{"server_mode":"services"}"#), None);
+        assert_eq!(request_service_target(r#"{"server_mode":"services"}"#), None);
+    }
+
+    #[test]
+    fn active_request_is_idempotent_only_for_the_same_deployment_shape() {
+        let existing = serde_json::to_string(&valid_request()).unwrap();
+        let same_commit_different_scope = {
+            let mut incoming = valid_request();
+            incoming.deployment_scope = "service".to_string();
+            incoming.service_target = Some("identity".to_string());
+            incoming
+        };
+        assert!(!same_request_shape(&existing, &same_commit_different_scope));
+
+        let same_shape_different_ci_run = {
+            let mut incoming = valid_request();
+            incoming.workflow_url = "https://github.com/GHF-Studios/Vapor-Platform-Server/actions/runs/2".to_string();
+            incoming.summary = "Another CI run for the same deployment shape.".to_string();
+            incoming
+        };
+        assert!(same_request_shape(&existing, &same_shape_different_ci_run));
+    }
+
+    #[test]
     fn parses_legacy_request_without_a_deployment_target_as_unspecified() {
         let legacy = r#"{"repository":"GHF-Studios/Vapor-Platform-Server"}"#;
         assert_eq!(request_server_mode(legacy), None);
         assert_eq!(
             request_server_mode(r#"{"server_mode":"services"}"#),
-            Some("services".to_string())
+            None
         );
     }
 

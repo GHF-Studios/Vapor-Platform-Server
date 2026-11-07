@@ -37,6 +37,10 @@ if [ "${VAPOR_DEPLOY_BOOTSTRAP:-}" != "1" ]; then
     exit 2
   fi
   QUEUE_DB="${VAPOR_PLATFORM_DB:-${VAPOR_PLATFORM_STATE:-${VAPOR_STATE_ROOT}/platform}/platform.sqlite3}"
+  if [ "${VAPOR_DEPLOYMENT_SCOPE:-}" != "full" ]; then
+    echo "error: full-stack deployment requires a full-scope approved request" >&2
+    exit 2
+  fi
   case "${VAPOR_SERVER_MODE}" in
     monolith|services) ;;
     *) echo "error: approved deployment target is missing or invalid" >&2; exit 2 ;;
@@ -45,7 +49,9 @@ if [ "${VAPOR_DEPLOY_BOOTSTRAP:-}" != "1" ]; then
     --id "${VAPOR_APPROVED_DEPLOY_ID}" \
     --version "${VAPOR_APPROVED_DEPLOY_VERSION}" \
     --commit "${APPROVED_REVISION}" \
-    --server-mode "${VAPOR_SERVER_MODE}"
+    --server-mode "${VAPOR_SERVER_MODE}" \
+    --deployment-scope "${VAPOR_DEPLOYMENT_SCOPE}" \
+    --service-target "${VAPOR_SERVICE_TARGET:-}"
 fi
 
 case "${VAPOR_SERVER_MODE}" in
@@ -285,5 +291,9 @@ if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
 else
   retire_service_unit vapor-platform-server.service
 fi
+
+python3 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/deployed_source_manifest.py" \
+  --file "${VAPOR_STATE_ROOT}/operations/deployed-sources.json" \
+  --root "${VAPOR_DEPLOY_ROOT}"
 
 echo "deploy: completed ${VAPOR_REPO_URL}@${VAPOR_BRANCH}"

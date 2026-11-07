@@ -467,6 +467,17 @@ const JS: &str = r#"
       return Number.isFinite(seconds) && seconds > 0 && seconds <= 8640000000000
         ? new Date(seconds * 1000).toLocaleString() : 'not recorded';
     };
+    const serviceDeployTargets = new Set(['atlas', 'homepage', 'docs', 'identity', 'diagnostics', 'registry', 'artifact', 'build-cache']);
+    const validDeploymentSelection = item => {
+      if (!['monolith', 'services'].includes(item.server_mode)) return false;
+      if (item.deployment_scope === 'full') return item.service_target === null;
+      return item.deployment_scope === 'service' && item.server_mode === 'services' && serviceDeployTargets.has(item.service_target);
+    };
+    const deploymentSelectionLabel = item => {
+      if (!validDeploymentSelection(item)) return 'missing or invalid (cannot be approved)';
+      if (item.deployment_scope === 'full') return `Full ${item.server_mode} deployment`;
+      return `Service: ${item.service_target}`;
+    };
     const isExpiredByTime = item => Number(item.expires_at_unix) > 0
       && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000);
     const confirmationForm = (item, labelText, buttonText, submit) => {
@@ -510,7 +521,8 @@ const JS: &str = r#"
     };
     const renderDeploy = (item, card) => {
       appendText(card, 'h3', `${item.repository || 'Unknown repository'} · ${item.branch || 'unknown branch'}`);
-      appendText(card, 'p', `Commit ${item.commit || 'unknown'} · target ${item.server_mode || 'missing or invalid'}`, item.server_mode ? 'muted' : 'error');
+      const selectionValid = validDeploymentSelection(item);
+      appendText(card, 'p', `Commit ${item.commit || 'unknown'} · ${deploymentSelectionLabel(item)}`, selectionValid ? 'muted' : 'error');
       appendText(card, 'p', item.summary || 'No request summary provided.');
       appendText(card, 'p', `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · expires ${humanTime(item.expires_at_unix)}`, 'muted');
       try {
@@ -528,7 +540,7 @@ const JS: &str = r#"
       appendText(card, 'p', 'Approving records the decision and asks Platform to queue this exact target.', 'muted');
       card.append(confirmationForm(item, 'I reviewed this exact revision and target', 'Approve and queue', button => submitDecision(button, 'deploy', item, 'approve', { expected_version: item.version, confirmed: true, reason: 'approved in Platform Approvals' })));
       card.append(confirmationForm(item, 'I intend to reject this request', 'Reject', button => submitDecision(button, 'deploy', item, 'reject', { expected_version: item.version, confirmed: true, reason: 'rejected in Platform Approvals' })));
-      if (!item.server_mode) card.querySelector('button').disabled = true;
+      if (!selectionValid) card.querySelector('form button').disabled = true;
     };
     const renderSsh = (item, card) => {
       appendText(card, 'h3', `${item.fingerprint || 'Unknown key'} · ${item.requested_capabilities?.join(', ') || 'shell only'}`);
@@ -878,16 +890,15 @@ const JS: &str = r#"
           queued: 'queued', expired: 'expired before worker claim',
           failed: 'dispatch failed', unknown: 'dispatch result unknown'
         };
-        const retryLabel = item.server_mode && item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)
+        const selectionValid = validDeploymentSelection(item);
+        const retryLabel = selectionValid && item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)
           ? '; retry available' : '';
         dispatchStage.textContent = `Deployment: ${dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
         const revision = document.createElement('p');
         revision.textContent = `Commit ${item.commit} · tree ${item.tree}`;
         const target = document.createElement('p');
-        target.className = item.server_mode ? 'muted' : 'error';
-        target.textContent = item.server_mode
-          ? `Target: ${item.server_mode === 'services' ? 'Independent services' : 'Monolith'}`
-          : 'Target: missing or invalid (legacy request; cannot be approved)';
+        target.className = selectionValid ? 'muted' : 'error';
+        target.textContent = `Target: ${deploymentSelectionLabel(item)}`;
         const pins = document.createElement('p');
         pins.className = 'muted';
         pins.textContent = `${Array.isArray(item.submodules) ? item.submodules.length : 0} pinned service revisions · expires ${item.expires_at_unix}`;
@@ -921,8 +932,8 @@ const JS: &str = r#"
         }
         details.append(summaryLabel, list);
         card.append(details);
-        const pendingActions = item.server_mode ? ['approve', 'reject'] : ['reject'];
-        for (const decision of (item.status === 'pending' ? pendingActions : item.server_mode && item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
+        const pendingActions = selectionValid ? ['approve', 'reject'] : ['reject'];
+        for (const decision of (item.status === 'pending' ? pendingActions : selectionValid && item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
           const form = document.createElement('form');
           form.className = 'inline';
           const label = document.createElement('label');
@@ -2176,9 +2187,11 @@ mod tests {
         assert!(script.contains("expired: 'expired before worker claim'"));
         assert!(script.contains("? '; retry available' : '';"));
         assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
-        assert!(script.contains("Target: missing or invalid (legacy request; cannot be approved)"));
-        assert!(script.contains("const pendingActions = item.server_mode ? ['approve', 'reject'] : ['reject']"));
-        assert!(script.contains("item.server_mode && item.status === 'approved' && item.retry_eligible"));
+        assert!(script.contains("const validDeploymentSelection = item =>"));
+        assert!(script.contains("serviceDeployTargets.has(item.service_target)"));
+        assert!(script.contains("Target: ${deploymentSelectionLabel(item)}"));
+        assert!(script.contains("const pendingActions = selectionValid ? ['approve', 'reject'] : ['reject']"));
+        assert!(script.contains("selectionValid && item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
     }

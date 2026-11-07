@@ -28,7 +28,10 @@ python3 -m py_compile \
   "${SCRIPT_DIR}/plan_recovery_retention.py" \
   "${SCRIPT_DIR}/restore_host_preflight.py" \
   "${SCRIPT_DIR}/deploy-request-queue.py" \
-  "${SCRIPT_DIR}/verify-deploy-source.py"
+  "${SCRIPT_DIR}/verify-deploy-source.py" \
+  "${SCRIPT_DIR}/service_deploy_map.py" \
+  "${SCRIPT_DIR}/deployed_source_manifest.py" \
+  "${SCRIPT_DIR}/deploy-service.py"
 rm -rf -- "${SCRIPT_DIR}/__pycache__"
 
 echo "test: Atlas source and static site build"

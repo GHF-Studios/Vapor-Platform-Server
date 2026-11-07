@@ -4,6 +4,23 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target from the tested Platform composition
+        required: true
+        type: choice
+        default: full
+        options:
+          - full
+          - atlas
+          - homepage
+          - docs
+          - identity
+          - diagnostics
+          - registry
+          - artifact
+          - build-cache
 
 permissions:
   contents: read
@@ -16,12 +33,13 @@ jobs:
   tested-revision:
     name: Require composed Platform CI
     uses: ./.github/workflows/ci.yml
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
 
   request-approval:
     name: Create pending deploy request
     needs: tested-revision
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Check out the exact tested revision and submodule pins
         uses: actions/checkout@v4
@@ -53,6 +71,7 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_RUN_ID: ${{ github.run_id }}
+          VAPOR_REQUEST_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'full' }}
         run: |
           set -euo pipefail
           payload="$(python3 - <<'PY'
@@ -69,15 +88,25 @@ jobs:
               mode, kind, commit = metadata.split()
               if mode == "160000" and kind == "commit":
                   pins.append({"path": path, "commit": commit})
+          target = os.environ["VAPOR_REQUEST_TARGET"]
+          service_targets = {
+              "atlas", "homepage", "docs", "identity", "diagnostics",
+              "registry", "artifact", "build-cache",
+          }
+          if target != "full" and target not in service_targets:
+              raise SystemExit("unsupported deployment target")
+          scope = "full" if target == "full" else "service"
           payload = {
               "server_mode": "services",
+              "deployment_scope": scope,
+              "service_target": None if scope == "full" else target,
               "repository": os.environ["GITHUB_REPOSITORY"],
               "branch": os.environ["GITHUB_REF_NAME"],
               "commit": os.environ["GITHUB_SHA"],
               "tree": root_tree,
               "submodules": sorted(pins, key=lambda item: item["path"]),
               "workflow_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-              "summary": "Platform CI passed; target is independent services.",
+              "summary": f"Platform CI passed; deployment target is {target}.",
           }
           print(json.dumps(payload, separators=(",", ":")))
           PY

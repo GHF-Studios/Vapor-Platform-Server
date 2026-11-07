@@ -1,5 +1,14 @@
 # Vapor Target Build Snapshots and VPS-Hosted VM Builders Implementation Plan
 
+> **Superseded (2026-11-07):** Do not execute the topology or fallback rules in
+> this historical plan. The current owner-approved contract is
+> [`../../vapor-build-snapshot-contract.md`](../../vapor-build-snapshot-contract.md):
+> an optional second worker may build target candidates, while local builds
+> remain a supported fallback. This older plan's requirement to host both VMs
+> on the primary VPS and reject local fallback is withdrawn. The Build Cache
+> service and signed candidate API are already implemented; future builder
+> work must follow the current contract and its explicit missing prerequisites.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let Vapor install one VPS-built, authenticated Cargo target snapshot for each supported target, produced inside VPS-hosted target-native VMs under the single rolling Vapor/toolchain locks.

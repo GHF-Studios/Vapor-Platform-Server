@@ -23,6 +23,25 @@ REQUEST_VERSION="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["v
 REQUEST_COMMIT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["request"]["commit"])' "${CLAIM}")"
 REQUEST_TREE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["request"]["tree"])' "${CLAIM}")"
 REQUEST_MODE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["request"]["server_mode"])' "${CLAIM}")"
+REQUEST_SCOPE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["request"]["deployment_scope"])' "${CLAIM}")"
+REQUEST_TARGET="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["request"].get("service_target") or "")' "${CLAIM}")"
+REQUEST_ROOT="${VAPOR_DEPLOY_ROOT}"
+SCOPED_WORKTREE=""
+CLEANUP_WARNING=""
+
+remove_scoped_checkout() {
+  local status=$?
+  trap - EXIT
+  if [ -n "${SCOPED_WORKTREE}" ]; then
+    if [[ "${SCOPED_WORKTREE}" != "${VAPOR_DEPLOY_ROOT}.scoped."* ]] || \
+      [ "${SCOPED_WORKTREE}" = "${VAPOR_DEPLOY_ROOT}" ] || [ -L "${SCOPED_WORKTREE}" ] || \
+      ! rm -rf -- "${SCOPED_WORKTREE}"; then
+      echo "deploy-worker: warning: isolated temporary source cleanup failed at ${SCOPED_WORKTREE}" >&2
+      status=1
+    fi
+  fi
+  exit "${status}"
+}
 
 report_result() {
   local result="$1"
@@ -47,6 +66,18 @@ if [[ ! "${REQUEST_COMMIT}" =~ ^[A-Fa-f0-9]{40}$ || ! "${REQUEST_TREE}" =~ ^[A-F
 fi
 if [[ "${REQUEST_MODE}" != "monolith" && "${REQUEST_MODE}" != "services" ]]; then
   fail_claim "request contained an invalid deployment target"
+fi
+if [[ "${REQUEST_SCOPE}" != "full" && "${REQUEST_SCOPE}" != "service" ]]; then
+  fail_claim "request contained an invalid deployment scope"
+fi
+if [[ "${REQUEST_SCOPE}" = "full" && -n "${REQUEST_TARGET}" ]]; then
+  fail_claim "full deployment request unexpectedly named a service target"
+fi
+if [[ "${REQUEST_SCOPE}" = "service" && -z "${REQUEST_TARGET}" ]]; then
+  fail_claim "service deployment request has no service target"
+fi
+if [[ "${REQUEST_SCOPE}" = "service" && "${REQUEST_MODE}" != "services" ]]; then
+  fail_claim "service deployment request requires services mode"
 fi
 if [ ! -d "${VAPOR_DEPLOY_ROOT}/.git" ]; then
   fail_claim "the bootstrapped Platform source checkout is missing"
@@ -85,17 +116,53 @@ if ! python3 "${SCRIPT_DIR}/verify-deploy-source.py" \
   fail_claim "the approved root tree, submodule pins, or first-party source URLs are invalid"
 fi
 
-if ! git -C "${VAPOR_DEPLOY_ROOT}" checkout --detach --force "${REQUEST_COMMIT}"; then
-  fail_claim "could not check out the exact approved root commit"
+if [ "${REQUEST_SCOPE}" = "full" ]; then
+  if ! git -C "${VAPOR_DEPLOY_ROOT}" checkout --detach --force "${REQUEST_COMMIT}"; then
+    fail_claim "could not check out the exact approved root commit"
+  fi
+  git -C "${VAPOR_DEPLOY_ROOT}" submodule sync
+  if ! git -C "${VAPOR_DEPLOY_ROOT}" submodule update --init; then
+    fail_claim "could not check out the approved service submodules"
+  fi
+else
+  SCOPED_WORKTREE="$(mktemp -d "${VAPOR_DEPLOY_ROOT}.scoped.XXXXXXXX")"
+  trap remove_scoped_checkout EXIT
+  # Worktrees with submodules have incomplete Git support; a private clone
+  # gives the temporary checkout its own .git/modules tree and cannot retarget
+  # submodule metadata used by the canonical deployment checkout.
+  if ! git clone --no-checkout --no-hardlinks "${VAPOR_DEPLOY_ROOT}" "${SCOPED_WORKTREE}"; then
+    fail_claim "could not create an isolated temporary source clone"
+  fi
+  REQUEST_ROOT="${SCOPED_WORKTREE}"
+  if ! git -C "${REQUEST_ROOT}" checkout --detach --force "${REQUEST_COMMIT}"; then
+    fail_claim "could not check out the exact approved root commit in the temporary clone"
+  fi
+  REQUEST_SUBMODULE_PATH="$(python3 - "${REQUEST_ROOT}" "${REQUEST_TARGET}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/deploy/scripts")
+from service_deploy_map import target_map
+print(target_map(sys.argv[2])["package_path"])
+PY
+)"
+  git -C "${REQUEST_ROOT}" submodule sync -- "${REQUEST_SUBMODULE_PATH}"
+  if ! git -C "${REQUEST_ROOT}" submodule update --init -- "${REQUEST_SUBMODULE_PATH}"; then
+    fail_claim "could not check out the approved target submodule in the isolated clone"
+  fi
 fi
-git -C "${VAPOR_DEPLOY_ROOT}" submodule sync
-if ! git -C "${VAPOR_DEPLOY_ROOT}" submodule update --init; then
-  fail_claim "could not check out the approved service submodules"
+if ! python3 "${REQUEST_ROOT}/deploy/scripts/verify-deploy-source.py" \
+  --root "${REQUEST_ROOT}" \
+  --commit "${REQUEST_COMMIT}" \
+  --tree "${REQUEST_TREE}" \
+  --pins-json "${PINS_JSON}" >/dev/null; then
+  fail_claim "the checked-out root tree, submodule pins, or first-party source URLs are invalid"
 fi
-for path in $(python3 - "${CLAIM}" <<'PY'
+for path in $(python3 - "${CLAIM}" "${REQUEST_SUBMODULE_PATH:-}" <<'PY'
 import json, sys
+scope = json.loads(sys.argv[1])["request"]["deployment_scope"]
+target_path = sys.argv[2]
 for item in json.loads(sys.argv[1])["request"]["submodules"]:
-    print(item["path"])
+    if scope == "full" or item["path"] == target_path:
+        print(item["path"])
 PY
 ); do
   expected="$(python3 - "${CLAIM}" "${path}" <<'PY'
@@ -104,24 +171,55 @@ pins = json.loads(sys.argv[1])["request"]["submodules"]
 print(next(item["commit"] for item in pins if item["path"] == sys.argv[2]))
 PY
 )"
-  actual="$(git -C "${VAPOR_DEPLOY_ROOT}/${path}" rev-parse HEAD)"
+  actual="$(git -C "${REQUEST_ROOT}/${path}" rev-parse HEAD)"
   if [ "${actual}" != "${expected}" ]; then
     fail_claim "submodule ${path} is not at its approved commit"
   fi
 done
 
 set +e
-VAPOR_APPROVED_DEPLOY_ID="${REQUEST_ID}" \
-VAPOR_APPROVED_DEPLOY_VERSION="${REQUEST_VERSION}" \
-VAPOR_APPROVED_REVISION="${REQUEST_COMMIT}" \
-VAPOR_SERVER_MODE="${REQUEST_MODE}" \
-"${VAPOR_DEPLOY_ROOT}/deploy/scripts/deploy.sh" --approved "${REQUEST_COMMIT}"
-DEPLOY_STATUS=$?
+if [ "${REQUEST_SCOPE}" = "full" ]; then
+  VAPOR_APPROVED_DEPLOY_ID="${REQUEST_ID}" \
+  VAPOR_APPROVED_DEPLOY_VERSION="${REQUEST_VERSION}" \
+  VAPOR_APPROVED_REVISION="${REQUEST_COMMIT}" \
+  VAPOR_SERVER_MODE="${REQUEST_MODE}" \
+  VAPOR_DEPLOYMENT_SCOPE="${REQUEST_SCOPE}" \
+  VAPOR_SERVICE_TARGET="${REQUEST_TARGET}" \
+  "${REQUEST_ROOT}/deploy/scripts/deploy.sh" --approved "${REQUEST_COMMIT}"
+  DEPLOY_STATUS=$?
+else
+  VAPOR_APPROVED_DEPLOY_ID="${REQUEST_ID}" \
+  VAPOR_APPROVED_DEPLOY_VERSION="${REQUEST_VERSION}" \
+  VAPOR_APPROVED_REVISION="${REQUEST_COMMIT}" \
+  VAPOR_SERVER_MODE="${REQUEST_MODE}" \
+  VAPOR_DEPLOYMENT_SCOPE="${REQUEST_SCOPE}" \
+  VAPOR_SERVICE_TARGET="${REQUEST_TARGET}" \
+  VAPOR_APPROVED_SOURCE_ROOT="${REQUEST_ROOT}" \
+  VAPOR_APPROVED_TREE="${REQUEST_TREE}" \
+  python3 "${REQUEST_ROOT}/deploy/scripts/deploy-service.py" --approved "${REQUEST_COMMIT}" --target "${REQUEST_TARGET}"
+  DEPLOY_STATUS=$?
+fi
 set -e
 
+if [ -n "${SCOPED_WORKTREE}" ]; then
+  if [[ "${SCOPED_WORKTREE}" == "${VAPOR_DEPLOY_ROOT}.scoped."* ]] && \
+    [ "${SCOPED_WORKTREE}" != "${VAPOR_DEPLOY_ROOT}" ] && [ ! -L "${SCOPED_WORKTREE}" ] && \
+    rm -rf -- "${SCOPED_WORKTREE}"; then
+    SCOPED_WORKTREE=""
+  else
+    CLEANUP_WARNING="; isolated temporary source cleanup failed at ${SCOPED_WORKTREE}"
+  fi
+  trap - EXIT
+fi
+
 if [ "${DEPLOY_STATUS}" -eq 0 ]; then
-  report_result succeeded "approved commit ${REQUEST_COMMIT} deployed"
+  report_result succeeded "approved ${REQUEST_SCOPE} deployment ${REQUEST_TARGET:-all} for ${REQUEST_COMMIT} completed${CLEANUP_WARNING}"
 else
-  report_result failed "approved commit ${REQUEST_COMMIT} deployment failed with status ${DEPLOY_STATUS}"
+  case "${DEPLOY_STATUS}" in
+    2) failure_detail="service deployment ${REQUEST_TARGET} failed; previous executable and service state were restored" ;;
+    3) failure_detail="service deployment ${REQUEST_TARGET} failed and rollback is incomplete; inspect preserved recovery material" ;;
+    *) failure_detail="approved ${REQUEST_SCOPE} deployment ${REQUEST_TARGET:-all} for ${REQUEST_COMMIT} failed with status ${DEPLOY_STATUS}" ;;
+  esac
+  report_result failed "${failure_detail}${CLEANUP_WARNING}"
 fi
 exit "${DEPLOY_STATUS}"

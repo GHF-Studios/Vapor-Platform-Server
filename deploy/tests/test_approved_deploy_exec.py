@@ -36,6 +36,29 @@ class ApprovedDeployExecTests(unittest.TestCase):
 
         self.assertIn('"server_mode": "services"', workflow)
 
+    def test_manual_target_workflow_is_main_only_and_emits_typed_scope(self) -> None:
+        workflow = REQUEST_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("atlas", workflow)
+        self.assertIn("build-cache", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn('"deployment_scope": scope', workflow)
+        self.assertIn('"service_target": None if scope == "full" else target', workflow)
+
+    def test_scoped_worker_uses_isolated_clone_and_only_checks_out_target_submodule(self) -> None:
+        worker = WORKER_SCRIPT.read_text(encoding="utf-8")
+
+        full_branch = worker.index('if [ "${REQUEST_SCOPE}" = "full" ]; then')
+        checkout = worker.index('git -C "${VAPOR_DEPLOY_ROOT}" checkout --detach --force')
+        scoped_clone = worker.index('git clone --no-checkout --no-hardlinks')
+        self.assertLess(full_branch, checkout)
+        self.assertLess(checkout, scoped_clone)
+        self.assertIn('git -C "${REQUEST_ROOT}" submodule update --init -- "${REQUEST_SUBMODULE_PATH}"', worker)
+        self.assertIn('scope == "full" or item["path"] == target_path', worker)
+        self.assertNotIn('worktree add', worker)
+        self.assertIn('VAPOR_APPROVED_SOURCE_ROOT="${REQUEST_ROOT}"', worker)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,6 +52,26 @@ for smoke testing only; the intended public endpoint remains
   services (`VAPOR_SERVER_MODE=services`). The composed mode requires the root
   `Cargo.lock`. It writes a safe latest-result record under
   `${VAPOR_STATE_ROOT}/operations/`.
+- `scripts/deploy-service.py`: deploy one approved, allowlisted target in
+  services mode. The request pins the complete Platform composition; the
+  worker builds only the selected package from an isolated temporary clone,
+  initializes only that target submodule, and leaves the canonical checkout
+  and its submodule metadata unchanged. Daemon targets replace one
+  `root:vapor` executable, stop/start only its unit, and run fixed health
+  checks. Atlas swaps its static `current` release link and checks the public
+  route without restarting daemons. Failed updates restore the selected target
+  and its manifest; incomplete rollback preserves its recovery copy. Small
+  mutable service state is snapshotted with ownership and modes retained.
+  Artifact releases and Build Cache target archives are immutable, so a
+  binary-only update preserves those payload trees in place rather than
+  copying potentially multi-gigabyte outputs.
+- `scripts/service_deploy_map.py`: closed target map for packages, executables,
+  units, state policies, and public/loopback health routes. Target values come
+  from the approved request; paths and operations come only from this map.
+- `scripts/deployed_source_manifest.py`: atomically records each live target's
+  Platform composition and pinned service revision under
+  `${VAPOR_STATE_ROOT}/operations/deployed-sources.json`; full deployments
+  refresh the complete map and scoped deployments update only their target.
 - `scripts/run-approved-deploy.sh`: atomically claim one approved, unexpired
   request, verify its immutable root tree and every submodule gitlink, check the
   commit remains reachable from the protected branch, verify the exact

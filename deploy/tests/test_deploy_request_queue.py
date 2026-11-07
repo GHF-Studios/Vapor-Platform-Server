@@ -48,8 +48,11 @@ class DeployRequestQueueTests(unittest.TestCase):
         )
         return db
 
-    def _request(self, server_mode=None):
+    def _request(self, server_mode="services", deployment_scope="full", service_target=None):
         request = {
+            "server_mode": server_mode,
+            "deployment_scope": deployment_scope,
+            "service_target": service_target,
             "repository": "GHF-Studios/Vapor-Platform-Server",
             "branch": "main",
             "commit": "0" * 40,
@@ -58,27 +61,77 @@ class DeployRequestQueueTests(unittest.TestCase):
             "workflow_url": "https://github.com/GHF-Studios/Vapor-Platform-Server/actions/runs/1",
             "summary": "CI passed",
         }
-        if server_mode is not None:
-            request["server_mode"] = server_mode
         return request
 
     def test_claim_preserves_explicit_deployment_target(self) -> None:
-        db = self._database_with_request(self._request("services"))
+        db = self._database_with_request(self._request())
         output = io.StringIO()
 
         with contextlib.redirect_stdout(output):
             result = QUEUE.claim(db, "req")
 
         self.assertEqual(result, 0)
-        self.assertEqual(json.loads(output.getvalue())["request"]["server_mode"], "services")
+        claimed = json.loads(output.getvalue())["request"]
+        self.assertEqual(claimed["server_mode"], "services")
+        self.assertEqual(claimed["deployment_scope"], "full")
+        self.assertIsNone(claimed["service_target"])
         db.close()
 
+    def test_claim_preserves_service_scope_and_target(self) -> None:
+        request = self._request(deployment_scope="service", service_target="identity")
+        db = self._database_with_request(request)
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = QUEUE.claim(db, "req")
+
+        self.assertEqual(result, 0)
+        claimed = json.loads(output.getvalue())["request"]
+        self.assertEqual(claimed["deployment_scope"], "service")
+        self.assertEqual(claimed["service_target"], "identity")
+        db.close()
+
+    def test_claim_fails_closed_for_invalid_scope_target_combinations(self) -> None:
+        invalid_requests = [
+            self._request(deployment_scope="service", service_target=None),
+            self._request(deployment_scope="full", service_target="identity"),
+            self._request(deployment_scope="service", service_target="unknown"),
+            self._request("monolith", deployment_scope="service", service_target="identity"),
+            self._request(deployment_scope="partial", service_target=None),
+        ]
+        for index, request in enumerate(invalid_requests):
+            with self.subTest(index=index):
+                db = self._database_with_request(request)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = QUEUE.claim(db, "req")
+                row = db.execute(
+                    "SELECT status, dispatch_state, dispatch_detail FROM platform_deploy_requests WHERE id='req'"
+                ).fetchone()
+                self.assertEqual(result, 0)
+                self.assertEqual(output.getvalue().strip(), "null")
+                self.assertEqual(row["status"], "failed")
+                self.assertEqual(row["dispatch_state"], "failed")
+                self.assertIn("scope", row["dispatch_detail"].lower())
+                db.close()
+
     def test_verify_rejects_target_different_from_approved_request(self) -> None:
-        request = self._request("services")
+        request = self._request()
         db = self._database_with_request(request, status="executing", version=3)
 
         with self.assertRaisesRegex(ValueError, "topology"):
-            QUEUE.verify_claim(db, "req", 3, request["commit"], "monolith")
+            QUEUE.verify_claim(db, "req", 3, request["commit"], "monolith", "full", None)
+
+        db.close()
+
+    def test_verify_rejects_scope_or_target_different_from_approved_request(self) -> None:
+        request = self._request(deployment_scope="service", service_target="identity")
+        db = self._database_with_request(request, status="executing", version=3)
+
+        with self.assertRaisesRegex(ValueError, "scope"):
+            QUEUE.verify_claim(db, "req", 3, request["commit"], "services", "full", None)
+        with self.assertRaisesRegex(ValueError, "target"):
+            QUEUE.verify_claim(db, "req", 3, request["commit"], "services", "service", "registry")
 
         db.close()
 
@@ -94,7 +147,7 @@ class DeployRequestQueueTests(unittest.TestCase):
             "branch TEXT NOT NULL, commit_hash TEXT NOT NULL, tree_hash TEXT NOT NULL, "
             "workflow_url TEXT NOT NULL, summary TEXT NOT NULL, submodules_json TEXT NOT NULL)"
         )
-        request = self._request()
+        request = {key: value for key, value in self._request().items() if key != "deployment_scope" and key != "service_target"}
         request["summary"] = "old request without target"
         raw = json.dumps(request, separators=(",", ":"))
         db.execute(
