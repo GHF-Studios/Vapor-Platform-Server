@@ -53,6 +53,34 @@ fn valid_identity_authz_endpoint(endpoint: &str) -> bool {
             | "http://127.0.0.1:7113/v1/internal/authorization/check"
     )
 }
+
+#[cfg_attr(not(unix), allow(dead_code))]
+async fn record_stopped_deploy_failure(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    version: i64,
+) -> Result<(), (String, &'static str)> {
+    let result = sqlx::query(
+        "UPDATE platform_deploy_requests
+         SET status = 'failed', dispatch_state = 'unknown', version = version + 1,
+             dispatch_detail = 'worker stopped before recording a result; execution outcome is unknown',
+             result_detail = 'worker stopped before recording a result; request requires a new approval'
+         WHERE id = ? AND status = 'executing' AND version = ?",
+    )
+    .bind(id)
+    .bind(version)
+    .execute(pool)
+    .await
+    .map_err(|_| (id.to_string(), "could not record stopped deploy worker"))?;
+    if result.rows_affected() != 1 {
+        return Err((
+            id.to_string(),
+            "deploy execution state changed during reconciliation",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 mod unix_impl {
     use base64::Engine;
@@ -669,24 +697,7 @@ mod unix_impl {
             return Err((id.to_string(), "deploy worker is not stopped"));
         }
 
-        let result = sqlx::query(
-            "UPDATE platform_deploy_requests
-             SET status = 'failed', version = version + 1,
-                 result_detail = 'worker stopped before recording a result; request requires a new approval'
-             WHERE id = ? AND status = 'executing' AND version = ?",
-        )
-        .bind(id)
-        .bind(version)
-        .execute(pool)
-        .await
-        .map_err(|_| (id.to_string(), "could not record stopped deploy worker"))?;
-        if result.rows_affected() != 1 {
-            return Err((
-                id.to_string(),
-                "deploy execution state changed during reconciliation",
-            ));
-        }
-        Ok(())
+        record_stopped_deploy_failure(pool, id, version).await
     }
 
     async fn grant_ssh(
@@ -1479,7 +1490,53 @@ fn main() {
 
 #[cfg(test)]
 mod endpoint_tests {
-    use super::{valid_deployment_target, valid_identity_authz_endpoint};
+    use super::{
+        record_stopped_deploy_failure, valid_deployment_target, valid_identity_authz_endpoint,
+    };
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::Row;
+
+    #[tokio::test]
+    async fn reconciliation_closes_the_dispatch_lifecycle() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE platform_deploy_requests (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                dispatch_state TEXT NOT NULL,
+                dispatch_detail TEXT,
+                result_detail TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO platform_deploy_requests
+             (id, status, version, dispatch_state) VALUES ('request-1', 'executing', 4, 'claimed')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        record_stopped_deploy_failure(&pool, "request-1", 4)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT status, dispatch_state FROM platform_deploy_requests WHERE id='request-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("status"), "failed");
+        assert_eq!(row.get::<String, _>("dispatch_state"), "unknown");
+    }
 
     #[test]
     fn deployment_target_must_be_explicit_and_supported() {

@@ -142,6 +142,12 @@ environment contents, or credentials.
 `deploy/scripts/state-bundle-validate.py` before extraction or stopping
 services.
 
+Validation also caps archives at 100,000 entries, 2 GiB per regular file, and
+8 GiB total expanded regular-file data. These limits are checked from tar
+headers before restore extracts any member, preventing a valid-looking archive
+from exhausting the staging filesystem through a large member set or compressed
+expansion.
+
 Before staging or stopping anything, restore also refuses symlinked/masked
 Vapor units, non-regular managed unit entries, and a symlinked Caddyfile path;
 rollback does not silently erase those host policies. Pre-restore copies use a

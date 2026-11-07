@@ -26,6 +26,11 @@ RECOVERY_KIT_FILES = {
     "README.txt",
     "SHA256SUMS",
 }
+# Restore extracts the validated bundle to a temporary directory before applying
+# state. Bound both archive complexity and expanded disk use before extraction.
+MAX_MEMBER_COUNT = 100_000
+MAX_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
+MAX_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
 
 
 def normalized_parts(name: str) -> tuple[str, ...]:
@@ -121,10 +126,21 @@ def validate_bundle(path: pathlib.Path) -> None:
     service_units: set[str] = set()
     deployed_sources_member: tarfile.TarInfo | None = None
     recovery_kit_members: dict[str, tarfile.TarInfo] = {}
+    member_count = 0
+    total_bytes = 0
 
     try:
         with tarfile.open(path, "r:gz") as archive:
             for member in archive:
+                member_count += 1
+                if member_count > MAX_MEMBER_COUNT:
+                    raise ValidationError("bundle exceeds the archive member count limit")
+                if member.isfile():
+                    if member.size < 0 or member.size > MAX_MEMBER_BYTES:
+                        raise ValidationError("bundle member exceeds the expanded member size limit")
+                    total_bytes += member.size
+                    if total_bytes > MAX_TOTAL_BYTES:
+                        raise ValidationError("bundle exceeds the total expanded size limit")
                 parts = validate_member(member)
                 normalized_name = "/".join(parts)
                 if normalized_name in names:

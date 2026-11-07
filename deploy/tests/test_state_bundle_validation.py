@@ -7,6 +7,7 @@ import pathlib
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -170,6 +171,24 @@ class StateBundleValidationTests(unittest.TestCase):
         members = [entry for entry in valid_members() if not entry[0].endswith("recovery-kit/README.txt")]
         with self.assertRaisesRegex(validator.ValidationError, "recovery kit"):
             validator.validate_bundle(make_bundle(members))
+
+    def test_rejects_a_member_larger_than_the_expanded_size_limit(self) -> None:
+        with mock.patch.object(validator, "MAX_MEMBER_BYTES", 32):
+            bundle = make_bundle(valid_members() + [(f"{ROOT}/state/large.bin", "file", b"x" * 33)])
+            with self.assertRaisesRegex(validator.ValidationError, "member size limit"):
+                validator.validate_bundle(bundle)
+
+    def test_rejects_total_expanded_size_before_extracting_members(self) -> None:
+        with mock.patch.object(validator, "MAX_TOTAL_BYTES", 256):
+            bundle = make_bundle(valid_members())
+            with self.assertRaisesRegex(validator.ValidationError, "expanded size limit"):
+                validator.validate_bundle(bundle)
+
+    def test_rejects_too_many_archive_members(self) -> None:
+        with mock.patch.object(validator, "MAX_MEMBER_COUNT", 4):
+            bundle = make_bundle(valid_members())
+            with self.assertRaisesRegex(validator.ValidationError, "member count limit"):
+                validator.validate_bundle(bundle)
 
 
 if __name__ == "__main__":

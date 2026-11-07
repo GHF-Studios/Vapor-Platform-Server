@@ -1,5 +1,22 @@
 # Vapor server deployment status
 
+## Recovery and reconciled-deploy hardening (2026-11-07 06:45 UTC)
+
+- Recovery validation now rejects more than 100,000 archive entries, any
+  regular file larger than 2 GiB, or total expanded regular-file data above
+  8 GiB before restore extracts the archive.
+- If an executing deployment worker has stopped without recording its result,
+  reconciliation now records `dispatch_state=unknown` with an explicit detail
+  instead of leaving the contradictory `claimed` state. The deployment request
+  remains closed as failed and requires a fresh approval; the deployment effect
+  itself is still explicitly unknown.
+- Regression tests cover each recovery bound and the stopped-worker lifecycle
+  transition. The full local Platform test recipe passed after these changes;
+  the latest successful GitHub run (42347768694) predates them, so a new CI run
+  is required.
+- SSH read-only probes using both the root key and the same key for `leslieghf`
+  were rejected. No VPS changes were made.
+
 ## Approval dispatch lifecycle follow-up (2026-11-07 06:30 UTC)
 
 - The deployment approval endpoint and worker now record distinct queued,
