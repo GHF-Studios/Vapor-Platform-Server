@@ -133,6 +133,13 @@ write_operation_record() {
     rm -f -- "$temporary"
     return 1
   fi
+  local platform_database="${VAPOR_PLATFORM_DB:-${VAPOR_PLATFORM_STATE:-${VAPOR_STATE_ROOT}/platform}/platform.sqlite3}"
+  if ! runuser -u "${VAPOR_USER}" -- python3 "${SCRIPT_DIR}/operation_history.py" \
+    "$platform_database" "$operation" "$result" "$started_at_utc" \
+    "$finished_at_utc" "$revision" "$server_mode"; then
+    echo "warning: operation history could not be appended" >&2
+    return 1
+  fi
 }
 
 wait_for_http() {

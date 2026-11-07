@@ -268,9 +268,10 @@ truth for this pass.
   exposing or joining owner databases from the Platform shell.
 - [x] When approval is persisted but dispatch fails, report both stages and
   any retry eligibility instead of displaying an ambiguous generic 503.
-- [ ] Add owner-defined cursor pagination and durable multi-entry deploy/
-  restore operation history. Current owner APIs are limited to their latest
-  200 request records; do not paper over this with a Platform-owned ledger.
+- [x] Add owner-defined keyset pagination to Platform deployment and temporary
+  access APIs, and let History load older Platform-owned records on demand.
+- [x] Add durable multi-entry deploy/restore operation history, owned by
+  Platform. Do not create a cross-service request ledger.
 - [ ] Identity must define a durable expiry sweep and audit event for pending
   permission requests that pass their TTL.
 

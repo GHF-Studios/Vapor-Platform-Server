@@ -280,9 +280,12 @@ complete admin product.
 - A source outage is local to that source and does not erase records returned
   by other services. Identify which service supplied each record and when its
   records were refreshed.
-- The current APIs return at most 200 recent records per owner. Shared
-  cursor-based pagination and durable Platform deploy/restore history require
-  owner contracts and remain outside this slice.
+- Platform deployment and temporary-access APIs support stable keyset
+  pagination with bounded pages up to 200 records. History loads additional
+  Platform pages on demand. Identity still owns its own request-history
+  contract. Platform deploy/restore outcomes are retained in the
+  Platform-owned operation-history table and shown as a separately paginated
+  History source; this does not create a cross-service request ledger.
 - An Identity request can pass its expiry timestamp while its persisted status
   remains `pending`; the current expiry transition happens when an approval is
   attempted. The dashboard may show this as expired-by-time, but must not

@@ -103,21 +103,29 @@ than deleting an uncertain recovery point.
 
 ## Admin deployment/recovery status
 
-The Platform Operations page reads a single root-owned deployment/recovery
-status record at `${VAPOR_STATE_ROOT}/operations/latest.json` (configured as
+The Platform Operations page reads the current deployment/recovery status
+record at `${VAPOR_STATE_ROOT}/operations/latest.json` (configured as
 `VAPOR_PLATFORM_OPERATIONS_FILE` for the Platform process). Deploy and restore
 scripts write it via a same-directory temporary file and atomic rename. The
 containing directory is `root:vapor` mode `0750`; the record is `root:vapor`
-mode `0640` so the read-only Platform process can inspect it.
+mode `0640` so the read-only Platform process can inspect it. The History view
+also reads append-only deploy/restore outcomes from the Platform-owned
+`platform_operation_history` table in `${VAPOR_STATE_ROOT}/platform/platform.sqlite3`.
+The deploy/restore scripts invoke the append helper as the Platform service
+account so SQLite and WAL files remain writable by the running Platform process.
+Each outcome has a unique operation ID and stable cursor key; history is not a
+cross-service request ledger.
 
 Schema version 1 contains only the operation (`deploy` or `restore`), result
 (`success` or `failed`), start and finish UTC timestamps, checked-out server
 revision (or `unknown`), and runtime mode (`monolith` or `services`). The
 reader bounds the file to 4 KiB, rejects unknown fields and invalid values, and
-returns no raw file content or filesystem location. The endpoint requires a
-root Identity session and is private/no-store. The record is a current status
-pointer, not an append-only audit log or proof that every service feature is
-ready; detailed operator evidence remains in the deployment logs and runbooks.
+returns no raw file content or filesystem location. Both endpoints require a
+root Identity session and are private/no-store. The latest record remains a
+current status pointer; operation history is a durable outcome list, not an
+append-only audit log of every operator action or proof that every service
+feature is ready. Detailed operator evidence remains in deployment logs and
+runbooks.
 
 Independent deployments also maintain
 `${VAPOR_STATE_ROOT}/operations/deployed-sources.json`. Schema version 1 maps

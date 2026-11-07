@@ -1,5 +1,6 @@
+use crate::pagination::{Page, PageCursor, PageQuery};
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
@@ -14,7 +15,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const REQUEST_TTL_SECONDS: i64 = 3 * 24 * 60 * 60;
-const MAX_REQUESTS: i64 = 200;
 const DISPATCH_STALE_SECONDS: i64 = 30;
 const SOURCE_REPOSITORY: &str = "GHF-Studios/Vapor-Platform-Server";
 const DEPLOY_BRANCH: &str = "main";
@@ -183,6 +183,8 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_platform_deploy_requests_state ON platform_deploy_requests(status, expires_at_unix, created_at_unix)")
         .execute(&pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_platform_deploy_requests_created_id ON platform_deploy_requests(created_at_unix DESC, id DESC)")
+        .execute(&pool).await?;
     sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_deploy_requests_one_active_commit ON platform_deploy_requests(commit_hash) WHERE status IN ('pending','approved','executing')")
         .execute(&pool).await?;
     crate::deploy_request_schema::ensure_dispatch_columns(&pool).await?;
@@ -336,7 +338,11 @@ fn same_request_shape(stored_json: &str, incoming: &CreateDeployRequest) -> bool
         && stored.service_target == incoming.service_target
 }
 
-async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderMap) -> Response {
+async fn list_requests(
+    State(state): State<DeployRequestState>,
+    headers: HeaderMap,
+    Query(query): Query<PageQuery>,
+) -> Response {
     let owner = match require_root(&state, &headers).await {
         Ok(_) => None,
         Err(root_failure) => {
@@ -358,11 +364,25 @@ async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderM
     {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    let rows = match fetch_request_rows(&state.pool, owner.as_deref()).await {
-        Ok(rows) => rows,
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    let page_size = query.page_size();
+    let cursor = match query.decoded_cursor() {
+        Ok(cursor) => cursor,
+        Err(()) => return (StatusCode::BAD_REQUEST, "invalid pagination cursor\n").into_response(),
     };
-    let requests = rows
+    let rows =
+        match fetch_request_rows(&state.pool, owner.as_deref(), cursor.as_ref(), page_size).await {
+            Ok(rows) => rows,
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+    let page = match Page::from_items(rows, page_size, |row| PageCursor {
+        created_at_unix: row.get("created_at_unix"),
+        id: row.get("id"),
+    }) {
+        Ok(page) => page,
+        Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let requests = page
+        .items
         .into_iter()
         .filter_map(|row| {
             let submodules: Vec<SubmodulePin> =
@@ -408,31 +428,50 @@ async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderM
             })
         })
         .collect::<Vec<_>>();
-    Json(requests).into_response()
+    Json(Page {
+        items: requests,
+        next_cursor: page.next_cursor,
+    })
+    .into_response()
 }
 
 async fn fetch_request_rows(
     pool: &SqlitePool,
     owner_credential_id: Option<&str>,
+    cursor: Option<&PageCursor>,
+    page_size: usize,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
     let query = "SELECT id, requester_profile_id, requester_credential_id, repository, branch, commit_hash, tree_hash, submodules_json, request_json, workflow_url,
                         summary, status, version, created_at_unix, expires_at_unix, decided_at_unix, decision_reason, result_detail,
                         dispatch_state, dispatch_attempts, dispatch_attempted_at_unix, dispatch_detail
                  FROM platform_deploy_requests";
-    if let Some(owner) = owner_credential_id {
-        sqlx::query(&format!(
-            "{query} WHERE requester_credential_id = ? ORDER BY created_at_unix DESC LIMIT ?"
-        ))
-        .bind(owner)
-        .bind(MAX_REQUESTS)
-        .fetch_all(pool)
-        .await
+    let limit = (page_size + 1) as i64;
+    let cursor_clause = " AND (created_at_unix < ? OR (created_at_unix = ? AND id < ?))";
+    let order_limit = " ORDER BY created_at_unix DESC, id DESC LIMIT ?";
+    let mut statement = if owner_credential_id.is_some() {
+        format!("{query} WHERE requester_credential_id = ?")
     } else {
-        sqlx::query(&format!("{query} ORDER BY created_at_unix DESC LIMIT ?"))
-            .bind(MAX_REQUESTS)
-            .fetch_all(pool)
-            .await
+        query.to_owned()
+    };
+    if cursor.is_some() {
+        statement.push_str(if owner_credential_id.is_some() {
+            cursor_clause
+        } else {
+            " WHERE (created_at_unix < ? OR (created_at_unix = ? AND id < ?))"
+        });
     }
+    statement.push_str(order_limit);
+    let mut query = sqlx::query(&statement);
+    if let Some(owner) = owner_credential_id {
+        query = query.bind(owner);
+    }
+    if let Some(cursor) = cursor {
+        query = query
+            .bind(cursor.created_at_unix)
+            .bind(cursor.created_at_unix)
+            .bind(&cursor.id);
+    }
+    query.bind(limit).fetch_all(pool).await
 }
 
 async fn expire_requests(pool: &SqlitePool, now: i64) -> Result<(), sqlx::Error> {
@@ -787,7 +826,7 @@ async fn dispatch_approved_authorized(
         dispatch_state,
         detail,
     )
-        .await
+    .await
     {
         Ok(recorded) => recorded,
         Err(error) => {
@@ -1513,12 +1552,14 @@ mod platform_ops_contract_tests {
         assert_eq!(error.category, "helper_protocol_mismatch");
         assert_eq!(error.state, "failed");
         assert!(error.public_message.contains("different request protocol"));
-        assert!(!helper_interactive_argv_mismatch(&PlatformOperationResult {
-            ok: false,
-            operation_id: "unexpected-request".to_owned(),
-            state: "failed".to_owned(),
-            detail: "arguments are not accepted for interactive operations".to_owned(),
-        }));
+        assert!(!helper_interactive_argv_mismatch(
+            &PlatformOperationResult {
+                ok: false,
+                operation_id: "unexpected-request".to_owned(),
+                state: "failed".to_owned(),
+                detail: "arguments are not accepted for interactive operations".to_owned(),
+            }
+        ));
     }
 
     #[test]
@@ -1676,12 +1717,22 @@ fn validate_request(request: &CreateDeployRequest) -> Result<(), &'static str> {
     if !matches!(request.server_mode.as_str(), "monolith" | "services") {
         return Err("server_mode must be 'monolith' or 'services'\n");
     }
-    match (request.deployment_scope.as_str(), request.service_target.as_deref()) {
+    match (
+        request.deployment_scope.as_str(),
+        request.service_target.as_deref(),
+    ) {
         ("full", None) => {}
         ("service", Some(target)) if request.server_mode == "services" => {
             if !matches!(
                 target,
-                "atlas" | "homepage" | "docs" | "identity" | "diagnostics" | "registry" | "artifact" | "build-cache"
+                "atlas"
+                    | "homepage"
+                    | "docs"
+                    | "identity"
+                    | "diagnostics"
+                    | "registry"
+                    | "artifact"
+                    | "build-cache"
             ) {
                 return Err("service_target is not an allowlisted deployment target\n");
             }
@@ -1786,12 +1837,15 @@ async fn no_store(request: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        read_bounded_identity_response, request_server_mode, request_scope,
+        fetch_request_rows, read_bounded_identity_response, request_scope, request_server_mode,
         request_service_target, same_request_shape, validate_request, CreateDeployRequest,
         IdentityCredentialDecision, SubmodulePin, SUBMODULES,
     };
+    use crate::pagination::{Page, PageCursor};
     use axum::routing::get;
     use axum::Router;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::Row;
     use tokio::net::TcpListener;
 
     fn valid_request() -> CreateDeployRequest {
@@ -1814,6 +1868,60 @@ mod tests {
                 .to_string(),
             summary: "Composed Platform CI passed.".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn deployment_request_pages_are_stable_when_timestamps_tie() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE platform_deploy_requests (id TEXT, requester_profile_id TEXT, requester_credential_id TEXT, repository TEXT, branch TEXT, commit_hash TEXT, tree_hash TEXT, submodules_json TEXT, request_json TEXT, workflow_url TEXT, summary TEXT, status TEXT, version INTEGER, created_at_unix INTEGER, expires_at_unix INTEGER, decided_at_unix INTEGER, decision_reason TEXT, result_detail TEXT, dispatch_state TEXT, dispatch_attempts INTEGER, dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT)")
+            .execute(&pool).await.unwrap();
+        for id in ["a", "b", "c"] {
+            sqlx::query(
+                "INSERT INTO platform_deploy_requests (id, created_at_unix) VALUES (?, 100)",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let first = fetch_request_rows(&pool, None, None, 2).await.unwrap();
+        let first = Page::from_items(first, 2, |row| PageCursor {
+            created_at_unix: row.get("created_at_unix"),
+            id: row.get("id"),
+        })
+        .unwrap();
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|row| row.get::<String, _>("id"))
+                .collect::<Vec<_>>(),
+            vec!["c", "b"]
+        );
+
+        let cursor = PageCursor::decode(first.next_cursor.as_deref().unwrap()).unwrap();
+        let second = fetch_request_rows(&pool, None, Some(&cursor), 2)
+            .await
+            .unwrap();
+        let second = Page::from_items(second, 2, |row| PageCursor {
+            created_at_unix: row.get("created_at_unix"),
+            id: row.get("id"),
+        })
+        .unwrap();
+        assert_eq!(
+            second
+                .items
+                .iter()
+                .map(|row| row.get::<String, _>("id"))
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+        assert!(second.next_cursor.is_none());
     }
 
     #[test]
@@ -1881,10 +1989,16 @@ mod tests {
         scoped.service_target = Some("identity".to_string());
         let scoped = serde_json::to_string(&scoped).unwrap();
         assert_eq!(request_scope(&scoped), Some("service".to_string()));
-        assert_eq!(request_service_target(&scoped), Some("identity".to_string()));
+        assert_eq!(
+            request_service_target(&scoped),
+            Some("identity".to_string())
+        );
 
         assert_eq!(request_scope(r#"{"server_mode":"services"}"#), None);
-        assert_eq!(request_service_target(r#"{"server_mode":"services"}"#), None);
+        assert_eq!(
+            request_service_target(r#"{"server_mode":"services"}"#),
+            None
+        );
     }
 
     #[test]
@@ -1900,7 +2014,8 @@ mod tests {
 
         let same_shape_different_ci_run = {
             let mut incoming = valid_request();
-            incoming.workflow_url = "https://github.com/GHF-Studios/Vapor-Platform-Server/actions/runs/2".to_string();
+            incoming.workflow_url =
+                "https://github.com/GHF-Studios/Vapor-Platform-Server/actions/runs/2".to_string();
             incoming.summary = "Another CI run for the same deployment shape.".to_string();
             incoming
         };
@@ -1911,10 +2026,7 @@ mod tests {
     fn parses_legacy_request_without_a_deployment_target_as_unspecified() {
         let legacy = r#"{"repository":"GHF-Studios/Vapor-Platform-Server"}"#;
         assert_eq!(request_server_mode(legacy), None);
-        assert_eq!(
-            request_server_mode(r#"{"server_mode":"services"}"#),
-            None
-        );
+        assert_eq!(request_server_mode(r#"{"server_mode":"services"}"#), None);
     }
 
     #[test]

@@ -41,7 +41,16 @@ const MODULES: &[AdminSection] = &[
         name: "Overview",
         path: Some("/admin"),
         description: "Service health and readiness",
-        service_ids: &["platform", "homepage", "docs", "identity", "diagnostics", "registry", "artifacts", "build-cache"],
+        service_ids: &[
+            "platform",
+            "homepage",
+            "docs",
+            "identity",
+            "diagnostics",
+            "registry",
+            "artifacts",
+            "build-cache",
+        ],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -113,7 +122,16 @@ const MODULES: &[AdminSection] = &[
         name: "Hosting",
         path: Some("/admin/hosting"),
         description: "Service health and feature readiness",
-        service_ids: &["platform", "homepage", "docs", "identity", "diagnostics", "registry", "artifacts", "build-cache"],
+        service_ids: &[
+            "platform",
+            "homepage",
+            "docs",
+            "identity",
+            "diagnostics",
+            "registry",
+            "artifacts",
+            "build-cache",
+        ],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -366,8 +384,8 @@ const JS: &str = r#"
   if (requestQueue) {
     const refreshQueueButton = document.querySelector('#operator-queue-refresh');
     const sources = [
-      { name: 'Deployments', url: '/api/admin/deploy-requests', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'approved' && ['failed', 'unknown', 'dispatching'].includes(item.dispatch_state)).length, secondaryLabel: 'Dispatch needs attention' }) },
-      { name: 'Temporary access', url: '/api/admin/ssh-access/requests', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'active').length, secondaryLabel: 'Active grants' }) },
+      { name: 'Deployments', url: '/api/admin/deploy-requests?limit=200', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'approved' && ['failed', 'unknown', 'dispatching'].includes(item.dispatch_state)).length, secondaryLabel: 'Dispatch needs attention' }) },
+      { name: 'Temporary access', url: '/api/admin/ssh-access/requests?limit=200', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'active').length, secondaryLabel: 'Active grants' }) },
       { name: 'Identity permissions', url: '/api/identity/v1/admin/permission-requests', href: '/admin/approvals', summarize: items => { const pending = items.filter(item => item.status === 'pending'); const overdue = pending.filter(item => Number(item.expires_at_unix) > 0 && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000)).length; return { primary: pending.length - overdue, label: 'Awaiting review', secondary: overdue, secondaryLabel: 'Expired by time; owner transition pending' }; } }
     ];
     const renderQueue = async () => {
@@ -380,8 +398,9 @@ const JS: &str = r#"
           const response = await fetch(source.url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
           const items = await response.json().catch(() => null);
           if (!response.ok) return { source, error: response.status === 401 ? 'Sign in required' : response.status === 403 ? 'Root access required' : `Unavailable (HTTP ${response.status})` };
-          if (!Array.isArray(items)) return { source, error: 'Invalid service response' };
-          return { source, counts: source.summarize(items) };
+          const records = Array.isArray(items) ? items : items?.items;
+          if (!Array.isArray(records)) return { source, error: 'Invalid service response' };
+          return { source, counts: source.summarize(records) };
         } catch (_) { return { source, error: 'Could not contact service' }; }
       }));
       for (const outcome of outcomes) {
@@ -449,8 +468,8 @@ const JS: &str = r#"
       identity: pendingIdentityApprovals
     };
     const sourceDefinitions = [
-      { key: 'deploy', url: '/api/admin/deploy-requests', label: 'Platform deployment approvals' },
-      { key: 'ssh', url: '/api/admin/ssh-access/requests', label: 'Platform SSH access requests' },
+      { key: 'deploy', url: '/api/admin/deploy-requests?limit=200', label: 'Platform deployment approvals' },
+      { key: 'ssh', url: '/api/admin/ssh-access/requests?limit=200', label: 'Platform SSH access requests' },
       { key: 'identity', url: '/api/identity/v1/admin/permission-requests', label: 'Identity permission requests' }
     ];
     const endpoint = (kind, id, action) => {
@@ -654,8 +673,9 @@ const JS: &str = r#"
           appendText(container, 'p', response.status === 401 ? 'Sign in required.' : response.status === 403 ? 'Root access required.' : `Unavailable (HTTP ${response.status}).`, 'error');
           return;
         }
-        if (!Array.isArray(items)) throw new Error('invalid response');
-        const pending = items.filter(item => item && item.status === 'pending');
+        const records = Array.isArray(items) ? items : items?.items;
+        if (!Array.isArray(records)) throw new Error('invalid response');
+        const pending = records.filter(item => item && item.status === 'pending');
         const expiredIdentity = source.key === 'identity' ? pending.filter(isExpiredByTime) : [];
         const actionable = source.key === 'identity'
           ? pending.filter(item => !isExpiredByTime(item))
@@ -701,6 +721,7 @@ const JS: &str = r#"
     const count = document.querySelector('#history-count');
     const sourceStatus = document.querySelector('#history-sources');
     const sources = [
+      { kind: 'Platform operation', label: 'Platform deploy/restore operations', url: '/api/admin/operations/history' },
       { kind: 'Deployment', label: 'Platform deployments', url: '/api/admin/deploy-requests' },
       { kind: 'Temporary access', label: 'Platform temporary access', url: '/api/admin/ssh-access/requests' },
       { kind: 'Identity request', label: 'Identity permission requests', url: '/api/identity/v1/admin/permission-requests' }
@@ -712,10 +733,22 @@ const JS: &str = r#"
     const safeText = value => typeof value === 'string' ? value : '';
     let records = [];
     let failures = [];
+    let sourceStates = [];
     const addRecord = (source, item) => {
       if (!item || typeof item !== 'object') return;
-      const record = { kind: source.kind, source: source.label, id: safeText(item.id), status: safeText(item.status), statusKey: safeText(item.status), dispatchStatusKey: '', statusLabel: safeText(item.status), timestamp: Number(item.decided_at_unix || item.created_at_unix || 0), timestampLabel: item.decided_at_unix ? 'Decision recorded' : 'Request created', title: '', subject: '', details: [], link: '', search: '' };
-      if (source.kind === 'Deployment') {
+      const isOperation = source.kind === 'Platform operation';
+      const record = { kind: source.kind, source: source.label, id: safeText(item.id || item.operation_id), status: safeText(isOperation ? item.result : item.status), statusKey: safeText(isOperation ? item.result : item.status), dispatchStatusKey: '', statusLabel: safeText(isOperation ? item.result : item.status), timestamp: Number(item.finished_at_unix || item.decided_at_unix || item.created_at_unix || 0), timestampLabel: item.finished_at_unix ? 'Operation finished' : item.decided_at_unix ? 'Decision recorded' : 'Request created', title: '', subject: '', details: [], link: '', search: '' };
+      if (isOperation) {
+        record.title = `${safeText(item.operation)} · ${safeText(item.result)}`;
+        record.subject = `Revision ${safeText(item.revision)}`;
+        record.details = [
+          `Started: ${humanTime(Number(item.started_at_unix))}`,
+          `Finished: ${humanTime(Number(item.finished_at_unix))}`,
+          `Mode: ${safeText(item.server_mode)}`,
+          `Operation ID: ${safeText(item.operation_id)}`
+        ];
+        record.search = [record.title, record.subject, ...record.details].join(' ');
+      } else if (source.kind === 'Deployment') {
         record.dispatchStatusKey = `dispatch-${safeText(item.dispatch_state)}`;
         record.statusLabel = `${safeText(item.status)} · dispatch ${safeText(item.dispatch_state) || 'not reported'}`;
         if (item.decided_at_unix) record.timestampLabel = 'Decision recorded';
@@ -775,13 +808,13 @@ const JS: &str = r#"
         (!query || `${record.kind} ${record.statusLabel} ${record.id} ${record.search}`.toLocaleLowerCase().includes(query))
       );
       operationHistory.replaceChildren();
-      count.textContent = `Showing ${visible.length} of ${records.length} loaded requests.`;
+      count.textContent = `Showing ${visible.length} of ${records.length} loaded records.`;
       if (!records.length && failures.length === sources.length) {
-        operationHistory.textContent = 'Request history could not be loaded from any owner service.';
+        operationHistory.textContent = 'History could not be loaded from any owner service.';
         return;
       }
       if (!visible.length) {
-        operationHistory.textContent = records.length ? 'No requests match these filters.' : 'No requests have been recorded by the available services.';
+        operationHistory.textContent = records.length ? 'No records match these filters.' : 'No records have been recorded by the available services.';
         return;
       }
       const list = document.createElement('div');
@@ -793,14 +826,14 @@ const JS: &str = r#"
         const heading = document.createElement('h3'); heading.textContent = record.title;
         const state = document.createElement('span'); state.className = 'history-state'; state.textContent = record.statusLabel;
         if (record.status === 'failed' || record.status === 'rejected' || record.status === 'expired' || record.status === 'cancelled' || record.status === 'revoked' || record.dispatchStatusKey === 'dispatch-failed' || record.dispatchStatusKey === 'dispatch-unknown') state.classList.add('state-danger');
-        else if (record.status === 'succeeded' || record.status === 'active') state.classList.add('state-good');
+        else if (record.status === 'success' || record.status === 'succeeded' || record.status === 'active') state.classList.add('state-good');
         else if (record.status === 'pending' || record.status === 'approved' || record.status === 'executing' || record.status === 'provisioning' || record.status === 'stale' || record.statusKey === 'expired-pending' || record.dispatchStatusKey === 'dispatch-dispatching' || record.dispatchStatusKey === 'dispatch-queued') state.classList.add('state-warning');
         header.append(heading, state);
         const meta = document.createElement('p'); meta.className = 'history-meta';
         const kind = document.createElement('span'); kind.className = 'history-kind'; kind.textContent = record.kind;
         const date = document.createElement('time'); date.dateTime = isoTime(record.timestamp);
         date.textContent = `${record.timestampLabel}: ${humanTime(record.timestamp)}`;
-        const id = document.createElement('span'); id.textContent = `Request ${record.id}`;
+        const id = document.createElement('span'); id.textContent = `${record.kind === 'Platform operation' ? 'Operation' : 'Request'} ${record.id}`;
         meta.append(kind, date, id);
         card.append(header, meta);
         if (record.subject) { const subject = document.createElement('p'); subject.className = 'history-detail'; subject.textContent = record.subject; card.append(subject); }
@@ -840,6 +873,49 @@ const JS: &str = r#"
       operationHistory.append(list);
     };
     const refreshButton = document.querySelector('#history-refresh');
+    const loadMoreButton = document.querySelector('#history-load-more');
+    const renderSourceStatus = () => {
+      sourceStatus.replaceChildren();
+      for (const state of sourceStates) {
+        const line = document.createElement('p');
+        line.className = state.error ? 'error' : 'muted';
+        const summary = state.error || `${state.loaded} loaded${state.nextCursor ? ' · more available' : ''}`;
+        line.textContent = `${state.source.label}: ${summary}`;
+        sourceStatus.append(line);
+      }
+      const refreshed = document.createElement('span');
+      refreshed.className = 'muted';
+      refreshed.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      sourceStatus.append(refreshed);
+      if (loadMoreButton) {
+        loadMoreButton.hidden = !sourceStates.some(state => state.nextCursor);
+        loadMoreButton.disabled = false;
+        loadMoreButton.textContent = 'Load older records';
+      }
+    };
+    const loadMoreHistory = async () => {
+      if (loadMoreButton?.disabled) return;
+      const pending = sourceStates.filter(state => state.nextCursor);
+      if (!pending.length) return;
+      if (loadMoreButton) { loadMoreButton.disabled = true; loadMoreButton.textContent = 'Loading…'; }
+      await Promise.all(pending.map(async state => {
+        try {
+          const params = new URLSearchParams({ limit: '50', cursor: state.nextCursor });
+          const response = await fetch(`${state.source.url.split('?')[0]}?${params}`, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+          const body = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(response.status === 403 ? 'Root access required.' : `Unavailable (HTTP ${response.status}).`);
+          const items = Array.isArray(body) ? body : body?.items;
+          if (!Array.isArray(items)) throw new Error('Invalid owner response.');
+          for (const item of items) addRecord(state.source, item);
+          state.loaded += items.length;
+          state.nextCursor = Array.isArray(body) ? null : (typeof body.next_cursor === 'string' ? body.next_cursor : null);
+          state.error = null;
+        } catch (error) { state.error = error.message || 'Could not contact the owner service.'; }
+      }));
+      records.sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id));
+      renderSourceStatus();
+      renderHistory();
+    };
     const loadHistory = async () => {
       if (refreshButton?.disabled) return;
       if (refreshButton) { refreshButton.disabled = true; refreshButton.textContent = 'Refreshing…'; }
@@ -849,29 +925,22 @@ const JS: &str = r#"
       sourceStatus.textContent = 'Loading recent request records from their owning services…';
       const results = await Promise.all(sources.map(async source => {
         try {
-          const response = await fetch(source.url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+          const url = source.kind === 'Identity request' ? source.url : `${source.url}?limit=50`;
+          const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
           const body = await response.json().catch(() => null);
           if (!response.ok) return { source, error: response.status === 401 ? 'Sign in required.' : response.status === 403 ? 'Root access required.' : `Unavailable (HTTP ${response.status}).` };
-          if (!Array.isArray(body)) return { source, error: 'The service returned an invalid history response.' };
-          return { source, items: body };
+          const items = Array.isArray(body) ? body : body?.items;
+          if (!Array.isArray(items)) return { source, error: 'The service returned an invalid history response.' };
+          return { source, items, nextCursor: Array.isArray(body) ? null : (typeof body.next_cursor === 'string' ? body.next_cursor : null) };
         } catch (_) { return { source, error: 'Could not contact this service.' }; }
       }));
+      sourceStates = results.map(result => ({ source: result.source, loaded: result.items?.length || 0, nextCursor: result.nextCursor || null, error: result.error || null }));
       for (const result of results) {
         if (result.error) failures.push(`${result.source.label}: ${result.error}`);
         else for (const item of result.items) addRecord(result.source, item);
       }
       records.sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id));
-      sourceStatus.replaceChildren();
-      for (const result of results) {
-        const line = document.createElement('p');
-        line.className = result.error ? 'error' : 'muted';
-        line.textContent = `${result.source.label}: ${result.error || `${result.items.length} record(s) available (up to 200).`}`;
-        sourceStatus.append(line);
-      }
-      const refreshed = document.createElement('span');
-      refreshed.className = 'muted';
-      refreshed.textContent = `Updated ${new Date().toLocaleTimeString()}`;
-      sourceStatus.append(refreshed);
+      renderSourceStatus();
       renderHistory();
       if (refreshButton) { refreshButton.disabled = false; refreshButton.textContent = 'Refresh records'; }
     };
@@ -879,6 +948,7 @@ const JS: &str = r#"
     kindFilter?.addEventListener('change', renderHistory);
     statusFilter?.addEventListener('change', renderHistory);
     refreshButton?.addEventListener('click', loadHistory);
+    loadMoreButton?.addEventListener('click', loadMoreHistory);
     loadHistory();
   }
 
@@ -889,7 +959,7 @@ const JS: &str = r#"
       let response;
       let requests;
       try {
-        response = await fetch('/api/admin/deploy-requests', { credentials: 'same-origin', cache: 'no-store' });
+        response = await fetch('/api/admin/deploy-requests?limit=200', { credentials: 'same-origin', cache: 'no-store' });
         requests = await response.json().catch(() => null);
       } catch (_) {
         deployRequests.textContent = 'Deploy approvals are temporarily unavailable.';
@@ -902,7 +972,7 @@ const JS: &str = r#"
           'Deploy approvals are temporarily unavailable.';
         return;
       }
-      const items = Array.isArray(requests) ? requests : [];
+      const items = Array.isArray(requests) ? requests : (Array.isArray(requests?.items) ? requests.items : []);
       if (!items.length) {
         deployRequests.textContent = 'No deploy requests have been recorded.';
         return;
@@ -1044,14 +1114,15 @@ const JS: &str = r#"
       let response;
       let items;
       try {
-        response = await fetch('/api/admin/ssh-access/requests', { credentials: 'same-origin', cache: 'no-store' });
+        response = await fetch('/api/admin/ssh-access/requests?limit=200', { credentials: 'same-origin', cache: 'no-store' });
       } catch (_) { sshAccess.textContent = 'Could not contact the temporary SSH service.'; return; }
       sshAccess.replaceChildren();
       if (!response.ok) {
         await showResponseFailure(sshAccess, response, 'Could not load temporary SSH requests');
         return;
       }
-      items = await response.json().catch(() => null);
+      const body = await response.json().catch(() => null);
+      items = Array.isArray(body) ? body : body?.items;
       if (!Array.isArray(items)) { sshAccess.textContent = 'The temporary SSH service returned an invalid response.'; return; }
       if (!items.length) { sshAccess.textContent = 'No temporary SSH requests.'; return; }
       for (const item of items) {
@@ -1195,6 +1266,7 @@ pub fn router() -> Router {
         .route("/api/admin/overview", get(overview))
         .route("/api/admin/platform-healthz", get(platform_healthz))
         .route("/api/admin/operations", get(operations_status))
+        .merge(crate::operation_history::router())
         .route("/admin/assets/admin.css", get(stylesheet))
         .route("/admin/assets/admin.js", get(script))
         .merge(crate::deploy_requests::router())
@@ -1427,7 +1499,7 @@ fn operations_page(view: OperationsView) -> String {
         .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
         OperationsView::TemporaryAccess => "<section class=\"card\"><h2>Temporary SSH access</h2><p class=\"muted\">Requests start with the requester and their key. Review the requested scope, then set the actual grant within server policy. Each grant uses a separate key-only account, expires automatically, and can be revoked immediately.</p><div id=\"ssh-access\" aria-live=\"polite\"><p class=\"muted\">Loading access requests and active grants…</p></div></section>".to_owned(),
-        OperationsView::History => "<section class=\"card\"><h2>Request history</h2><p class=\"muted\">A read-only view of recent Platform deployment/access requests and Identity permission requests. Each owning service remains authoritative for its records and decisions; a service that is unavailable is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><button id=\"history-refresh\" type=\"button\">Refresh records</button></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option><option value=\"dispatch-claimed\">claimed by worker</option><option value=\"dispatch-completed\">worker completed</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading request sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading request history…</p></div></section>".to_owned(),
+        OperationsView::History => "<section class=\"card\"><h2>Request and operation history</h2><p class=\"muted\">Read-only Platform deploy/restore outcomes and owner-sourced deployment, access, and Identity request records. Each owning service remains authoritative for its records and decisions; an unavailable source is shown separately.</p><noscript><p>Enable JavaScript for the combined searchable view, or open each owner section directly: <a href=\"/admin/operations?view=deployments\">Deployments</a>, <a href=\"/admin/operations?view=temporary-access\">Temporary access</a>, and <a href=\"/admin/identity\">Identity requests</a>.</p></noscript><div class=\"history-toolbar\"><p id=\"history-count\" class=\"history-count muted\"></p><div><button id=\"history-load-more\" type=\"button\" hidden>Load older records</button> <button id=\"history-refresh\" type=\"button\">Refresh records</button></div></div><div class=\"history-controls\"><label for=\"history-search\">Search<input id=\"history-search\" type=\"search\" autocomplete=\"off\" placeholder=\"Repository, key fingerprint, account, request…\"></label><label for=\"history-kind\">Area<select id=\"history-kind\"><option value=\"all\">All areas</option><option>Platform operation</option><option>Deployment</option><option>Temporary access</option><option>Identity request</option></select></label><label for=\"history-status\">Status<select id=\"history-status\"><option value=\"all\">All statuses</option><option>pending</option><option>approved</option><option>executing</option><option>succeeded</option><option>success</option><option>failed</option><option>rejected</option><option>expired</option><option value=\"expired-pending\">expired · owner transition pending</option><option>cancelled</option><option>stale</option><option>active</option><option>provisioning</option><option>revoked</option><option value=\"dispatch-failed\">dispatch failed</option><option value=\"dispatch-unknown\">dispatch result unknown</option><option value=\"dispatch-dispatching\">dispatch in progress</option><option value=\"dispatch-queued\">queued for deployment</option><option value=\"dispatch-claimed\">claimed by worker</option><option value=\"dispatch-completed\">worker completed</option></select></label></div><div id=\"history-sources\" aria-live=\"polite\"><p class=\"muted\">Loading history sources…</p></div><div id=\"operations-history\" aria-live=\"polite\"><p class=\"muted\">Loading history…</p></div></section>".to_owned(),
     };
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{} · Platform · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"><script defer src=\"/admin/assets/admin.js\"></script></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform · Operations</p><h1>{}</h1>{content}</main></body></html>",
@@ -1514,7 +1586,6 @@ impl OperationsView {
             Self::History => "History",
         }
     }
-
 }
 
 async fn overview(headers: axum::http::HeaderMap) -> Response {
@@ -1741,16 +1812,7 @@ async fn probe_services_for_mode(
     services_mode: bool,
 ) -> Vec<ServiceSummary> {
     if services_mode {
-        let (
-            platform,
-            homepage,
-            docs,
-            identity,
-            diagnostics,
-            registry,
-            artifacts,
-            build_cache,
-        ) = tokio::join!(
+        let (platform, homepage, docs, identity, diagnostics, registry, artifacts, build_cache) = tokio::join!(
             probe_health(client, "http://127.0.0.1:7110", "/healthz"),
             probe_health(client, "http://127.0.0.1:7111", "/healthz"),
             probe_health(client, "http://127.0.0.1:7112", "/healthz"),
@@ -1761,14 +1823,50 @@ async fn probe_services_for_mode(
             probe_health(client, "http://127.0.0.1:7117", "/healthz"),
         );
         return vec![
-            service("platform", "Platform", platform, "not reported", Some("/admin")),
+            service(
+                "platform",
+                "Platform",
+                platform,
+                "not reported",
+                Some("/admin"),
+            ),
             service("homepage", "Homepage", homepage, "not reported", None),
             service("docs", "Docs", docs, "not reported", None),
-            service("identity", "Identity", identity, "not reported", Some("/admin/identity")),
-            service("diagnostics", "Diagnostics", diagnostics, "not reported", None),
-            service("registry", "Workshop / Registry", registry, "not reported", Some("/admin/workshop")),
-            service("artifacts", "Artifacts", artifacts, "not reported", Some("/admin/artifacts")),
-            service("build-cache", "Build Cache", build_cache, "not reported", Some("/admin/build-cache")),
+            service(
+                "identity",
+                "Identity",
+                identity,
+                "not reported",
+                Some("/admin/identity"),
+            ),
+            service(
+                "diagnostics",
+                "Diagnostics",
+                diagnostics,
+                "not reported",
+                None,
+            ),
+            service(
+                "registry",
+                "Workshop / Registry",
+                registry,
+                "not reported",
+                Some("/admin/workshop"),
+            ),
+            service(
+                "artifacts",
+                "Artifacts",
+                artifacts,
+                "not reported",
+                Some("/admin/artifacts"),
+            ),
+            service(
+                "build-cache",
+                "Build Cache",
+                build_cache,
+                "not reported",
+                Some("/admin/build-cache"),
+            ),
         ];
     }
 
@@ -2056,9 +2154,16 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
 
-        let services = super::probe_services_for_mode(&reqwest::Client::new(), &origin, false).await;
-        let platform = services.iter().find(|service| service.id == "platform").unwrap();
-        let homepage = services.iter().find(|service| service.id == "homepage").unwrap();
+        let services =
+            super::probe_services_for_mode(&reqwest::Client::new(), &origin, false).await;
+        let platform = services
+            .iter()
+            .find(|service| service.id == "platform")
+            .unwrap();
+        let homepage = services
+            .iter()
+            .find(|service| service.id == "homepage")
+            .unwrap();
         assert_eq!(platform.health, "unavailable");
         assert_eq!(homepage.health, "healthy");
 
@@ -2167,12 +2272,7 @@ mod tests {
     async fn approvals_page_requires_root_and_has_owner_routed_actions() {
         for path in ["/admin/approvals", "/admin/operations?view=approvals"] {
             let response = admin_app()
-                .oneshot(
-                    Request::builder()
-                        .uri(path)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -2189,12 +2289,7 @@ mod tests {
             "/admin/history",
         ] {
             let response = admin_app()
-                .oneshot(
-                    Request::builder()
-                        .uri(path)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
@@ -2214,9 +2309,13 @@ mod tests {
         assert!(script.contains("'/api/admin/deploy-requests'"));
         assert!(script.contains("'/api/admin/ssh-access/requests'"));
         assert!(script.contains("'/api/identity/v1/admin/permission-requests'"));
-        assert!(script.contains("/api/identity/v1/admin/permission-requests/${encodedId}/${action}"));
-        assert!(script.contains("This request source is temporarily unavailable or returned an invalid response."));
-        assert!(script.contains("items.filter(item => item && item.status === 'pending')"));
+        assert!(
+            script.contains("/api/identity/v1/admin/permission-requests/${encodedId}/${action}")
+        );
+        assert!(script.contains(
+            "This request source is temporarily unavailable or returned an invalid response."
+        ));
+        assert!(script.contains("records.filter(item => item && item.status === 'pending')"));
         assert!(script.contains("const isExpiredByTime = item => Number(item.expires_at_unix) > 0"));
         assert!(script.contains("pending.filter(isExpiredByTime)"));
         assert!(script.contains("pending.filter(item => !isExpiredByTime(item))"));
@@ -2264,9 +2363,24 @@ mod tests {
         assert!(deployments.contains("Latest deploy or restore result"));
         assert!(deployments.contains("id=\"latest-operation-status\""));
         assert!(!history.contains("latest-operation-status"));
-        assert!(history.contains("Request history"));
+        assert!(history.contains("Request and operation history"));
         assert!(history.contains("value=\"dispatch-claimed\">claimed by worker"));
         assert!(history.contains("value=\"dispatch-completed\">worker completed"));
+        assert!(history.contains("id=\"history-load-more\""));
+    }
+
+    #[test]
+    fn history_uses_owner_cursors_to_load_older_platform_records() {
+        let script = super::JS;
+        let page = super::operations_page(super::OperationsView::History);
+        assert!(page.contains("Platform operation</option>"));
+        assert!(script.contains("/api/admin/operations/history"));
+        assert!(script
+            .contains("record.title = `${safeText(item.operation)} · ${safeText(item.result)}`"));
+        assert!(script.contains("next_cursor"));
+        assert!(script.contains("cursor: state.nextCursor"));
+        assert!(script.contains("limit: '50'"));
+        assert!(script.contains("loadMoreButton?.addEventListener('click', loadMoreHistory)"));
     }
 
     #[test]
@@ -2319,24 +2433,35 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
         assert!(script.contains("Decision: ${item.status"));
-        assert!(script.contains("Deployment: ${lifecycleLabel || dispatchLabels[item.dispatch_state]"));
+        assert!(
+            script.contains("Deployment: ${lifecycleLabel || dispatchLabels[item.dispatch_state]")
+        );
         assert!(script.contains("expired: 'expired before worker claim'"));
         assert!(script.contains("claimed: 'worker claimed deployment'"));
         assert!(script.contains("completed: 'worker finished deployment'"));
         assert!(script.contains("worker stopped; deployment outcome unknown"));
         assert!(script.contains("secondaryLabel: 'Dispatch needs attention'"));
         assert!(script.contains("Approval saved; deployment is queued for the worker."));
-        assert!(script.contains("Approval saved; the worker claimed the deployment and it is running."));
+        assert!(
+            script.contains("Approval saved; the worker claimed the deployment and it is running.")
+        );
         assert!(script.contains("Approval saved; deployment succeeded."));
-        assert!(script.contains("dispatch_attempt_superseded: 'was superseded by a newer request state'"));
-        assert!(script.contains("const link = document.createElement('a'); link.href = '/admin/deployments';"));
+        assert!(script
+            .contains("dispatch_attempt_superseded: 'was superseded by a newer request state'"));
+        assert!(script.contains(
+            "const link = document.createElement('a'); link.href = '/admin/deployments';"
+        ));
         assert!(script.contains("? '; retry available' : '';"));
         assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const validDeploymentSelection = item =>"));
         assert!(script.contains("serviceDeployTargets.has(item.service_target)"));
         assert!(script.contains("Target: ${deploymentSelectionLabel(item)}"));
-        assert!(script.contains("const pendingActions = selectionValid ? ['approve', 'reject'] : ['reject']"));
-        assert!(script.contains("selectionValid && item.status === 'approved' && item.retry_eligible"));
+        assert!(script.contains(
+            "const pendingActions = selectionValid ? ['approve', 'reject'] : ['reject']"
+        ));
+        assert!(
+            script.contains("selectionValid && item.status === 'approved' && item.retry_eligible")
+        );
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
     }

@@ -1,6 +1,7 @@
+use crate::pagination::{Page, PageCursor, PageQuery};
 use crate::ssh_policy::PENDING_TTL_SECONDS;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
@@ -13,7 +14,6 @@ use sqlx::{Row, SqlitePool};
 use std::path::PathBuf;
 use std::time::Duration;
 const MAX_DURATION_SECONDS: i64 = 8 * 60 * 60;
-const MAX_REQUESTS: i64 = 200;
 const MAX_REQUEST_EVENTS: i64 = 100;
 const MAX_OPEN_REQUESTS_PER_PROFILE: i64 = 3;
 const MAX_PURPOSE_BYTES: usize = 500;
@@ -205,6 +205,9 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_platform_ssh_access_status ON platform_ssh_access_requests(status, created_at_unix)")
         .execute(&pool)
         .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_platform_ssh_access_created_id ON platform_ssh_access_requests(created_at_unix DESC, id DESC)")
+        .execute(&pool)
+        .await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS platform_ssh_access_events (
             event_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -378,26 +381,35 @@ async fn create_request(
         .into_response()
 }
 
-async fn list_requests(State(state): State<SshAccessState>, headers: HeaderMap) -> Response {
+async fn list_requests(
+    State(state): State<SshAccessState>,
+    headers: HeaderMap,
+    Query(query): Query<PageQuery>,
+) -> Response {
     if let Err(response) = require_root(&state, &headers).await {
         return response;
     }
     if expire_stale_requests(&state.pool).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    let rows = match sqlx::query(
-        "SELECT id, requester_profile_id, requester_credential_id, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json,
-         requested_duration_seconds, granted_duration_seconds, status, version, created_at_unix, expires_at_unix, operation_detail
-         FROM platform_ssh_access_requests ORDER BY created_at_unix DESC LIMIT ?",
-    )
-    .bind(MAX_REQUESTS)
-    .fetch_all(&state.pool)
-    .await
-    {
+    let cursor = match query.decoded_cursor() {
+        Ok(cursor) => cursor,
+        Err(()) => return (StatusCode::BAD_REQUEST, "invalid pagination cursor\n").into_response(),
+    };
+    let page_size = query.page_size();
+    let rows = match fetch_request_rows(&state.pool, cursor.as_ref(), page_size).await {
         Ok(rows) => rows,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let requests = rows
+    let page = match Page::from_items(rows, page_size, |row| PageCursor {
+        created_at_unix: row.get("created_at_unix"),
+        id: row.get("id"),
+    }) {
+        Ok(page) => page,
+        Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let requests = page
+        .items
         .into_iter()
         .filter_map(|row| {
             Some(SshRequestSummary {
@@ -443,7 +455,34 @@ async fn list_requests(State(state): State<SshAccessState>, headers: HeaderMap) 
             })
         })
         .collect::<Vec<_>>();
-    Json(requests).into_response()
+    Json(Page {
+        items: requests,
+        next_cursor: page.next_cursor,
+    })
+    .into_response()
+}
+
+async fn fetch_request_rows(
+    pool: &SqlitePool,
+    cursor: Option<&PageCursor>,
+    page_size: usize,
+) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
+    let base = "SELECT id, requester_profile_id, requester_credential_id, fingerprint, purpose, requested_capabilities_json, granted_capabilities_json,
+                requested_duration_seconds, granted_duration_seconds, status, version, created_at_unix, expires_at_unix, operation_detail
+                FROM platform_ssh_access_requests";
+    let query = if cursor.is_some() {
+        format!("{base} WHERE created_at_unix < ? OR (created_at_unix = ? AND id < ?) ORDER BY created_at_unix DESC, id DESC LIMIT ?")
+    } else {
+        format!("{base} ORDER BY created_at_unix DESC, id DESC LIMIT ?")
+    };
+    let mut statement = sqlx::query(&query);
+    if let Some(cursor) = cursor {
+        statement = statement
+            .bind(cursor.created_at_unix)
+            .bind(cursor.created_at_unix)
+            .bind(&cursor.id);
+    }
+    statement.bind((page_size + 1) as i64).fetch_all(pool).await
 }
 
 async fn list_request_events(
@@ -1043,6 +1082,58 @@ mod tests {
         )
         .await
         .unwrap());
+    }
+
+    #[tokio::test]
+    async fn ssh_request_pages_are_stable_when_timestamps_tie() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE platform_ssh_access_requests (id TEXT, requester_profile_id TEXT, requester_credential_id TEXT, fingerprint TEXT, purpose TEXT, requested_capabilities_json TEXT, granted_capabilities_json TEXT, requested_duration_seconds INTEGER, granted_duration_seconds INTEGER, status TEXT, version INTEGER, created_at_unix INTEGER, expires_at_unix INTEGER, operation_detail TEXT)")
+            .execute(&pool).await.unwrap();
+        for id in ["a", "b", "c"] {
+            sqlx::query(
+                "INSERT INTO platform_ssh_access_requests (id, created_at_unix) VALUES (?, 100)",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let first = fetch_request_rows(&pool, None, 2).await.unwrap();
+        let first = Page::from_items(first, 2, |row| PageCursor {
+            created_at_unix: row.get("created_at_unix"),
+            id: row.get("id"),
+        })
+        .unwrap();
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|row| row.get::<String, _>("id"))
+                .collect::<Vec<_>>(),
+            vec!["c", "b"]
+        );
+
+        let cursor = PageCursor::decode(first.next_cursor.as_deref().unwrap()).unwrap();
+        let second = fetch_request_rows(&pool, Some(&cursor), 2).await.unwrap();
+        let second = Page::from_items(second, 2, |row| PageCursor {
+            created_at_unix: row.get("created_at_unix"),
+            id: row.get("id"),
+        })
+        .unwrap();
+        assert_eq!(
+            second
+                .items
+                .iter()
+                .map(|row| row.get::<String, _>("id"))
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+        assert!(second.next_cursor.is_none());
     }
 
     #[tokio::test]

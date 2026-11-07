@@ -57,7 +57,7 @@ All responses from the request API are `Cache-Control: no-store`.
 | Route | Authority | Purpose |
 | --- | --- | --- |
 | `POST /api/admin/deploy-requests` | Identity credential scoped to `platform:deploy-request:create` | Create or idempotently return the active ticket for a commit |
-| `GET /api/admin/deploy-requests` | Root browser session, or a request credential | Root sees the bounded queue; a request credential sees only tickets created by that credential |
+| `GET /api/admin/deploy-requests?limit=50&cursor=…` | Root browser session, or a request credential | Returns `{ items, next_cursor }`; root sees the queue, while a request credential sees only tickets created by that credential. Page size is 1–200; omit `cursor` for the first page and follow the returned cursor for older records. |
 | `POST /api/admin/deploy-requests/{id}/approve` | Root browser session, same-origin, explicit confirmation, expected version | Approve one pending ticket |
 | `POST /api/admin/deploy-requests/{id}/reject` | Root browser session, same-origin, explicit confirmation, expected version | Reject one pending ticket |
 | `POST /api/admin/deploy-requests/{id}/dispatch` | Root browser session, same-origin, explicit confirmation, expected version | Retry dispatch only when approval is saved but the worker did not claim the ticket |
@@ -90,7 +90,8 @@ narrower than requested, up to the server-wide eight-hour maximum.
 | `POST /cli/ssh/authorize` | Signed-in Identity profile, same-origin | Confirm or deny submission of this exact request |
 | `POST /api/identity/v1/cli/ssh-authorization/poll` | Device code held by the initiating CLI | Poll status; after confirmation, redeem one single-use credential bound to the exact request |
 | `POST /api/ssh-access/requests` | Single-use Identity credential scoped to `platform:ssh-access:request`, bound to key and request digest | Submit the Ed25519 key and the exact authorized request |
-| `GET /api/admin/ssh-access/requests` | Root browser session | Review request and grant state |
+| `GET /api/admin/ssh-access/requests?limit=50&cursor=…` | Root browser session | Returns `{ items, next_cursor }` for request and grant state. Page size is 1–200; omit `cursor` for the first page and follow the returned cursor for older records. |
+| `GET /api/admin/operations/history?limit=50&cursor=…` | Root browser session | Returns `{ items, next_cursor }` for durable Platform deploy/restore outcomes. Page size is 1–200; omit `cursor` for the first page and follow the returned cursor for older records. |
 | `POST /api/admin/ssh-access/requests/{id}/approve` | Root browser session, same-origin, explicit confirmation, expected version | Provision a separate temporary account with the operator-selected policy-allowed grant |
 | `POST /api/admin/ssh-access/requests/{id}/reject` | Root browser session, same-origin, explicit confirmation, expected version | Reject a pending request and discard its stored public key |
 | `POST /api/admin/ssh-access/grants/{id}/revoke` | Root browser session, same-origin, explicit confirmation, expected version | Remove a grant and terminate its sessions |

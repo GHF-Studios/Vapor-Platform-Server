@@ -3,6 +3,8 @@ mod admin_auth;
 mod admin_gateway;
 mod deploy_request_schema;
 mod deploy_requests;
+mod operation_history;
+mod pagination;
 mod ssh_access;
 mod ssh_key;
 mod ssh_policy;
@@ -19,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind = env::var("VAPOR_PLATFORM_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
     deploy_requests::initialize().await?;
     ssh_access::initialize().await?;
+    operation_history::initialize().await?;
 
     let app = if env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services") {
         // In independent-services mode Platform remains the shared operator

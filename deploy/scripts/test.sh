@@ -31,6 +31,7 @@ python3 -m py_compile \
   "${SCRIPT_DIR}/verify-deploy-source.py" \
   "${SCRIPT_DIR}/service_deploy_map.py" \
   "${SCRIPT_DIR}/deployed_source_manifest.py" \
+  "${SCRIPT_DIR}/operation_history.py" \
   "${SCRIPT_DIR}/deploy-service.py"
 rm -rf -- "${SCRIPT_DIR}/__pycache__"
 

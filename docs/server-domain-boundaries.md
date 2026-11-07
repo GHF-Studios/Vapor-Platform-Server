@@ -137,6 +137,7 @@ Current route ownership remains:
 /admin/build-cache        Build Cache-owned target snapshot inventory
 /api/admin/overview       root-authorized service health summary
 /api/admin/operations     root-authorized latest deploy/restore status
+/api/admin/operations/history root-authorized Platform deploy/restore outcomes
 /api/admin/deploy-requests Platform-owned deployment requests and stages
 /api/admin/ssh-access/requests Platform-owned temporary SSH requests
 /api/identity/v1/admin/permission-requests Identity-owned role permission requests
