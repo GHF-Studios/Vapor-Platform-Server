@@ -364,6 +364,7 @@ class DeployServiceTests(unittest.TestCase):
         }
         return temporary, environment, web_root, previous_revision
 
+    @unittest.skipIf(os.name == "nt", "Atlas release symlink replacement is a Linux deployment operation")
     def test_atlas_scope_publishes_static_release_without_restarting_services(self) -> None:
         runner = FakeRunner()
         temporary, environment, web_root, previous_revision = self._atlas_fixture()
@@ -382,6 +383,7 @@ class DeployServiceTests(unittest.TestCase):
         finally:
             temporary.cleanup()
 
+    @unittest.skipIf(os.name == "nt", "Atlas release symlink replacement is a Linux deployment operation")
     def test_atlas_public_health_failure_restores_prior_release(self) -> None:
         runner = FakeRunner(fail_public_calls={2})
         temporary, environment, web_root, previous_revision = self._atlas_fixture()
