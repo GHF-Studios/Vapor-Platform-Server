@@ -1205,11 +1205,23 @@ async fn invoke_platform_ops(
         .await
         .map_err(|_| DispatchFailure { state: "unknown", category: "helper_timeout", technical: "helper wait exceeded ten-second timeout", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?
         .map_err(|_| DispatchFailure { state: "unknown", category: "helper_wait_failed", technical: "could not collect helper result", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
-    if !result.status.success() || result.stdout.len() > 4096 {
-        if result.stdout.len() <= 4096 {
-            if let Ok(helper_result) =
-                serde_json::from_slice::<PlatformOperationResult>(&result.stdout)
-            {
+    interpret_platform_ops_result(
+        result.status.success(),
+        &result.stdout,
+        expected_id,
+        expected_success_state,
+    )
+}
+
+fn interpret_platform_ops_result(
+    status_success: bool,
+    stdout: &[u8],
+    expected_id: &str,
+    expected_success_state: &str,
+) -> Result<PlatformOperationResult, DispatchFailure> {
+    if !status_success || stdout.len() > 4096 {
+        if stdout.len() <= 4096 {
+            if let Ok(helper_result) = serde_json::from_slice::<PlatformOperationResult>(stdout) {
                 if helper_interactive_argv_mismatch(&helper_result) {
                     eprintln!(
                         "platform helper rejected request: category=helper_protocol_mismatch"
@@ -1243,7 +1255,7 @@ async fn invoke_platform_ops(
                 "Approval is saved, but the deployment helper did not queue the deployment.",
         });
     }
-    let value: PlatformOperationResult = serde_json::from_slice(&result.stdout).map_err(|_| DispatchFailure { state: "unknown", category: "helper_response_invalid", technical: "helper returned invalid JSON", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
+    let value: PlatformOperationResult = serde_json::from_slice(stdout).map_err(|_| DispatchFailure { state: "unknown", category: "helper_response_invalid", technical: "helper returned invalid JSON", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
     if value.operation_id != expected_id
         || value.detail.is_empty()
         || value.detail.len() > 256
@@ -1367,16 +1379,32 @@ mod platform_ops_contract_tests {
 
     #[test]
     fn legacy_interactive_argv_rejection_is_reported_as_helper_mismatch() {
-        let result = PlatformOperationResult {
+        let response = br#"{"ok":false,"operation_id":"","state":"failed","detail":"arguments are not accepted for interactive operations"}"#;
+        let error = match interpret_platform_ops_result(false, response, "expected-id", "queued") {
+            Err(error) => error,
+            Ok(_) => panic!("the rejected helper result must become a dispatch error"),
+        };
+        assert_eq!(error.category, "helper_protocol_mismatch");
+        assert_eq!(error.state, "failed");
+        assert!(error.public_message.contains("different request protocol"));
+        assert!(!helper_interactive_argv_mismatch(&PlatformOperationResult {
             ok: false,
-            operation_id: String::new(),
+            operation_id: "unexpected-request".to_owned(),
             state: "failed".to_owned(),
             detail: "arguments are not accepted for interactive operations".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn ordinary_helper_failure_remains_retryable_dispatch_failure() {
+        let response = br#"{"ok":false,"operation_id":"expected-id","state":"failed","detail":"could not queue approved deployment"}"#;
+        let error = match interpret_platform_ops_result(false, response, "expected-id", "queued") {
+            Err(error) => error,
+            Ok(_) => panic!("the rejected operation must remain a dispatch failure"),
         };
-        assert!(helper_interactive_argv_mismatch(&result));
-        let mut wrong_id = result;
-        wrong_id.operation_id = "unexpected-request".to_owned();
-        assert!(!helper_interactive_argv_mismatch(&wrong_id));
+        assert_eq!(error.category, "helper_rejected");
+        assert_eq!(error.state, "failed");
+        assert!(error.public_message.contains("did not queue"));
     }
 
     #[tokio::test]
