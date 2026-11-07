@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List validated expiry timer units for active grants in restored Platform state."""
+"""List validated expiry timers for restored SSH grants that may remain usable."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 import uuid
 
 
-def restored_active_timer_units(database: pathlib.Path, unit_directory: pathlib.Path) -> list[str]:
+def restored_ssh_expiry_timer_units(database: pathlib.Path, unit_directory: pathlib.Path) -> list[str]:
     if database.is_symlink() or not database.is_file():
         raise ValueError("Platform database is missing or is not a regular file")
     if unit_directory.is_symlink() or not unit_directory.is_dir():
@@ -17,24 +17,37 @@ def restored_active_timer_units(database: pathlib.Path, unit_directory: pathlib.
     uri = database.resolve().as_uri() + "?mode=ro"
     with sqlite3.connect(uri, uri=True, timeout=5) as connection:
         rows = connection.execute(
-            "SELECT id,expires_at_unix FROM platform_ssh_access_requests "
+            "SELECT id,status,expires_at_unix,operation_detail "
+            "FROM platform_ssh_access_requests "
             "WHERE status IN ('active','failed','provisioning') ORDER BY id"
         ).fetchall()
 
     units: list[str] = []
-    for request_id, expires_at_unix in rows:
+    for request_id, status, expires_at_unix, operation_detail in rows:
+        # A failed grant with completed compensation cannot leave a managed
+        # account behind. Its expiry timestamp is retained for audit, but the
+        # grant helper removes its timer and account before reporting failure.
+        # Preserve fail-closed handling for incomplete compensation and failed
+        # revocation/expiry cleanup, where host access artifacts may remain.
+        if (
+            status == "failed"
+            and isinstance(operation_detail, str)
+            and operation_detail.startswith("grant helper failed:")
+            and "rollback was incomplete" not in operation_detail.lower()
+        ):
+            continue
         if not isinstance(expires_at_unix, int):
             raise ValueError("recoverable SSH request has no expiry timestamp")
         try:
             canonical_id = str(uuid.UUID(request_id))
         except (ValueError, TypeError, AttributeError) as error:
-            raise ValueError("active SSH request has an invalid identifier") from error
+            raise ValueError("recoverable SSH request has an invalid identifier") from error
         if canonical_id != request_id:
-            raise ValueError("active SSH request identifier is not canonical")
+            raise ValueError("recoverable SSH request identifier is not canonical")
         for suffix in ("timer", "service"):
             path = unit_directory / f"vapor-ssh-expire-{canonical_id}.{suffix}"
             if path.is_symlink() or not path.is_file():
-                raise ValueError("active SSH request is missing its managed expiry unit")
+                raise ValueError("recoverable SSH request is missing its managed expiry unit")
         units.append(f"vapor-ssh-expire-{canonical_id}.timer")
     return units
 
@@ -44,7 +57,7 @@ def main() -> int:
         print("usage: restored_ssh_expiry_units.py PLATFORM_DB SYSTEMD_UNIT_DIR", file=sys.stderr)
         return 2
     try:
-        units = restored_active_timer_units(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]))
+        units = restored_ssh_expiry_timer_units(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]))
     except (OSError, sqlite3.Error, ValueError) as error:
         print(f"recovery-restore: SSH expiry unit validation failed: {error}", file=sys.stderr)
         return 1
