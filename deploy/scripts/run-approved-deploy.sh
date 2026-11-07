@@ -22,6 +22,7 @@ REQUEST_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])'
 REQUEST_VERSION="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["version"])' "${CLAIM}")"
 REQUEST_COMMIT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["request"]["commit"])' "${CLAIM}")"
 REQUEST_TREE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["request"]["tree"])' "${CLAIM}")"
+REQUEST_MODE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["request"]["server_mode"])' "${CLAIM}")"
 
 report_result() {
   local result="$1"
@@ -43,6 +44,9 @@ fail_claim() {
 
 if [[ ! "${REQUEST_COMMIT}" =~ ^[A-Fa-f0-9]{40}$ || ! "${REQUEST_TREE}" =~ ^[A-Fa-f0-9]{40}$ ]]; then
   fail_claim "request contained an invalid root revision"
+fi
+if [[ "${REQUEST_MODE}" != "monolith" && "${REQUEST_MODE}" != "services" ]]; then
+  fail_claim "request contained an invalid deployment target"
 fi
 if [ ! -d "${VAPOR_DEPLOY_ROOT}/.git" ]; then
   fail_claim "the bootstrapped Platform source checkout is missing"
@@ -110,6 +114,7 @@ set +e
 VAPOR_APPROVED_DEPLOY_ID="${REQUEST_ID}" \
 VAPOR_APPROVED_DEPLOY_VERSION="${REQUEST_VERSION}" \
 VAPOR_APPROVED_REVISION="${REQUEST_COMMIT}" \
+VAPOR_SERVER_MODE="${REQUEST_MODE}" \
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/deploy.sh" --approved "${REQUEST_COMMIT}"
 DEPLOY_STATUS=$?
 set -e

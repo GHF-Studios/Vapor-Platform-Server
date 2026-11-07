@@ -629,6 +629,11 @@ const JS: &str = r#"
         dispatchStage.textContent = `Deployment: ${dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
         const revision = document.createElement('p');
         revision.textContent = `Commit ${item.commit} · tree ${item.tree}`;
+        const target = document.createElement('p');
+        target.className = item.server_mode ? 'muted' : 'error';
+        target.textContent = item.server_mode
+          ? `Target: ${item.server_mode === 'services' ? 'Independent services' : 'Monolith'}`
+          : 'Target: missing or invalid (legacy request; cannot be approved)';
         const pins = document.createElement('p');
         pins.className = 'muted';
         pins.textContent = `${Array.isArray(item.submodules) ? item.submodules.length : 0} pinned service revisions · expires ${item.expires_at_unix}`;
@@ -638,7 +643,7 @@ const JS: &str = r#"
         workflow.href = item.workflow_url;
         workflow.rel = 'noopener noreferrer';
         workflow.textContent = 'Open successful CI run';
-        card.append(heading, requester, decisionStage, dispatchStage, revision, pins, summary, workflow);
+        card.append(heading, requester, decisionStage, dispatchStage, revision, target, pins, summary, workflow);
         if (actionFeedback.has(item.id)) {
           const feedback = document.createElement('p');
           feedback.className = item.status === 'approved' && ['failed', 'unknown'].includes(item.dispatch_state) ? 'error' : 'muted';
@@ -662,7 +667,8 @@ const JS: &str = r#"
         }
         details.append(summaryLabel, list);
         card.append(details);
-        for (const decision of (item.status === 'pending' ? ['approve', 'reject'] : item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
+        const pendingActions = item.server_mode ? ['approve', 'reject'] : ['reject'];
+        for (const decision of (item.status === 'pending' ? pendingActions : item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
           const form = document.createElement('form');
           form.className = 'inline';
           const label = document.createElement('label');
@@ -1816,6 +1822,8 @@ mod tests {
         assert!(script.contains("expired: 'expired before worker claim'"));
         assert!(script.contains("? '; retry available' : '';"));
         assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
+        assert!(script.contains("Target: missing or invalid (legacy request; cannot be approved)"));
+        assert!(script.contains("const pendingActions = item.server_mode ? ['approve', 'reject'] : ['reject']"));
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
     }

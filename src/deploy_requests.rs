@@ -48,6 +48,7 @@ struct SubmodulePin {
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct CreateDeployRequest {
+    server_mode: String,
     repository: String,
     branch: String,
     commit: String,
@@ -75,6 +76,7 @@ struct DeployRequestSummary {
     commit: String,
     tree: String,
     submodules: Vec<SubmodulePin>,
+    server_mode: Option<String>,
     workflow_url: String,
     summary: String,
     status: String,
@@ -341,6 +343,7 @@ async fn list_requests(State(state): State<DeployRequestState>, headers: HeaderM
                 commit: row.get("commit_hash"),
                 tree: row.get("tree_hash"),
                 submodules,
+                server_mode: request_server_mode(row.get("request_json")),
                 workflow_url: row.get("workflow_url"),
                 summary: row.get("summary"),
                 status: row.get("status"),
@@ -370,7 +373,7 @@ async fn fetch_request_rows(
     pool: &SqlitePool,
     owner_credential_id: Option<&str>,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
-    let query = "SELECT id, requester_profile_id, requester_credential_id, repository, branch, commit_hash, tree_hash, submodules_json, workflow_url,
+    let query = "SELECT id, requester_profile_id, requester_credential_id, repository, branch, commit_hash, tree_hash, submodules_json, request_json, workflow_url,
                         summary, status, version, created_at_unix, expires_at_unix, decided_at_unix, decision_reason, result_detail,
                         dispatch_state, dispatch_attempts, dispatch_attempted_at_unix, dispatch_detail
                  FROM platform_deploy_requests";
@@ -475,6 +478,27 @@ async fn decide_request(
         .trim();
     if reason.is_empty() || reason.len() > 500 || reason.chars().any(char::is_control) {
         return (StatusCode::BAD_REQUEST, "invalid decision reason\n").into_response();
+    }
+    if approve {
+        let stored_json = match sqlx::query_scalar::<_, String>(
+            "SELECT request_json FROM platform_deploy_requests WHERE id = ? AND status = 'pending' AND version = ?",
+        )
+        .bind(&id)
+        .bind(request.expected_version)
+        .fetch_optional(&state.pool)
+        .await
+        {
+            Ok(Some(value)) => value,
+            Ok(None) => return (StatusCode::CONFLICT, "request is expired or no longer pending at that version\n").into_response(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+        if request_server_mode(&stored_json).is_none() {
+            return (
+                StatusCode::CONFLICT,
+                "this legacy request has no valid deployment target; reject it and submit a fresh CI request\n",
+            )
+                .into_response();
+        }
     }
     let now = unix_now();
     let next = if approve { "approved" } else { "rejected" };
@@ -1111,6 +1135,24 @@ async fn invoke_platform_ops(
         .map_err(|_| DispatchFailure { state: "unknown", category: "helper_timeout", technical: "helper wait exceeded ten-second timeout", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?
         .map_err(|_| DispatchFailure { state: "unknown", category: "helper_wait_failed", technical: "could not collect helper result", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
     if !result.status.success() || result.stdout.len() > 4096 {
+        if result.stdout.len() <= 4096 {
+            if let Ok(helper_result) =
+                serde_json::from_slice::<PlatformOperationResult>(&result.stdout)
+            {
+                if helper_result.operation_id == expected_id
+                    && !helper_result.ok
+                    && helper_result.state == "failed"
+                    && !helper_result.detail.is_empty()
+                    && helper_result.detail.len() <= 256
+                    && !helper_result.detail.chars().any(char::is_control)
+                {
+                    eprintln!(
+                        "platform helper rejected operation: {}",
+                        helper_result.detail
+                    );
+                }
+            }
+        }
         return Err(DispatchFailure {
             state: "failed",
             category: "helper_rejected",
@@ -1267,6 +1309,9 @@ fn same_origin(state: &DeployRequestState, headers: &HeaderMap) -> bool {
 }
 
 fn validate_request(request: &CreateDeployRequest) -> Result<(), &'static str> {
+    if !matches!(request.server_mode.as_str(), "monolith" | "services") {
+        return Err("server_mode must be 'monolith' or 'services'\n");
+    }
     if request.repository != SOURCE_REPOSITORY || request.branch != DEPLOY_BRANCH {
         return Err("unsupported deployment source\n");
     }
@@ -1303,6 +1348,12 @@ fn validate_request(request: &CreateDeployRequest) -> Result<(), &'static str> {
         return Err("invalid CI summary\n");
     }
     Ok(())
+}
+
+fn request_server_mode(request_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(request_json).ok()?;
+    let mode = value.get("server_mode")?.as_str()?;
+    matches!(mode, "monolith" | "services").then(|| mode.to_owned())
 }
 
 fn valid_hash(value: &str) -> bool {
@@ -1342,7 +1393,7 @@ async fn no_store(request: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        read_bounded_identity_response, validate_request, CreateDeployRequest,
+        read_bounded_identity_response, request_server_mode, validate_request, CreateDeployRequest,
         IdentityCredentialDecision, SubmodulePin, SUBMODULES,
     };
     use axum::routing::get;
@@ -1351,6 +1402,7 @@ mod tests {
 
     fn valid_request() -> CreateDeployRequest {
         CreateDeployRequest {
+            server_mode: "services".to_string(),
             repository: "GHF-Studios/Vapor-Platform-Server".to_string(),
             branch: "main".to_string(),
             commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
@@ -1371,6 +1423,27 @@ mod tests {
     #[test]
     fn accepts_only_full_revision_with_every_service_pin() {
         assert!(validate_request(&valid_request()).is_ok());
+    }
+
+    #[test]
+    fn rejects_missing_or_unknown_deployment_target() {
+        let mut request = valid_request();
+        request.server_mode.clear();
+        assert!(validate_request(&request).is_err());
+
+        let mut request = valid_request();
+        request.server_mode = "automatic".to_string();
+        assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
+    fn parses_legacy_request_without_a_deployment_target_as_unspecified() {
+        let legacy = r#"{"repository":"GHF-Studios/Vapor-Platform-Server"}"#;
+        assert_eq!(request_server_mode(legacy), None);
+        assert_eq!(
+            request_server_mode(r#"{"server_mode":"services"}"#),
+            Some("services".to_string())
+        );
     }
 
     #[test]

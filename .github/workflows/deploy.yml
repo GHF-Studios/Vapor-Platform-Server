@@ -70,13 +70,14 @@ jobs:
               if mode == "160000" and kind == "commit":
                   pins.append({"path": path, "commit": commit})
           payload = {
+              "server_mode": "services",
               "repository": os.environ["GITHUB_REPOSITORY"],
               "branch": os.environ["GITHUB_REF_NAME"],
               "commit": os.environ["GITHUB_SHA"],
               "tree": root_tree,
               "submodules": sorted(pins, key=lambda item: item["path"]),
               "workflow_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-              "summary": "Composed Platform CI passed.",
+              "summary": "Platform CI passed; target is independent services.",
           }
           print(json.dumps(payload, separators=(",", ":")))
           PY

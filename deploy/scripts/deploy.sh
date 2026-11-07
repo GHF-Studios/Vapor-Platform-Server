@@ -37,10 +37,15 @@ if [ "${VAPOR_DEPLOY_BOOTSTRAP:-}" != "1" ]; then
     exit 2
   fi
   QUEUE_DB="${VAPOR_PLATFORM_DB:-${VAPOR_PLATFORM_STATE:-${VAPOR_STATE_ROOT}/platform}/platform.sqlite3}"
+  case "${VAPOR_SERVER_MODE}" in
+    monolith|services) ;;
+    *) echo "error: approved deployment target is missing or invalid" >&2; exit 2 ;;
+  esac
   python3 "${SCRIPT_DIR}/deploy-request-queue.py" --database "${QUEUE_DB}" verify \
     --id "${VAPOR_APPROVED_DEPLOY_ID}" \
     --version "${VAPOR_APPROVED_DEPLOY_VERSION}" \
-    --commit "${APPROVED_REVISION}"
+    --commit "${APPROVED_REVISION}" \
+    --server-mode "${VAPOR_SERVER_MODE}"
 fi
 
 case "${VAPOR_SERVER_MODE}" in

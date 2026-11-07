@@ -15,19 +15,29 @@ over root SSH, and local and public health checks were run after recovery.
   The unit configuration and migration were corrected in commit
   `09ae2af441e55911c20087ed8922eb8cab01b8cb`.
 - The Platform service was rebuilt from that exact commit on the VPS as a
-  narrowly scoped recovery. It is running in the existing `monolith` mode with
-  zero restarts since recovery. The full local health script passed, including
-  the public Atlas-through-Caddy route. The SQLite integrity check returned
-  `ok`.
+  narrowly scoped recovery. It was running in `monolith` mode with zero
+  restarts after recovery. The next approved request,
+  `5338a3de-fd38-4c89-94ed-5afba23722ab`, targeted `95a8bbcdfb6cabcf21352fd25285c3eaf87638fe`.
+  Dashboard dispatch failed twice with a generic helper error, so root started
+  that exact approved request's one-shot worker directly. The worker built and
+  deployed the approved commit successfully in the existing `monolith` mode.
+  The full local health script then passed, including the public
+  Atlas-through-Caddy route, and SQLite integrity returned `ok`.
+- The request record is `status=succeeded`, while its dispatch substate remains
+  `failed` because the dashboard helper did not queue it; the direct root start
+  was not represented in that substate. This is a known record/presentation
+  inconsistency, not a failed deployment. The helper's structured failure
+  detail is currently discarded by the deployed Platform binary, so its exact
+  cause is not yet established.
 - A pre-repair SQLite backup is retained at
   `/var/backups/vapor-server/platform-pre-repair-20261107T010500Z.sqlite3`;
   the failed candidate binary is retained under
   `/var/backups/vapor-server/platform-failed-candidate-20261107T011200Z/`.
   The backup is protected as root-only state.
 - GitHub Actions CI run `42323052997` for recovery commit `09ae2af` completed
-  successfully. This recovery has not yet gone through a new approved deploy
-  request; the live source checkout is at the recovery commit, and the prior
-  failed request remains recorded as failed.
+  successfully. The live source checkout has since advanced to `95a8bbc` via
+  the approved request above; the prior failed request remains recorded as
+  failed.
 - The previous successful deploy of `6df33ec` was on 2026-11-06. The earlier
   CI failure on `d5e01da` was a recursive-checkout failure because the pinned
   Identity commit was not fetchable from its remote at that time; the later
@@ -129,13 +139,23 @@ Platform unit reads only its own environment file. The deployment health check
 also probes each fixed owner-admin page so a service returning healthy cannot
 hide a broken shared-admin route.
 
-These are local source edits only. They have not been compiled, deployed, or
-observed on the live host. The gateway still applies the existing shared
-HTML shell middleware to service pages; replacing that HTML marker/buffering
-contract with the explicit shared-layout contract in the approved design is
-still open work. USB integrity revalidation is implemented in source but has
-not run on the owner's drive. Fresh-host bootstrap/restore remains open; the
-current recovery scripts are not a proven rebuild path.
+The gateway implementation is present in the deployed binary, but the live
+host still runs `monolith` mode; independent service routing and gateway
+behavior have not been activated and runtime-verified. The gateway still uses
+the existing shared HTML shell middleware for service pages; replacing that
+HTML marker/buffering contract with the explicit shared-layout contract in the
+approved design remains open. USB integrity revalidation is implemented in
+source but has not run on the owner's drive. Fresh-host bootstrap/restore
+remains open; the current recovery scripts are not a proven rebuild path.
+
+The current local work also pins the deployment topology (`services` or
+`monolith`) inside each immutable approval request. New CI requests target the
+approved independent-services architecture; the dashboard displays the target
+and refuses approval of legacy requests without one; the worker verifies and
+deploys only the recorded target. The fixed helper failure reason is also
+recorded in Platform logs when the helper returns a bounded structured error.
+This slice has passed the Platform Rust binary tests and focused deploy-queue
+tests locally; it is not yet pushed or deployed.
 
 ## Verified deployed source
 

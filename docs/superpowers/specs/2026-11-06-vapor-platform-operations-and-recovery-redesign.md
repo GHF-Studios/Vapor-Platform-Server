@@ -1,6 +1,6 @@
 # Vapor Platform Operations and Recovery Redesign
 
-**Status:** Draft for owner review
+**Status:** Owner-approved architecture; implementation in progress
 **Date:** 2026-11-06
 **Scope:** Vapor Platform Server and its service-owned admin, deployment, security, distribution, and recovery contracts. This document records the target architecture; it does not claim the current VPS already implements it.
 
@@ -209,6 +209,18 @@ The common shell is a real server-rendered shared gateway over the one public
 origin. Service presentation and data remain modular, but no page depends on
 post-load HTML surgery or a hard-coded list pretending unavailable modules are
 ready.
+
+### Deployment target is part of the approval
+
+Every deployment request must pin both its source revision and the intended
+runtime topology (`services` or, only while migration remains supported,
+`monolith`). CI submits the target explicitly; the approval card displays it;
+and the root worker executes exactly that target from the immutable request.
+The worker must not infer the approved topology from mutable `/etc` state.
+Requests created before this field exists are ambiguous and must not deploy:
+they remain visible as legacy requests, can be rejected, and require a fresh CI
+request before deployment. This keeps the approved action legible and prevents
+a source-only approval from unexpectedly retaining or changing the live mode.
 
 ### Navigation and tasks
 

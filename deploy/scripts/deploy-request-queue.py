@@ -62,6 +62,18 @@ def claim(db, request_id):
             print("null")
             return 0
         request = decode_request(row)
+        server_mode = request.get("server_mode")
+        if server_mode not in ("monolith", "services"):
+            detail = "Approved legacy request has no valid deployment target; no deployment was run. Submit a fresh CI request."
+            db.execute(
+                "UPDATE platform_deploy_requests SET status = 'failed', version = version + 1, "
+                "decided_at_unix = ?, dispatch_state = 'failed', dispatch_detail = ?, result_detail = ? "
+                "WHERE id = ? AND status = 'approved' AND version = ?",
+                (now, detail, detail, row["id"], row["version"]),
+            )
+            db.execute("COMMIT")
+            print("null")
+            return 0
         changed = db.execute(
             "UPDATE platform_deploy_requests SET status = 'executing', version = version + 1 "
             "WHERE id = ? AND status = 'approved' AND version = ?",
@@ -97,7 +109,7 @@ def complete(db, request_id, version, result, detail):
         raise
 
 
-def verify_claim(db, request_id, version, commit):
+def verify_claim(db, request_id, version, commit, server_mode):
     row = db.execute(
         "SELECT * FROM platform_deploy_requests WHERE id = ? AND status = 'executing' AND version = ?",
         (request_id, version),
@@ -107,6 +119,8 @@ def verify_claim(db, request_id, version, commit):
     request = decode_request(row)
     if request["commit"] != commit:
         raise ValueError("executing request revision does not match the deployment argument")
+    if request.get("server_mode") != server_mode or server_mode not in ("monolith", "services"):
+        raise ValueError("executing request topology does not match the deployment argument")
 
 
 def main():
@@ -124,6 +138,7 @@ def main():
     verify.add_argument("--id", required=True)
     verify.add_argument("--version", required=True, type=int)
     verify.add_argument("--commit", required=True)
+    verify.add_argument("--server-mode", required=True, choices=("monolith", "services"))
     args = parser.parse_args()
 
     try:
@@ -131,7 +146,7 @@ def main():
             if args.command == "claim":
                 return claim(db, args.id)
             if args.command == "verify":
-                verify_claim(db, args.id, args.version, args.commit)
+                verify_claim(db, args.id, args.version, args.commit, args.server_mode)
             else:
                 complete(db, args.id, args.version, args.result, args.detail)
             return 0

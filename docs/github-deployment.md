@@ -9,13 +9,14 @@ VPS and never approves or starts a deployment.
 1. CI validates the Platform repository and every pinned root-level service
    submodule.
 2. The request workflow submits the full root commit, tree, pinned submodule
-   revisions, and CI run URL to Platform using an Identity credential scoped
-   only to `platform:deploy-request:create`.
-3. A root operator reviews the request in `/admin/operations` and approves or
-   rejects it.
+   revisions, CI run URL, and explicit `services` target to Platform using an
+   Identity credential scoped only to `platform:deploy-request:create`.
+3. A root operator reviews the exact source and deployment target in
+   `/admin/operations` and approves or rejects it. Legacy requests without a
+   recorded target cannot be approved; submit a fresh CI request instead.
 4. Approval immediately starts the systemd unit for that request ID. The
    worker revalidates the immutable request and executes only the approved
-   revision.
+   revision and target. It does not infer topology from mutable host settings.
 5. The Operations dashboard records the result. A dispatch failure before the
    worker claims the request can be retried by a root operator. If a worker
    stops after claiming the request, a root operator can reconcile it only
