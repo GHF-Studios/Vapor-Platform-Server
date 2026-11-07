@@ -1,5 +1,25 @@
 # Vapor server deployment status
 
+## Latest candidate validation (2026-11-07 04:37 UTC)
+
+- The approved service-scoped deployment implementation is on
+  `codex/platform-integration-20261102` at `94016b0451204cb91547ba00dfd6ffd404569dc6`.
+  It adds fixed-target deployments for Atlas and the seven service submodules,
+  while keeping Platform and shared-host changes on the existing full deploy
+  path.
+- The first Linux CI run exposed a test harness trying to set root ownership
+  when running as the unprivileged GitHub runner. Runtime ownership is now
+  applied only to the live executable; rollback copies do not receive runtime
+  ownership. The test harness mocks that privileged operation in integration
+  tests while keeping a focused test for the ownership helper itself.
+- GitHub Actions Ubuntu CI passed on the code commit (`42338788185`) and again
+  on the final documentation commit (`42338992496`). The Windows test recipe
+  also passed (69 Python tests; nine POSIX-only cases skipped there).
+- These are source and CI results only. No live VPS deployment was run; the
+  previously granted temporary SSH access has expired. A live service-scoped
+  deployment still needs a fresh approved request and installation of this
+  candidate through the deployment flow.
+
 ## Latest follow-up (2026-11-07 03:24 UTC)
 
 - The temporary SSH expiry unit `vapor-codex-access-expire.service` is failed
