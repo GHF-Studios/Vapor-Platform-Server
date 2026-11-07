@@ -35,6 +35,27 @@
   viewport and assistive-technology review remains outstanding. No VPS
   deployment was performed.
 
+## Recovery integrity and USB retention checks (2026-11-07 10:20 UTC)
+
+- Restore now verifies the detached archive sidecar before parsing the archive:
+  the sidecar must be one canonical SHA-256 entry naming the selected archive.
+  A valid digest attached to another filename is rejected.
+- USB retention fixtures cover the destructive budget path. They verify that
+  pruning keeps the current content-verified archive, removes only the oldest
+  verified history needed to fit the configured archive-payload budget, and
+  refuses without deleting history when unindexed/manual data leaves no room.
+- The sync report now calls its byte field `retained_archive_payload_bytes`;
+  it excludes sidecars, extracted kits, and other USB contents. Build docs also
+  distinguish developer-local compilation, approved primary-host service
+  deployment, and the not-yet-implemented target-snapshot publisher.
+- Focused local validation passed: 35 recovery/deployment Python tests (4
+  platform-specific skips), Python syntax compilation, diff checks, and the
+  Windows USB-sync PowerShell suite. Platform CI run `42363390368` passed both
+  `root-ci` and `windows-recovery-tests` for commit `96eee5d`.
+- These changes are source-only; no production deployment occurred. Direct
+  root SSH inspection was rejected by the VPS, so live host status remains
+  unverified. The disposable clean-host recovery drill also remains outstanding.
+
 ## Recovery and reconciled-deploy hardening (2026-11-07 06:45 UTC)
 
 - Recovery validation now rejects more than 100,000 archive entries, any
