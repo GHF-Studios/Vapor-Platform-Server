@@ -142,6 +142,16 @@
 - [ ] Verify the kit on the owner's removable drive and run a clean-host
   recovery drill.
 
+## Follow-up Task 9: Gate recovery on configured providers only
+
+- [x] Keep Steam identity and the owner dashboard required for recovery.
+- [x] Require GitHub browser readiness only if either GitHub OAuth credential
+  is configured; fail closed if Identity omits the GitHub configuration flags.
+- [x] Add regression cases for unconfigured GitHub, configured-but-unready
+  GitHub, missing Steam, and unknown GitHub configuration.
+- [x] Make fresh-host instructions refer to configured provider checks rather
+  than requiring GitHub sign-in for every installation.
+
 ## Execution Notes
 
 - The user authorized the unencrypted archive contents and ordinary root SSH access. This does not authorize deleting historical server archives, changing root keys, deploying, or running a destructive restore.

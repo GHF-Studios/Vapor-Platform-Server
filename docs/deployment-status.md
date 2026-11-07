@@ -1,25 +1,25 @@
 # Vapor server deployment status
 
-## Latest candidate validation (2026-11-07 05:01 UTC)
+## Latest candidate validation (2026-11-07 06:06 UTC)
 
-- The candidate branch `codex/platform-integration-20261102` is at
-  `d525244c7191a8c528a2ce83ee540b275ad4a192` (`Serialize and test USB recovery
-  sync`). It adds a per-destination mutex to USB catch-up before stale partial
-  cleanup, four local sync scenarios, and a native Windows CI job.
-- GitHub Actions run `42340794300` passed both `root-ci` and
-  `windows-recovery-tests`. The Windows job exercised initial copy/catch-up,
-  invalid latest-pointer rejection, corrupt archive rejection while preserving
-  a prior verified copy, and overlapping-sync refusal while preserving the
-  active partial. The full root recipe also passed.
-- The preceding CI failures were from rollback integration tests attempting a
-  privileged ownership change on an unprivileged runner. The test boundary and
-  rollback ownership behavior were corrected; later CI runs passed. The email
-  received after the newest push may therefore refer to an earlier failed run;
-  run `42340794300` is the verified result for `d525244`.
-- These are source and CI results only. No live VPS deployment or physical USB
-  restore drill was performed. The previously granted temporary SSH access has
-  expired; a live operation needs a fresh approved request and installation
-  through the deployment flow.
+- The latest green pushed candidate is
+  `3265b3f2a858c427402aa3b8d81af4bf2b749c74` on
+  `codex/platform-integration-20261102`. GitHub Actions run `42345175420`
+  passed `root-ci` and `windows-recovery-tests`.
+- The Windows job exposed a runner-specific issue in its predecessor
+  `be4c5e9`: PowerShell returned both Windows and Git copies of `tar.exe`, which
+  were combined into an invalid command path. `3265b3f` selects one executable;
+  all eight USB fixture scenarios then passed on the native Windows runner.
+- The green candidate includes source-pinned recovery files in each new export,
+  hash verification before USB extraction, and an explicit unavailable pointer
+  when the latest archive predates the kit. The stale-pointer transition is
+  covered by the Windows fixtures.
+- After `3265b3f`, a local follow-up makes fresh-host recovery require GitHub
+  browser readiness only when at least one GitHub OAuth credential is
+  configured. The full local test recipe and the eight USB scenarios pass for
+  that follow-up; its pushed CI result is pending.
+- These are source and CI results only. No live VPS deployment, real USB copy,
+  or clean-host restore drill was performed.
 
 ## Latest follow-up (2026-11-07 03:24 UTC)
 

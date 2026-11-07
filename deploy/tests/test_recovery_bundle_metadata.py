@@ -138,23 +138,51 @@ class RecoveryBundleMetadataTests(unittest.TestCase):
         self.assertIsNone(metadata.rustc_version)
         self.assertIsNone(metadata.cargo_version)
 
-    def test_provider_readiness_requires_steam_github_and_dashboard(self) -> None:
+    def test_provider_readiness_requires_github_only_when_configured(self) -> None:
         status = {
             "steam_identity_ready": True,
-            "github_browser_login_ready": True,
+            "github_client_id_configured": False,
+            "github_client_secret_configured": False,
+            "github_browser_login_ready": False,
             "dashboard_ready": True,
         }
         self.assertEqual(METADATA.missing_provider_readiness(status), ())
 
-    def test_provider_readiness_reports_missing_or_non_boolean_values(self) -> None:
+    def test_provider_readiness_requires_configured_github_login(self) -> None:
         status = {
             "steam_identity_ready": True,
+            "github_client_id_configured": True,
+            "github_client_secret_configured": False,
+            "github_browser_login_ready": False,
+            "dashboard_ready": True,
+        }
+        self.assertEqual(
+            METADATA.missing_provider_readiness(status),
+            ("github_browser_login_ready",),
+        )
+
+    def test_provider_readiness_fails_closed_when_github_configuration_is_unknown(self) -> None:
+        status = {
+            "steam_identity_ready": True,
+            "github_browser_login_ready": False,
+            "dashboard_ready": True,
+        }
+        self.assertEqual(
+            METADATA.missing_provider_readiness(status),
+            ("github_client_id_configured", "github_client_secret_configured"),
+        )
+
+    def test_provider_readiness_requires_steam_and_boolean_dashboard(self) -> None:
+        status = {
+            "steam_identity_ready": False,
+            "github_client_id_configured": False,
+            "github_client_secret_configured": False,
             "github_browser_login_ready": False,
             "dashboard_ready": "true",
         }
         self.assertEqual(
             METADATA.missing_provider_readiness(status),
-            ("github_browser_login_ready", "dashboard_ready"),
+            ("steam_identity_ready", "dashboard_ready"),
         )
 
 

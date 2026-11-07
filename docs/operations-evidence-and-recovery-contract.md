@@ -218,11 +218,13 @@ files. The coordinator then checks out the exact recorded source/submodules
 before using the archive validator. A clean-host exercise remains necessary
 to verify this chain end to end.
 
-The final machine check requires Identity to report Steam identity, GitHub
-browser login, and dashboard as configured and ready. These booleans verify
-server configuration, not successful end-to-end provider credentials. The
-recovery marker remains until the owner signs in with Steam and GitHub in a
-browser, verifies the owner dashboard, and reruns with
+The final machine check requires Identity to report Steam identity and the
+dashboard as configured and ready. GitHub browser login is required only when
+either GitHub OAuth credential is configured; when neither is configured,
+GitHub remains optional. These booleans verify server configuration, not
+successful end-to-end provider credentials. The recovery marker remains until
+the owner completes configured provider checks in a browser, verifies the owner
+dashboard, and reruns with
 `--resume --confirm-provider-checks`. That flag is an explicit owner attestation;
 the script does not claim to independently prove third-party OAuth credentials.
 Exit status `3` means restoration is complete and waiting for that owner check;

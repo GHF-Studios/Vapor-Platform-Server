@@ -22,14 +22,31 @@ class MetadataError(RuntimeError):
 
 
 def missing_provider_readiness(status: object) -> tuple[str, ...]:
-    required = (
-        "steam_identity_ready",
-        "github_browser_login_ready",
-        "dashboard_ready",
-    )
     if not isinstance(status, dict):
-        return required
-    return tuple(key for key in required if status.get(key) is not True)
+        return (
+            "steam_identity_ready",
+            "github_client_id_configured",
+            "github_client_secret_configured",
+            "dashboard_ready",
+        )
+
+    missing = [
+        key
+        for key in ("steam_identity_ready", "dashboard_ready")
+        if status.get(key) is not True
+    ]
+    github_configuration = (
+        "github_client_id_configured",
+        "github_client_secret_configured",
+    )
+    unknown_configuration = [
+        key for key in github_configuration if type(status.get(key)) is not bool
+    ]
+    missing.extend(unknown_configuration)
+    if not unknown_configuration and any(status[key] for key in github_configuration):
+        if status.get("github_browser_login_ready") is not True:
+            missing.append("github_browser_login_ready")
+    return tuple(missing)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -209,7 +226,13 @@ def main(argv: list[str]) -> int:
         if missing:
             print("recovery-readiness: missing required readiness: " + ", ".join(missing), file=sys.stderr)
             return 1
-        print("recovery-readiness: Steam, GitHub browser login, and dashboard are configured")
+        github_configured = status["github_client_id_configured"] or status["github_client_secret_configured"]
+        providers = "Steam and dashboard are configured and ready"
+        if github_configured:
+            providers += "; GitHub browser login is configured and ready"
+        else:
+            providers += "; GitHub is not configured and remains optional"
+        print("recovery-readiness: " + providers)
         return 0
     if len(argv) == 3 and argv[1] == "--describe":
         try:

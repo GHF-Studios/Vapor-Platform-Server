@@ -210,7 +210,7 @@ if [ "${RESUME}" = true ] && [ "${marker_phase}" = awaiting_provider_checks ]; t
   if [ "${CONFIRM_PROVIDER_CHECKS}" != true ]; then
     RECOVERY_AWAITING_CONFIRMATION=true
     echo "fresh-recovery: restore is complete, but owner provider checks remain pending"
-    echo "fresh-recovery: sign in with Steam and GitHub in a browser and verify the owner dashboard; rerun with --resume --confirm-provider-checks"
+    echo "fresh-recovery: complete configured provider checks in a browser, verify the owner dashboard, and rerun with --resume --confirm-provider-checks"
     exit 3
   fi
   unexpected_marker_entry="$(find "${RECOVERY_MARKER_ROOT}" -mindepth 1 -maxdepth 1 ! -name fresh-host.pin -print -quit)"
@@ -391,6 +391,6 @@ curl --fail --silent --show-error --connect-timeout 3 --max-time 15 \
 python3 "${VALIDATOR_ROOT}/deploy/scripts/recovery_bundle_metadata.py" \
   --check-provider-readiness "${STATUS_FILE}"
 
-echo "fresh-recovery: services restored and configured Steam/GitHub/dashboard readiness is present"
-echo "fresh-recovery: sign in with Steam and GitHub in a browser and verify the owner dashboard; rerun with --resume --confirm-provider-checks"
+echo "fresh-recovery: services restored and all configured provider/dashboard readiness checks passed"
+echo "fresh-recovery: complete configured provider checks in a browser, verify the owner dashboard, and rerun with --resume --confirm-provider-checks"
 exit 3
