@@ -13,8 +13,9 @@
 - Regression tests cover each recovery bound and the stopped-worker lifecycle
   transition. The full local Platform test recipe passed after these changes.
 - CI run `42348443012` found a Linux-only helper qualification error that the
-  Windows build could not expose; the call is corrected in the follow-up
-  commit. The next CI run is the validation gate for that correction.
+  Windows build could not expose; commit `d19c9be` corrected it. CI run
+  `42348670442` passed both `root-ci` and `windows-recovery-tests` for that
+  revision.
 - SSH read-only probes using both the root key and the same key for `leslieghf`
   were rejected. No VPS changes were made.
 
