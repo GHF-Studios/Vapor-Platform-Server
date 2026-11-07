@@ -8,6 +8,8 @@ REPO_ROOT="$(cd -- "${DEPLOY_DIR}/.." && pwd)"
 VAPOR_DOMAIN="${VAPOR_DOMAIN:-vapor.ghf-studios.site}"
 VAPOR_REPO_URL="${VAPOR_REPO_URL:-https://github.com/GHF-Studios/Vapor-Platform-Server.git}"
 VAPOR_BRANCH="${VAPOR_BRANCH:-main}"
+__VAPOR_APPROVED_REQUEST_ID="${VAPOR_APPROVED_DEPLOY_ID:-}"
+__VAPOR_APPROVED_REQUEST_MODE="${VAPOR_SERVER_MODE:-}"
 VAPOR_SERVER_MODE="${VAPOR_SERVER_MODE:-monolith}"
 VAPOR_DEPLOY_ROOT="${VAPOR_DEPLOY_ROOT:-/opt/vapor-platform-server}"
 VAPOR_STATE_ROOT="${VAPOR_STATE_ROOT:-/var/lib/vapor-server}"
@@ -19,7 +21,16 @@ if [ -r "${VAPOR_CONFIG_DIR}/platform.env" ]; then
   source "${VAPOR_CONFIG_DIR}/platform.env"
   set +a
 fi
-
+if [ -n "${__VAPOR_APPROVED_REQUEST_ID}" ]; then
+  case "${__VAPOR_APPROVED_REQUEST_MODE}" in
+    monolith|services) VAPOR_SERVER_MODE="${__VAPOR_APPROVED_REQUEST_MODE}" ;;
+    *)
+      echo "error: approved deployment request mode is missing or invalid" >&2
+      exit 2
+      ;;
+  esac
+fi
+unset __VAPOR_APPROVED_REQUEST_ID __VAPOR_APPROVED_REQUEST_MODE
 VAPOR_USER="${VAPOR_USER:-vapor}"
 VAPOR_GROUP="${VAPOR_GROUP:-vapor}"
 VAPOR_HTTP_FALLBACK_HOST="${VAPOR_HTTP_FALLBACK_HOST:-}"
