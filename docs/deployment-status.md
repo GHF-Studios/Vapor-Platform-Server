@@ -916,6 +916,9 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - Four full-deployment requests remain pending. The newest is
   `96b44a5a-c3c4-4d7c-a4ae-c05d9e5042f9` for `b1e2d3c`; the three older
   requests target ancestors and should not be selected as rollback revisions.
+  This candidate still contains the prior `install-platform-ops.sh` behavior
+  that recreates the broad `%vapor-temp-ssh` sudo rule. Do not approve or
+  dispatch it until a newer candidate includes the per-grant installer fix.
   No approval or dispatch was performed in this check.
 - Historical request
   `5338a3de-fd38-4c89-94ed-5afba23722ab` records a successful deployment in
