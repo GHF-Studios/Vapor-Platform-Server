@@ -64,7 +64,7 @@ and must not be read as current host status.
 
 ## Not-yet-deployed public homepage update (2026-11-07 15:28 UTC)
 
-- Homepage commit `ee31c3fcd3b4f70fa7393ca5d4f495d35148d733` replaces the
+- Homepage commit `589be8b5b8438337334fdf5200b07292899e3270` replaces the
   link-only root page with a responsive product overview and directs setup to
   the existing `/downloads` page. It keeps release status, setup details, and
   legal routes owned by their current surfaces. `cargo check --locked` passed
