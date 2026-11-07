@@ -228,8 +228,10 @@ staging and restore. It never cleans unrelated paths.
 
 Temporary SSH accounts, authorized keys, and sudoers fragments are host-local
 and are not copied into a recovery archive. Same-host restore stops and drains
-expiry work before replacing state, then re-arms expiry timers for active grants
-in the restored database. A fresh-host restore marks previously active,
+expiry work before replacing state, then re-arms expiry timers for active,
+failed, or interrupted grants that carry an expiry timestamp; missing or unsafe
+timer units fail the restore instead of leaving a grant without automatic
+cleanup. A fresh-host restore marks previously active,
 provisioning, or failed temporary grants as revoked with a `system_recovery`
 audit event, clears their stored public keys and granted scopes, and omits their
 expiry units. Pending requests remain available for a new owner decision. The
