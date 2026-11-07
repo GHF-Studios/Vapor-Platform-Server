@@ -12,6 +12,11 @@
   protected owner page. This spot-check did not re-check the running Platform
   revision or service topology; the full host snapshot below remains dated
   15:13 UTC.
+- `/api/build-cache/v1/status` still reports no configured/current snapshot
+  for either supported target (`x86_64-unknown-linux-gnu` and
+  `x86_64-pc-windows-gnullvm`). The deployed status API therefore does not
+  show a promoted remote cache artifact; deployment builds continue to use the
+  primary VPS fallback path recorded in the host snapshot below.
 
 ## Current live state (2026-11-07 15:13 UTC)
 
