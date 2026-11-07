@@ -1,5 +1,27 @@
 # Vapor server deployment status
 
+## Live-surface and queue recheck (2026-11-07 10:49 UTC)
+
+- A fresh public GET probe confirms `/healthz`, `/`, `/api/build-cache/v1/status`,
+  and `/admin` return 200. `/admin/approvals`, `/admin/deployments`, and
+  `/admin/ssh-access` still return 404 on the live host. The Build Cache status
+  reports both supported target triples as unconfigured and not current. The
+  current Platform source registers these admin routes, so the live host has
+  not yet been brought to this source revision.
+- A new Identity browser authorization was started for this workstation's
+  existing public SSH key, requesting `host_admin` for eight hours. This is
+  only permission to submit the request; the actual Platform SSH grant has not
+  been approved, and no SSH login was retried.
+- Windows CI initially exposed two Atlas tests that require Linux atomic
+  directory-symlink replacement. The tests now skip only on Windows. Commit
+  `ea61cdc` passed both CI jobs in run `42365193600`.
+- Source review found stale dispatch normalization was also changing an old
+  `queued` deployment to `unknown` solely by age, despite successful helper
+  acceptance and a worker that may still be waiting on the shared lock. The
+  regression test now distinguishes accepted `queued` work from uncertain
+  `dispatching` work. The code change is locally verified but awaits its own
+  CI run; this source-only fix has not been deployed.
+
 ## Recovery preflight and one approval surface (2026-11-07 09:34 UTC)
 
 - Fresh-host recovery now validates the complete bundle and checks its Ubuntu
