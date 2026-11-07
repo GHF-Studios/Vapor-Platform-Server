@@ -905,8 +905,9 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - The stale temporary grant `240aab1d-8edc-49bd-bbd1-47706983e2c3` is recorded
   as revoked, its Linux account is absent, `vapor-temp-ssh` has no members, and
   `visudo -c` succeeds. The old broad group sudoers file was removed during
-  the earlier root-assisted reconciliation. The source installer fix that
-  prevents recreating it is committed on the review branch but has not been
+  the earlier root-assisted reconciliation. The review-branch source fix
+  removes only that exact legacy file and now refuses installation if any
+  group-wide sudo rule for `vapor-temp-ssh` remains elsewhere. It has not been
   deployed.
 - At this check, the Platform checkout is detached at
   `12192d85348432ee24d1ce7c02ff2dab6eeded84`; Platform and all seven service

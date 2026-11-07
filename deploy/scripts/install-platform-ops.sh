@@ -91,6 +91,17 @@ if [ -e "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ]; then
   fi
   rm -- "${legacy_sudoers}"
 fi
+if grep -RIlE '^[[:space:]]*%vapor-temp-ssh[[:space:]]' \
+  /etc/sudoers /etc/sudoers.d >/dev/null 2>&1; then
+  echo "error: unexpected group-wide temporary-access sudo rule remains; refusing to enable access" >&2
+  exit 1
+else
+  sudoers_scan_status=$?
+  if [ "${sudoers_scan_status}" -ne 1 ]; then
+    echo "error: could not verify temporary-access sudo policy; refusing to enable access" >&2
+    exit 1
+  fi
+fi
 visudo -c >/dev/null
 
 if ! getent group vapor-temp-ssh >/dev/null; then
