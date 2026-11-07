@@ -520,7 +520,7 @@ const JS: &str = r#"
       return Number.isFinite(seconds) && seconds > 0 && seconds <= 8640000000000
         ? new Date(seconds * 1000).toLocaleString() : 'not recorded';
     };
-    const serviceDeployTargets = new Set(['atlas', 'homepage', 'docs', 'identity', 'diagnostics', 'registry', 'artifact', 'build-cache']);
+    const serviceDeployTargets = new Set((document.querySelector('[data-deployment-targets]')?.dataset.deploymentTargets || '').split(',').filter(Boolean));
     const validDeploymentSelection = item => {
       if (!['monolith', 'services'].includes(item.server_mode)) return false;
       if (item.deployment_scope === 'full') return item.service_target === null;
@@ -1447,9 +1447,11 @@ fn render_admin_header(current_path: &str) -> String {
         })
         .max_by_key(|section| section.path.map_or(0, str::len));
     let section_name = current.map_or("Administration", |section| section.name);
+    let deployment_targets = crate::deploy_requests::SERVICE_DEPLOY_TARGETS.join(",");
     format!(
-        "<header class=\"admin-header\"><div><p class=\"eyebrow\">Current section</p><p class=\"admin-section-name\">{}</p></div><div class=\"admin-statuses\"><p class=\"admin-status-item\">Operator session <span class=\"status-pill status-protected\" data-operator-session role=\"status\" aria-live=\"polite\">Checking</span></p><p class=\"admin-status-item\">Platform <span class=\"status-pill\" data-platform-status role=\"status\" aria-live=\"polite\">Checking</span></p></div></header>",
-        escape_html(section_name)
+        "<header class=\"admin-header\" data-deployment-targets=\"{}\"><div><p class=\"eyebrow\">Current section</p><p class=\"admin-section-name\">{}</p></div><div class=\"admin-statuses\"><p class=\"admin-status-item\">Operator session <span class=\"status-pill status-protected\" data-operator-session role=\"status\" aria-live=\"polite\">Checking</span></p><p class=\"admin-status-item\">Platform <span class=\"status-pill\" data-platform-status role=\"status\" aria-live=\"polite\">Checking</span></p></div></header>",
+        escape_html(&deployment_targets),
+        escape_html(section_name),
     )
 }
 
@@ -2347,6 +2349,14 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn shared_shell_exposes_the_server_owned_deployment_target_allowlist() {
+        let header = super::render_admin_header("/admin/approvals");
+        assert!(header.contains(
+            "data-deployment-targets=\"atlas,homepage,docs,identity,diagnostics,registry,artifact,build-cache\""
+        ));
+    }
+
     #[tokio::test]
     async fn monolith_probes_platform_and_homepage_as_distinct_services() {
         let app = Router::new().fallback(any(fake_monolith_health));
@@ -2657,6 +2667,7 @@ mod tests {
         assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const validDeploymentSelection = item =>"));
         assert!(script.contains("serviceDeployTargets.has(item.service_target)"));
+        assert!(script.contains("document.querySelector('[data-deployment-targets]')"));
         assert!(script.contains("Target: ${deploymentSelectionLabel(item)}"));
         assert!(script.contains(
             "const pendingActions = selectionValid ? ['approve', 'reject'] : ['reject']"

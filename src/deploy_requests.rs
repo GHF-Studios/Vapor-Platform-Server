@@ -18,6 +18,16 @@ const REQUEST_TTL_SECONDS: i64 = 3 * 24 * 60 * 60;
 const DISPATCH_STALE_SECONDS: i64 = 30;
 const SOURCE_REPOSITORY: &str = "GHF-Studios/Vapor-Platform-Server";
 const DEPLOY_BRANCH: &str = "main";
+pub(crate) const SERVICE_DEPLOY_TARGETS: &[&str] = &[
+    "atlas",
+    "homepage",
+    "docs",
+    "identity",
+    "diagnostics",
+    "registry",
+    "artifact",
+    "build-cache",
+];
 const SUBMODULES: &[&str] = &[
     "Atlas",
     "Vapor-Artifact-Server",
@@ -1723,17 +1733,7 @@ fn validate_request(request: &CreateDeployRequest) -> Result<(), &'static str> {
     ) {
         ("full", None) => {}
         ("service", Some(target)) if request.server_mode == "services" => {
-            if !matches!(
-                target,
-                "atlas"
-                    | "homepage"
-                    | "docs"
-                    | "identity"
-                    | "diagnostics"
-                    | "registry"
-                    | "artifact"
-                    | "build-cache"
-            ) {
+            if !SERVICE_DEPLOY_TARGETS.contains(&target) {
                 return Err("service_target is not an allowlisted deployment target\n");
             }
         }
@@ -1839,7 +1839,7 @@ mod tests {
     use super::{
         fetch_request_rows, read_bounded_identity_response, request_scope, request_server_mode,
         request_service_target, same_request_shape, validate_request, CreateDeployRequest,
-        IdentityCredentialDecision, SubmodulePin, SUBMODULES,
+        IdentityCredentialDecision, SubmodulePin, SERVICE_DEPLOY_TARGETS, SUBMODULES,
     };
     use crate::pagination::{Page, PageCursor};
     use axum::routing::get;
@@ -1942,19 +1942,10 @@ mod tests {
 
     #[test]
     fn accepts_all_allowlisted_service_targets_and_rejects_bad_scope_shapes() {
-        for target in [
-            "atlas",
-            "homepage",
-            "docs",
-            "identity",
-            "diagnostics",
-            "registry",
-            "artifact",
-            "build-cache",
-        ] {
+        for target in SERVICE_DEPLOY_TARGETS {
             let mut request = valid_request();
             request.deployment_scope = "service".to_string();
-            request.service_target = Some(target.to_string());
+            request.service_target = Some((*target).to_string());
             assert!(validate_request(&request).is_ok(), "target {target}");
         }
 
