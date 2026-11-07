@@ -5,6 +5,20 @@
 This section supersedes earlier status summaries below. The host was inspected
 over root SSH, and local and public health checks were run after recovery.
 
+- A later verification checked the 2026-11-07 `9b32a02` candidate. GitHub
+  Actions run `42331660686` completed both composed Platform CI and deploy
+  request submission successfully. The request is approval-gated; this check
+  did not dispatch or install it. Public `/healthz` and `/admin` return HTTP
+  200, while `/admin/approvals`, `/admin/deployments`, `/admin/ssh-access`,
+  `/admin/hosting`, and `/admin/history` return 404. The candidate admin
+  routes are therefore not live yet. `/api/admin/operations` returns 401
+  without an authenticated owner session.
+- The current Windows SSH key reaches the VPS as the non-root operator account;
+  the root key currently available to this workstation is rejected. The
+  operator's passwordless sudo allowlist exposes only the approved-deployment
+  dispatcher and allowlisted service restarts. No deployment or service
+  mutation was run during this check.
+
 - The approved deploy request
   `bdf86cf7-f6b5-4681-bc9d-ee644d2ca5a3` targeted `a8462945af4b16befd9e94964917cad15e33cfd6`.
   Approval persisted cleanly, but its deployment failed during startup. The
