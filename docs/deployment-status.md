@@ -16,8 +16,20 @@ over root SSH, and local and public health checks were run after recovery.
 - The current Windows SSH key reaches the VPS as the non-root operator account;
   the root key currently available to this workstation is rejected. The
   operator's passwordless sudo allowlist exposes only the approved-deployment
-  dispatcher and allowlisted service restarts. No deployment or service
-  mutation was run during this check.
+  dispatcher and allowlisted service restarts. The initial route probe was
+  read-only.
+
+- At 03:11 UTC, the approved `vapor-ssh-deploy` dispatcher returned
+  `Queued 2 approved deployment request(s).` It reports only a count, not the
+  request IDs. A subsequent read-only check found no active systemd jobs; the
+  only retained failed deployment unit was still the earlier
+  `bdf86cf7-f6b5-4681-bc9d-ee644d2ca5a3` failure from 01:03 UTC. The restricted
+  account cannot read the Platform database or other users' system journal,
+  so the two queued IDs and their terminal outcomes could not be correlated.
+  Public `/healthz` and `/admin` still returned 200, while the candidate
+  `/admin/approvals`, `/admin/deployments`, `/admin/ssh-access`, `/admin/hosting`,
+  and `/admin/history` routes remained 404. Deployment of the candidate is
+  therefore unverified; this observation does not establish success or failure.
 
 - The approved deploy request
   `bdf86cf7-f6b5-4681-bc9d-ee644d2ca5a3` targeted `a8462945af4b16befd9e94964917cad15e33cfd6`.
