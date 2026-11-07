@@ -34,5 +34,6 @@ if [ "${#request_ids[@]}" -eq 0 ]; then
 fi
 for request_id in "${request_ids[@]}"; do
   systemctl start --no-block "vapor-deploy@${request_id}.service"
+  echo "Queued deployment request ${request_id}."
 done
 echo "Queued ${#request_ids[@]} approved deployment request(s)."
