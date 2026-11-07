@@ -87,9 +87,11 @@ ceilings; the server's allowlist and hard maximum govern the actual grant.
 Each grant receives a separate temporary Unix account and separate
 `authorized_keys` entry. Root SSH remains disabled/unchanged. Password login,
 agent forwarding, X11 forwarding, and port forwarding are disabled for these
-accounts. Scoped sudo rules name only root-owned wrappers with fixed operations;
-the full-admin profile grants unrestricted sudo only on that temporary account
-and only until cleanup.
+accounts. The `vapor-temp-ssh` group is only the SSH match/primary group; it
+must not carry a group-wide sudo rule. Scoped sudo rules are installed per grant
+and name only the root-owned wrappers allowed by that grant. The full-admin
+profile grants unrestricted sudo only on that temporary account and only until
+cleanup.
 
 ## Privilege boundary
 

@@ -77,14 +77,21 @@ mv -f -- "${temporary_sudoers}" /etc/sudoers.d/vapor-platform-ops
 
 install -o root -g root -m 0750 "${DEPLOY_DIR}/scripts/vapor-ssh-deploy" /usr/local/sbin/vapor-ssh-deploy
 install -o root -g root -m 0750 "${DEPLOY_DIR}/scripts/vapor-ssh-service-control" /usr/local/sbin/vapor-ssh-service-control
-temporary_sudoers="$(mktemp /etc/sudoers.d/vapor-temporary-access.XXXXXX)"
-cat > "${temporary_sudoers}" <<'EOF'
-%vapor-temp-ssh ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy "", /usr/local/sbin/vapor-ssh-service-control
-EOF
-chown root:root "${temporary_sudoers}"
-chmod 0440 "${temporary_sudoers}"
-visudo -cf "${temporary_sudoers}"
-mv -f -- "${temporary_sudoers}" /etc/sudoers.d/vapor-temporary-access
+
+# The group is only the SSH match/primary group. Capability-specific commands
+# are granted by each request's own sudoers file; a group-wide rule would let
+# every temporary account exceed its approved capability set.
+legacy_sudoers=/etc/sudoers.d/vapor-temporary-access
+if [ -e "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ]; then
+  if [ ! -f "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ] || \
+    [ "$(wc -l < "${legacy_sudoers}")" -ne 1 ] || \
+    ! grep -Fqx '%vapor-temp-ssh ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy "", /usr/local/sbin/vapor-ssh-service-control' "${legacy_sudoers}"; then
+    echo "error: unexpected legacy temporary-access sudoers file; preserving it" >&2
+    exit 1
+  fi
+  rm -- "${legacy_sudoers}"
+fi
+visudo -c >/dev/null
 
 if ! getent group vapor-temp-ssh >/dev/null; then
   groupadd --system vapor-temp-ssh

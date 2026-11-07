@@ -864,9 +864,16 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   `vapor-temp-ssh`. That group still had a passwordless policy for the typed
   deploy and service-control wrappers. Root removed only `leslieghf` from that
   group with `gpasswd`; the account's normal login and `sudo` group membership
-  remain. The shared group and its policy remain for temporary grant accounts.
-  The failed transient service state was reset. This does not affect the
-  independent root recovery key.
+  remain. The shared group remains for temporary accounts and SSH matching; the
+  failed transient service state was reset. This does not affect the independent
+  root recovery key.
+- Source review then found that the group-wide sudo rule superseded every
+  request-specific capability file: any member could call both wrappers even
+  if its grant allowed only one. No temporary grants were active, so root
+  removed `/etc/sudoers.d/vapor-temporary-access` and verified the remaining
+  sudoers configuration. The Platform installer now removes only the exact
+  legacy rule and refuses an unexpected file; new grants rely on their
+  per-request sudoers policy.
 - The `vpsssh_240aab1d` account last ran read-only commands successfully at
   11:49:17 UTC; its SSH login was rejected as an invalid user 35 seconds later.
   The root-owned `/etc/passwd` timestamp still shows only the 11:06:20 UTC
