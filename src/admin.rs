@@ -171,10 +171,18 @@ body { margin:0; min-height:100vh; }
 .nav-status.status-unknown { color:#9eacba; }
 .nav-status.status-degraded { color:#d4bd69; }
 .nav-status.status-planned { color:#d4bd69; }
-.service-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
-.service-card { background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
-.service-card h2 { font-size:15px; margin:0 0 8px; }
-.service-state { font-weight:650; }
+.overview-summary { display:flex; align-items:center; justify-content:space-between; gap:10px 18px; flex-wrap:wrap; margin:0 0 10px; padding:10px 12px; border:1px solid #2b3a4b; border-radius:6px; background:#151f2a; }
+.overview-summary p { margin:0; }
+.overview-summary strong { color:#e6edf3; }
+.overview-summary.status-unavailable { border-color:#7a3e45; }
+.service-directory { width:100%; border-collapse:collapse; }
+.service-directory th, .service-directory td { padding:8px 10px; border:0; border-bottom:1px solid #293747; text-align:left; }
+.service-directory th { color:#9eacba; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.service-directory tr:last-child td { border-bottom:0; }
+.service-directory a { color:#b9d8f4; }
+.service-name { font-weight:600; }
+.service-readiness { display:block; margin-top:2px; color:#9eacba; font-size:11px; }
+.service-state { font-weight:650; white-space:nowrap; }
 .state-healthy { color:#6fc58a; }
 .state-unavailable { color:#ed7a80; }
 .state-planned { color:#d4bd69; }
@@ -184,10 +192,6 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .admin-section-name { margin:2px 0 0; font-size:16px; font-weight:650; }
 .admin-statuses { display:flex; align-items:center; justify-content:flex-end; gap:8px 18px; flex-wrap:wrap; }
 .admin-status-item { margin:0; color:#9eacba; font-size:12px; }
-.operator-actions { margin-top:18px; }
-.action-links { display:flex; flex-wrap:wrap; gap:8px; }
-.action-links a { padding:7px 10px; border:1px solid #40536a; border-radius:5px; color:#c7d2de; text-decoration:none; }
-.action-links a:hover { background:#26394e; color:#fff; }
 .status-pill { display:inline-block; margin-left:5px; padding:2px 7px; border:1px solid #40536a; border-radius:10px; color:#c7d2de; font-size:11px; }
 .status-pill.status-healthy { border-color:#316947; color:#8bd59f; }
 .status-pill.status-unavailable { border-color:#7a3e45; color:#f08b92; }
@@ -208,12 +212,13 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .history-toolbar { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0; }
 .history-toolbar p { margin:0; }
 .history-list { display:grid; gap:8px; }
-.request-queue-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; margin-top:12px; }
-.request-queue-card { min-width:0; background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
-.request-queue-card h3 { margin:0 0 8px; font-size:14px; }
-.request-queue-count { margin:0; color:#e6edf3; font-size:22px; font-weight:700; }
-.request-queue-label { margin:2px 0 8px; color:#9eacba; font-size:12px; }
-.request-queue-card a { font-size:12px; }
+.request-queue-table { width:100%; margin-top:8px; border-collapse:collapse; }
+.request-queue-table th, .request-queue-table td { padding:8px 10px; border:0; border-bottom:1px solid #293747; text-align:left; }
+.request-queue-table th { color:#9eacba; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.request-queue-table tr:last-child td { border-bottom:0; }
+.queue-count { color:#e6edf3; font-variant-numeric:tabular-nums; font-weight:650; }
+.queue-action { white-space:nowrap; }
+.queue-action a { color:#b9d8f4; }
 .request-queue-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .request-queue-header h2 { margin:0; }
 .history-entry { background:#182330; border:1px solid #2b3a4b; border-radius:6px; padding:12px; }
@@ -397,33 +402,59 @@ const JS: &str = r#"
           }
           return;
         }
-        const revision = document.createElement('p');
-        revision.className = 'muted';
-        revision.textContent = `Platform revision: ${body.deployed_revision || 'not recorded'} · ${body.state || 'unknown'}`;
-        overview.append(revision);
-        const grid = document.createElement('div');
-        grid.className = 'service-grid';
-        for (const service of (body && Array.isArray(body.services) ? body.services : [])) {
-          const card = document.createElement('section');
-          card.className = 'service-card';
-          const heading = document.createElement('h2');
-          heading.textContent = service.name;
-          const health = document.createElement('p');
-          health.className = `service-state state-${service.health}`;
-          health.textContent = `Health: ${service.health}`;
-          const readiness = document.createElement('p');
-          readiness.className = 'muted';
-          readiness.textContent = `Feature readiness: ${service.readiness}`;
-          card.append(heading, health, readiness);
+        const services = body && Array.isArray(body.services) ? body.services : [];
+        const unavailable = services.filter(service => service.health !== 'healthy');
+        const summary = document.createElement('div');
+        summary.className = `overview-summary${unavailable.length ? ' status-unavailable' : ''}`;
+        summary.setAttribute('role', 'status');
+        const summaryText = document.createElement('p');
+        const state = document.createElement('strong');
+        state.textContent = !services.length ? 'No service status reported' : unavailable.length ? `${unavailable.length} service${unavailable.length === 1 ? '' : 's'} need attention` : 'All services healthy';
+        summaryText.append(state, document.createTextNode(` · ${services.length} services · revision ${body.deployed_revision || 'not recorded'}`));
+        summary.append(summaryText);
+        if (unavailable.length) {
+          const hosting = document.createElement('a');
+          hosting.href = '/admin/hosting';
+          hosting.textContent = 'Open service health';
+          summary.append(hosting);
+        }
+        overview.append(summary);
+
+        const table = document.createElement('table');
+        table.className = 'service-directory';
+        const head = document.createElement('thead');
+        head.innerHTML = '<tr><th scope="col">Service</th><th scope="col">Health</th><th scope="col">Work area</th></tr>';
+        const bodyRows = document.createElement('tbody');
+        const rank = health => health === 'unavailable' ? 0 : health === 'unknown' ? 1 : 2;
+        for (const service of services.slice().sort((a, b) => rank(a.health) - rank(b.health) || String(a.name).localeCompare(String(b.name)))) {
+          const row = document.createElement('tr');
+          const nameCell = document.createElement('td');
+          nameCell.className = 'service-name';
+          nameCell.textContent = service.name;
+          if (service.readiness && service.readiness !== 'not reported') {
+            const readiness = document.createElement('span');
+            readiness.className = 'service-readiness';
+            readiness.textContent = `Readiness · ${service.readiness}`;
+            nameCell.append(readiness);
+          }
+          const healthCell = document.createElement('td');
+          healthCell.className = `service-state state-${service.health}`;
+          healthCell.textContent = service.health === 'healthy' ? 'Healthy' : service.health === 'unavailable' ? 'Offline' : 'Unknown';
+          const actionCell = document.createElement('td');
           if (service.admin_url) {
             const link = document.createElement('a');
             link.href = service.admin_url;
-            link.textContent = 'Open section';
-            card.append(link);
+            link.textContent = 'Open';
+            actionCell.append(link);
+          } else {
+            actionCell.textContent = '—';
+            actionCell.className = 'muted';
           }
-          grid.append(card);
+          row.append(nameCell, healthCell, actionCell);
+          bodyRows.append(row);
         }
-        overview.append(grid);
+        table.append(head, bodyRows);
+        overview.append(table);
       })
       .catch(() => {
         updateShellStatus(null, null);
@@ -448,7 +479,9 @@ const JS: &str = r#"
       if (refreshQueueButton?.disabled) return;
       if (refreshQueueButton) { refreshQueueButton.disabled = true; refreshQueueButton.textContent = 'Refreshing…'; }
       requestQueue.replaceChildren();
-      const grid = document.createElement('div'); grid.className = 'request-queue-grid';
+      const table = document.createElement('table'); table.className = 'request-queue-table';
+      table.innerHTML = '<thead><tr><th scope="col">Workflow</th><th scope="col">Waiting</th><th scope="col">Additional</th><th scope="col">Open</th></tr></thead>';
+      const body = document.createElement('tbody');
       const outcomes = await Promise.all(sources.map(async source => {
         try {
           const response = await fetch(source.url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
@@ -460,22 +493,29 @@ const JS: &str = r#"
         } catch (_) { return { source, error: 'Could not contact service' }; }
       }));
       for (const outcome of outcomes) {
-        const card = document.createElement('section'); card.className = 'request-queue-card';
-        const heading = document.createElement('h3'); heading.textContent = outcome.source.name; card.append(heading);
+        const row = document.createElement('tr');
+        const heading = document.createElement('td'); heading.textContent = outcome.source.name; row.append(heading);
+        const primary = document.createElement('td'); primary.className = 'queue-count';
+        const secondary = document.createElement('td'); secondary.className = 'muted';
+        let actionHref = outcome.source.href;
+        let actionText = 'Open';
         if (outcome.error) {
-          const status = document.createElement('p'); status.className = 'error'; status.textContent = outcome.error; card.append(status);
+          primary.textContent = '—';
+          secondary.textContent = outcome.error;
         } else {
-          const primary = document.createElement('p'); primary.className = 'request-queue-count'; primary.textContent = String(outcome.counts.primary);
-          const primaryLabel = document.createElement('p'); primaryLabel.className = 'request-queue-label'; primaryLabel.textContent = outcome.counts.label;
-          card.append(primary, primaryLabel);
-          if (outcome.counts.secondary > 0) {
-            const secondary = document.createElement('p'); secondary.className = 'muted'; secondary.textContent = `${outcome.counts.secondary} · ${outcome.counts.secondaryLabel}`; card.append(secondary);
-          }
+          primary.textContent = String(outcome.counts.primary);
+          secondary.textContent = outcome.counts.secondary > 0 ? `${outcome.counts.secondary} · ${outcome.counts.secondaryLabel}` : '—';
+          if (outcome.counts.primary > 0) actionText = 'Review';
+          if (outcome.source.name === 'Deployments' && outcome.counts.primary === 0 && outcome.counts.secondary > 0) { actionHref = '/admin/deployments'; actionText = 'Inspect'; }
+          if (outcome.source.name === 'Temporary access' && outcome.counts.primary === 0) { actionHref = '/admin/ssh-access'; actionText = 'Manage'; }
         }
-        const link = document.createElement('a'); link.href = outcome.source.href; link.textContent = 'Open owner workflow'; card.append(link);
-        grid.append(card);
+        const action = document.createElement('td'); action.className = 'queue-action';
+        const link = document.createElement('a'); link.href = actionHref; link.textContent = actionText; action.append(link);
+        row.append(primary, secondary, action);
+        body.append(row);
       }
-      requestQueue.replaceChildren(grid);
+      table.append(body);
+      requestQueue.replaceChildren(table);
       if (refreshQueueButton) { refreshQueueButton.disabled = false; refreshQueueButton.textContent = 'Refresh'; }
     };
     refreshQueueButton?.addEventListener('click', renderQueue);
@@ -1621,7 +1661,7 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Service overview</h1><section id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading protected service status…</p></section><section class=\"card\"><div class=\"request-queue-header\"><h2>Requests needing attention</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts come from each owner service. Open the approvals inbox to review unanswered requests.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section><section class=\"card operator-actions\"><h2>Operator work areas</h2><p class=\"muted\">Choose a workflow. Request counts and approval decisions remain with their owning services.</p><div class=\"action-links\"><a href=\"/admin/approvals\">Review pending approvals</a><a href=\"/admin/deployments\">Inspect deployments</a><a href=\"/admin/hosting\">Inspect service health</a><a href=\"/admin/ssh-access\">Manage temporary SSH access</a><a href=\"/admin/history\">Review request history</a></div></section>";
+    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Services</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading service health…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Incoming work</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Waiting requests are shown by owner. Review them in Approvals; active access opens its own work area.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section>";
     admin_page_response(StatusCode::OK, fragment)
 }
 
@@ -2375,6 +2415,33 @@ mod tests {
         assert!(fragment.starts_with("<p class=\"eyebrow\">Platform</p>"));
         assert!(!fragment.contains("<!doctype html>"));
         assert!(!fragment.contains("<main"));
+        assert!(fragment.contains("<h1>Overview</h1>"));
+        assert!(fragment.contains("id=\"platform-overview\""));
+        assert!(fragment.contains("id=\"operator-queue\""));
+        assert!(!fragment.contains("Operator work areas"));
+        assert!(!fragment.contains("action-links"));
+    }
+
+    #[tokio::test]
+    async fn overview_uses_compact_health_and_action_tables() {
+        let response = admin_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/assets/admin.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let script = std::str::from_utf8(&body).unwrap();
+        assert!(script.contains("className = 'service-directory'"));
+        assert!(script.contains("className = 'request-queue-table'"));
+        assert!(script.contains("service.readiness !== 'not reported'"));
+        assert!(script.contains("actionHref = '/admin/deployments'"));
+        assert!(script.contains("actionHref = '/admin/ssh-access'"));
+        assert!(!script.contains("className = 'service-grid'"));
+        assert!(!script.contains("className = 'request-queue-grid'"));
     }
 
     #[tokio::test]
