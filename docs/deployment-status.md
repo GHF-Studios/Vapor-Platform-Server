@@ -12,12 +12,27 @@
   are unchanged. Identity change `8154a79` is pinned by Platform `fec75f2`.
 - The full local Platform test recipe passed after these changes: 85 Python
   tests (10 skipped) plus all Rust service tests. Platform CI run
-  `42360322183` has its Windows recovery job green; `root-ci` is still running.
+  `42360322183` passed both `root-ci` and `windows-recovery-tests`.
 - No VPS deployment was performed.
 - The failure email most likely corresponds to run `42348443012`: `root-ci`
   failed because the Linux helper called `record_stopped_deploy_failure`
   without its module qualifier. Commit `d19c9be` fixed it; run `42348670442`
   and later runs passed.
+
+## Responsive admin tables (2026-11-07 09:48 UTC)
+
+- Wide Build Cache, Artifact, Registry, and Identity admin tables now sit in
+  named, keyboard-focusable horizontal-scroll regions. The shared shell gives
+  focused regions the same visible focus outline as other controls.
+- Service commits: Build Cache `e47817a`, Artifact `647a1ea`, Registry
+  `4b0951b`, and Identity `8e1b527`; each was pushed to its existing feature
+  branch and is pinned by the Platform worktree.
+- Local service tests passed: Build Cache 8 unit + 7 contract, Artifact 4,
+  Registry 5, Identity 38. Platform CI runs `42360322183` and `42360410112`
+  passed both jobs for the current Platform changes.
+- This closes the static wide-table accessibility gap. A hands-on narrow
+  viewport and assistive-technology review remains outstanding. No VPS
+  deployment was performed.
 
 ## Recovery and reconciled-deploy hardening (2026-11-07 06:45 UTC)
 

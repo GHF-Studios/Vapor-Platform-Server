@@ -248,7 +248,13 @@ truth for this pass.
 - [x] Keep the navigation inventory and page titles derived from the single
   Platform module descriptor, and derive deploy-card target choices from the
   server-side deployment allowlist instead of a JavaScript copy.
-- [ ] Complete the remaining accessibility and responsive-layout review.
+- [ ] Complete the remaining hands-on narrow-viewport and assistive-technology review.
+
+  Static review found wide owner-service tables that lacked the shared
+  horizontal-scroll treatment. They now use named, keyboard-focusable scroll
+  regions. See `docs/deployment-status.md` (Responsive admin tables) for the
+  service commits and local test results; real viewport and assistive-tech
+  verification is still outstanding.
 
 ### Phase B: make Overview and Operations useful
 

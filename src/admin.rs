@@ -213,6 +213,7 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .history-detail { margin:7px 0 0; overflow-wrap:anywhere; }
 .history-detail-list { margin:6px 0 0; padding-left:18px; color:#c7d2de; }
 .table-scroll { max-width:100%; overflow-x:auto; }
+.table-scroll:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
 .skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; background:#fff; color:#111; }
 .skip-link:focus { left:8px; }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
