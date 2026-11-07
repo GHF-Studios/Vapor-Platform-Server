@@ -188,6 +188,7 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .history-state { border:1px solid #40536a; border-radius:10px; padding:1px 7px; white-space:nowrap; font-size:11px; }
 .history-state.state-good { border-color:#316947; color:#8bd59f; }
 .history-state.state-warning { border-color:#806a2f; color:#e5cb78; }
+.approval-state-warning { color:#e5cb78; }
 .history-state.state-danger { border-color:#7a3e45; color:#f08b92; }
 .history-detail { margin:7px 0 0; overflow-wrap:anywhere; }
 .history-detail-list { margin:6px 0 0; padding-left:18px; color:#c7d2de; }
@@ -466,6 +467,8 @@ const JS: &str = r#"
       return Number.isFinite(seconds) && seconds > 0 && seconds <= 8640000000000
         ? new Date(seconds * 1000).toLocaleString() : 'not recorded';
     };
+    const isExpiredByTime = item => Number(item.expires_at_unix) > 0
+      && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000);
     const confirmationForm = (item, labelText, buttonText, submit) => {
       const form = document.createElement('form');
       form.className = 'inline';
@@ -587,6 +590,12 @@ const JS: &str = r#"
       });
       card.append(form);
     };
+    const renderExpiredIdentity = (item, card) => {
+      appendText(card, 'h3', `${item.action || 'permission change'} · ${item.role || 'unknown role'}`);
+      appendText(card, 'p', `Steam ${item.steam_id64 || 'not linked'} · GitHub ${item.github_login || 'not linked'}`);
+      appendText(card, 'p', `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · expired ${humanTime(item.expires_at_unix)}`, 'muted');
+      appendText(card, 'p', 'Expired by time · Identity has not yet recorded the transition', 'approval-state-warning');
+    };
     const refreshSource = async source => {
       const container = containers[source.key];
       container.textContent = 'Loading…';
@@ -600,13 +609,26 @@ const JS: &str = r#"
         }
         if (!Array.isArray(items)) throw new Error('invalid response');
         const pending = items.filter(item => item && item.status === 'pending');
+        const expiredIdentity = source.key === 'identity' ? pending.filter(isExpiredByTime) : [];
+        const actionable = source.key === 'identity'
+          ? pending.filter(item => !isExpiredByTime(item))
+          : pending;
         container.replaceChildren();
         if (!pending.length) { appendText(container, 'p', 'No pending requests.', 'muted'); return; }
-        for (const item of pending) {
+        if (!actionable.length && !expiredIdentity.length) {
+          appendText(container, 'p', 'No pending requests.', 'muted');
+          return;
+        }
+        for (const item of actionable) {
           const card = document.createElement('article'); card.className = 'card';
           if (source.key === 'deploy') renderDeploy(item, card);
           else if (source.key === 'ssh') renderSsh(item, card);
           else renderIdentity(item, card);
+          container.append(card);
+        }
+        for (const item of expiredIdentity) {
+          const card = document.createElement('article'); card.className = 'card';
+          renderExpiredIdentity(item, card);
           container.append(card);
         }
       } catch (_) {
@@ -2066,6 +2088,11 @@ mod tests {
         assert!(script.contains("/api/identity/v1/admin/permission-requests/${encodedId}/${action}"));
         assert!(script.contains("This request source is temporarily unavailable or returned an invalid response."));
         assert!(script.contains("items.filter(item => item && item.status === 'pending')"));
+        assert!(script.contains("const isExpiredByTime = item => Number(item.expires_at_unix) > 0"));
+        assert!(script.contains("pending.filter(isExpiredByTime)"));
+        assert!(script.contains("pending.filter(item => !isExpiredByTime(item))"));
+        assert!(script.contains("Expired by time · Identity has not yet recorded the transition"));
+        assert!(script.contains("renderExpiredIdentity(item, card)"));
         assert!(script.contains("reason: reason.value.trim()"));
         assert!(script.contains("granted_capabilities: granted"));
         assert!(script.contains("decision_saved === true"));
