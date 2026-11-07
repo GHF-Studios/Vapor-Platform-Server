@@ -56,6 +56,26 @@
   root SSH inspection was rejected by the VPS, so live host status remains
   unverified. The disposable clean-host recovery drill also remains outstanding.
 
+## Public read-only probe (2026-11-07 10:21 UTC)
+
+- `GET /healthz`, `/`, and `/api/build-cache/v1/status` returned HTTP 200.
+- The public Build Cache response reports both supported target triples as
+  `configured: false` and `current: false`; no current target snapshot is
+  available. This confirms the snapshot orchestration gap is live, not only a
+  source-plan concern.
+- Unauthenticated `GET /admin` returned 200, while direct requests to
+  `/admin/approvals` and `/admin/deployments` returned 404; the protected
+  `/api/admin/operations` returned 401. These are route responses only, not a
+  successful authenticated dashboard workflow check.
+- The reported failed deployment helper response
+  (`arguments are not accepted for interactive operations`) is explicitly
+  classified by current source as a helper-protocol mismatch. The installed
+  helper revision could not be checked because SSH authentication was rejected;
+  a full deployment installs the service and its helper from the same pinned
+  checkout, but has not been performed.
+- Root SSH authentication was rejected during the same pass. No service state
+  or configuration was read, and no deployment or mutation was attempted.
+
 ## Recovery and reconciled-deploy hardening (2026-11-07 06:45 UTC)
 
 - Recovery validation now rejects more than 100,000 archive entries, any
