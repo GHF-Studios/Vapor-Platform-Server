@@ -11,7 +11,7 @@ function Assert-True {
 }
 
 function New-RecoveryArchive {
-    param([string]$Root, [string]$ArchiveName, [string]$Payload, [switch]$CorruptKit, [switch]$WithoutKit, [switch]$IncompleteKit)
+    param([string]$Root, [string]$ArchiveName, [string]$Payload, [switch]$CorruptKit, [switch]$WithoutKit, [switch]$IncompleteKit, [switch]$LegacyKit)
 
     $stage = Join-Path $Root ($ArchiveName + '.stage')
     $recovery = Join-Path $stage 'vapor-platform-recovery'
@@ -22,6 +22,10 @@ function New-RecoveryArchive {
         'recover-fresh-host.sh' = "#!/usr/bin/env bash`necho recovery`n"
         'recovery_bundle_metadata.py' = "#!/usr/bin/env python3`nprint('metadata')`n"
         'README.txt' = "Recovery instructions`n"
+    }
+    if (-not $LegacyKit.IsPresent) {
+        $files['state-bundle-validate.py'] = "#!/usr/bin/env python3`nprint('validate')`n"
+        $files['deployed_source_manifest.py'] = "#!/usr/bin/env python3`nprint('manifest')`n"
     }
     [System.IO.File]::WriteAllText((Join-Path $recovery 'source\root-commit.txt'), "$commit`n", [System.Text.UTF8Encoding]::new($false))
     foreach ($name in $files.Keys) {
@@ -52,7 +56,7 @@ function New-RecoveryArchive {
 }
 
 function New-Fixture {
-    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive)
+    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive, [switch]$LegacyKit)
 
     $root = Join-Path $scratch $Name
     $remote = Join-Path $root 'remote'
@@ -62,7 +66,7 @@ function New-Fixture {
     $olderName = 'vapor-platform-recovery-20261106T120000Z-111111111111.tar.gz'
     $latestName = 'vapor-platform-recovery-20261107T120000Z-222222222222.tar.gz'
     $olderBytes = New-RecoveryArchive -Root $remote -ArchiveName $olderName -Payload "known-good-$Name" -WithoutKit:$WithoutRecoveryKit
-    $latestBytes = New-RecoveryArchive -Root $remote -ArchiveName $latestName -Payload "latest-good-$Name" -CorruptKit:$CorruptKit -WithoutKit:$WithoutRecoveryKit -IncompleteKit:$IncompleteKit
+    $latestBytes = New-RecoveryArchive -Root $remote -ArchiveName $latestName -Payload "latest-good-$Name" -CorruptKit:$CorruptKit -WithoutKit:$WithoutRecoveryKit -IncompleteKit:$IncompleteKit -LegacyKit:$LegacyKit
     if ($TruncateLatestArchive.IsPresent) {
         [Array]::Resize([ref]$latestBytes, [Math]::Max(1, $latestBytes.Length - 32))
     }
@@ -190,12 +194,22 @@ try {
     $kitRoot = Join-Path $fixture.Destination (Join-Path 'Recovery-Kit' $kitCommit)
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'recover-fresh-host.sh') -PathType Leaf) 'fresh-host recovery script was not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'recovery_bundle_metadata.py') -PathType Leaf) 'matching metadata helper was not extracted'
+    Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'state-bundle-validate.py') -PathType Leaf) 'matching archive validator was not extracted'
+    Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'deployed_source_manifest.py') -PathType Leaf) 'matching source-manifest validator dependency was not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'README.txt') -PathType Leaf) 'recovery instructions were not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'SHA256SUMS') -PathType Leaf) 'recovery-kit checksum file was not extracted'
     $kitPointer = Get-Content -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json') -Raw | ConvertFrom-Json
     Assert-True ($kitPointer.source_commit -ceq $kitCommit) 'recovery kit pointer does not match the archive source revision'
     Assert-True ($kitPointer.archive -ceq $fixture.LatestName) 'recovery kit pointer does not identify the latest archive'
     Assert-True ($kitPointer.files.'recover-fresh-host.sh' -eq (Get-FileHash -LiteralPath (Join-Path $kitRoot 'recover-fresh-host.sh') -Algorithm SHA256).Hash.ToLowerInvariant()) 'recovery kit pointer does not bind the launcher hash'
+
+    $fixture = New-Fixture -Name 'legacy-kit' -LegacyKit
+    Invoke-Sync $fixture | Out-Null
+    $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
+    $kitPointer = Get-Content -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json') -Raw | ConvertFrom-Json
+    Assert-True ($report.recovery_kit_available) 'a valid previous recovery kit was not retained as usable'
+    Assert-True (-not $report.recovery_kit_preflight_validation) 'previous recovery kit falsely reports preflight validation support'
+    Assert-True (-not $kitPointer.preflight_validation) 'previous recovery kit pointer falsely reports preflight validation support'
 
     Invoke-Sync $fixture | Out-Null
     $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json

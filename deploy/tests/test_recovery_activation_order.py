@@ -8,6 +8,23 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class RecoveryActivationOrderTests(unittest.TestCase):
+    def test_full_bundle_validation_precedes_package_changes(self) -> None:
+        coordinator = (REPO_ROOT / "deploy/scripts/recover-fresh-host.sh").read_text()
+        validate = 'python3 "${SCRIPT_DIR}/state-bundle-validate.py" "${BUNDLE}"'
+        self.assertIn(validate, coordinator)
+        self.assertLess(coordinator.index(validate), coordinator.index("apt-get update"))
+        checksums = 'sha256sum --check --status SHA256SUMS'
+        source_pin = 'recovery_bundle_metadata.py" --source-commit "${BUNDLE}"'
+        self.assertIn(checksums, coordinator)
+        self.assertLess(coordinator.index(checksums), coordinator.index(source_pin))
+        self.assertLess(coordinator.index(source_pin), coordinator.index(validate))
+        self.assertLess(coordinator.index(validate), coordinator.index("apt-get update"))
+        self.assertIn("preflight requires the Ubuntu-provided Python 3.11+ runtime", coordinator)
+
+        export = (REPO_ROOT / "deploy/scripts/export-state.sh").read_text()
+        self.assertIn("state-bundle-validate.py", export)
+        self.assertIn("deployed_source_manifest.py", export)
+
     def test_fresh_host_stages_before_restoring_and_only_restore_activates(self) -> None:
         coordinator = (REPO_ROOT / "deploy/scripts/recover-fresh-host.sh").read_text()
         deploy = (REPO_ROOT / "deploy/scripts/deploy.sh").read_text()

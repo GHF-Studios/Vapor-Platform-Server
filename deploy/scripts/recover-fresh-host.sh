@@ -141,9 +141,20 @@ if [ "${RESUME}" = false ]; then
   fi
 fi
 
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install --yes ca-certificates curl git python3
+if [ "${RESUME}" = false ] || [ "${marker_phase}" != awaiting_provider_checks ]; then
+  python3 -c 'import tarfile, tomllib' >/dev/null 2>&1 \
+    || fail "preflight requires the Ubuntu-provided Python 3.11+ runtime; no packages were changed"
+  (cd -- "${SCRIPT_DIR}" && sha256sum --check --status SHA256SUMS) \
+    || fail "recovery-kit files do not match their pinned checksums"
+  REVISION="$(python3 "${SCRIPT_DIR}/recovery_bundle_metadata.py" --source-commit "${BUNDLE}")" \
+    || fail "bundle source commit could not be read"
+  python3 "${SCRIPT_DIR}/state-bundle-validate.py" "${BUNDLE}" \
+    || fail "bundle validation failed before package changes"
+
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install --yes ca-certificates curl git python3
+fi
 
 install -d -o root -g root -m 0755 /opt
 BOOTSTRAP_DIR="/opt/.vapor-recovery-bootstrap-${BUNDLE_SHA256:0:16}"
@@ -222,10 +233,9 @@ if [ "${RESUME}" = true ] && [ "${marker_phase}" = awaiting_provider_checks ]; t
   exit 0
 fi
 
-# This bootstrap helper reads only the bounded source pin. The full archive
-# policy is enforced by the validator from the exact pinned commit below.
-REVISION="$(python3 "${SCRIPT_DIR}/recovery_bundle_metadata.py" --source-commit "${BUNDLE}")" \
-  || fail "bundle source commit could not be read"
+# The bounded source pin was read from the checksummed kit and the full bundle
+# was prevalidated before package changes. The exact pinned checkout validates
+# the same archive again before any application state is changed.
 if [ -e "${DEPLOY_ROOT}" ]; then
   [ "${RESUME}" = true ] && [ -d "${DEPLOY_ROOT}/.git" ] && [ ! -L "${DEPLOY_ROOT}" ] \
     || fail "deployment path exists outside a resumable recovery checkout"

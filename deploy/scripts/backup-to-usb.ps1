@@ -340,6 +340,7 @@ foreach ($entry in $index.archives) {
 # newest verified bundle. Older generations created before this feature may
 # not carry the kit; keep archive catch-up working and report that explicitly.
 $recoveryKitAvailable = $false
+$recoveryKitPreflightValidation = $false
 $recoveryKitCommit = $null
 $latestBundlePath = Join-Path $destination $latestArchive
 $kitStage = Join-Path $incoming ($latestArchive + '.kit.partial')
@@ -348,6 +349,19 @@ if ($latestHasRecoveryKit) {
         Remove-Item -LiteralPath $kitStage -Recurse -Force
     }
     New-Item -ItemType Directory -Path $kitStage | Out-Null
+    $archiveMembers = @(& $tar -tzf $latestBundlePath 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The latest generation declares a recovery kit, but the archive member list could not be read.'
+    }
+    $validatorMember = 'vapor-platform-recovery/source/recovery-kit/state-bundle-validate.py'
+    $manifestValidatorMember = 'vapor-platform-recovery/source/recovery-kit/deployed_source_manifest.py'
+    $hasValidator = $archiveMembers -ccontains $validatorMember
+    $hasManifestValidator = $archiveMembers -ccontains $manifestValidatorMember
+    if ($hasValidator -ne $hasManifestValidator) {
+        throw 'The latest generation declares an incomplete preflight recovery kit.'
+    }
+    $recoveryKitPreflightValidation = $hasValidator -and $hasManifestValidator
+
     $kitMembers = @(
         'vapor-platform-recovery/source/root-commit.txt',
         'vapor-platform-recovery/source/recovery-kit/README.txt',
@@ -355,14 +369,24 @@ if ($latestHasRecoveryKit) {
         'vapor-platform-recovery/source/recovery-kit/recovery_bundle_metadata.py',
         'vapor-platform-recovery/source/recovery-kit/SHA256SUMS'
     )
+    if ($recoveryKitPreflightValidation) {
+        $kitMembers += @($validatorMember, $manifestValidatorMember)
+    }
     & $tar -xzf $latestBundlePath -C $kitStage @kitMembers 2>$null
     if ($LASTEXITCODE -ne 0) {
-        throw 'The latest generation declares a recovery kit, but its files could not be extracted.'
+        throw 'The latest generation declares a recovery kit, but its required files could not be extracted.'
     }
     $kitSource = Join-Path $kitStage 'vapor-platform-recovery\source'
     $sourceCommitPath = Join-Path $kitSource 'root-commit.txt'
     $kitSourceDir = Join-Path $kitSource 'recovery-kit'
-    $expectedKitNames = @('README.txt', 'recover-fresh-host.sh', 'recovery_bundle_metadata.py')
+    $expectedKitNames = @(
+        'README.txt',
+        'recover-fresh-host.sh',
+        'recovery_bundle_metadata.py'
+    )
+    if ($recoveryKitPreflightValidation) {
+        $expectedKitNames += @('state-bundle-validate.py', 'deployed_source_manifest.py')
+    }
     $checksumPath = Join-Path $kitSourceDir 'SHA256SUMS'
     if ((Test-Path -LiteralPath $sourceCommitPath -PathType Leaf) -and
         (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
@@ -441,6 +465,7 @@ if ($latestHasRecoveryKit) {
         $kitManifest = [ordered]@{
             schema_version = 1
             available = $true
+            preflight_validation = $recoveryKitPreflightValidation
             source_commit = $recoveryKitCommit
             archive = $latestArchive
             archive_sha256 = [string]$latestPointer.sha256
@@ -456,6 +481,7 @@ if ($latestHasRecoveryKit) {
     $kitManifest = [ordered]@{
         schema_version = 1
         available = $false
+        preflight_validation = $false
         source_commit = $null
         archive = $latestArchive
         archive_sha256 = [string]$latestPointer.sha256
@@ -573,6 +599,7 @@ $report = [ordered]@{
     unverified_archives = $unverifiedArchives.Count
     latest_rehashed = $true
     recovery_kit_available = $recoveryKitAvailable
+    recovery_kit_preflight_validation = $recoveryKitPreflightValidation
     recovery_kit_source_commit = $recoveryKitCommit
     verification_policy = 'latest and one rotating historical archive each sync; all indexed candidates rehashed before pruning'
 }

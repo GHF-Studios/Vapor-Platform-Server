@@ -72,10 +72,20 @@ recovery_kit_included = true
 KIT_FILES = {
     "recover-fresh-host.sh": b"#!/usr/bin/env bash\necho recovery\n",
     "recovery_bundle_metadata.py": b"#!/usr/bin/env python3\nprint('metadata')\n",
+    "state-bundle-validate.py": b"#!/usr/bin/env python3\nprint('validate')\n",
+    "deployed_source_manifest.py": b"#!/usr/bin/env python3\nprint('manifest')\n",
     "README.txt": b"Recovery instructions\n",
 }
 KIT_SUMS = "".join(
     f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in KIT_FILES.items()
+).encode()
+LEGACY_KIT_FILES = {
+    name: payload
+    for name, payload in KIT_FILES.items()
+    if name not in {"state-bundle-validate.py", "deployed_source_manifest.py"}
+}
+LEGACY_KIT_SUMS = "".join(
+    f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in LEGACY_KIT_FILES.items()
 ).encode()
 
 
@@ -106,6 +116,20 @@ class StateBundleValidationTests(unittest.TestCase):
     def test_accepts_valid_bundle(self) -> None:
         bundle = make_bundle(valid_members())
         validator.validate_bundle(bundle)
+
+    def test_accepts_previous_recovery_kit_version(self) -> None:
+        members = [
+            entry for entry in valid_members()
+            if not entry[0].endswith((
+                "recovery-kit/state-bundle-validate.py",
+                "recovery-kit/deployed_source_manifest.py",
+            ))
+        ]
+        members = [
+            (name, kind, LEGACY_KIT_SUMS if name.endswith("recovery-kit/SHA256SUMS") else payload)
+            for name, kind, payload in members
+        ]
+        validator.validate_bundle(make_bundle(members))
 
     def test_accepts_old_bundle_without_deployed_source_manifest(self) -> None:
         bundle = make_bundle(valid_members())

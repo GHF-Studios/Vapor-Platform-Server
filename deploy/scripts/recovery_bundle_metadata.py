@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read the small, non-secret rebuild pins from a validated recovery bundle."""
+"""Read bounded, non-secret rebuild pins from a recovery bundle."""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def _read_member(archive: tarfile.TarFile, expected_name: str, limit: int) -> by
 
 
 def read_bundle_source_commit(path: pathlib.Path) -> str:
-    """Read only the root revision needed to fetch the bundle's pinned validator."""
+    """Read the root revision needed to fetch the bundle's pinned validator."""
     try:
         with tarfile.open(path, "r:gz") as archive:
             manifest_bytes = _read_member(archive, f"{ROOT}/manifest.toml", MAX_MANIFEST_BYTES)

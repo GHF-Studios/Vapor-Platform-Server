@@ -156,9 +156,14 @@ for smoke testing only; the intended public endpoint remains
   A clean-host drill is still required before calling this a proven recovery
   path.
 - `scripts/recover-fresh-host.sh`: guarded fresh-host coordinator for supported
-  Ubuntu x86_64 hosts. It validates the USB bundle and exact source/submodule
-  pins, checks that the Vapor install/state/config paths are empty, installs
-  the recorded Rust/Cargo toolchain, builds and stages the pinned runtime with
+  Ubuntu x86_64 hosts. It checks the owner-held kit and validates the USB
+  bundle before package changes, then checks it again against the exact
+  source/submodule pins. The base host must supply Python 3.11+; otherwise
+  preflight stops without package changes. Internal checksums detect
+  corruption but do not authenticate a replaced kit; run only the kit from
+  your trusted recovery copy. It checks that the Vapor
+  install/state/config paths are empty, installs the recorded Rust/Cargo
+  toolchain, builds and stages the pinned runtime with
   package/service activation held back, restores the bundle, then activates
   restored units and checks configured Steam/GitHub/dashboard readiness.
   Run as root with `--bundle PATH --yes`. It refuses existing Vapor
@@ -170,9 +175,11 @@ for smoke testing only; the intended public endpoint remains
   and GitHub and verifies the owner dashboard; then rerun with
   `--resume --confirm-provider-checks`. Exit code `3` means the restore is
   complete and waiting for those owner checks. The Windows sync places the
-  matching entrypoint and metadata reader in `Recovery-Kit/<root-commit>/`,
-  alongside its README and file checksums; use that kit folder and archive
-  together. A failed post-restore recovery
+  matching entrypoint, metadata reader, archive validator, and validator
+  dependency in `Recovery-Kit/<root-commit>/`, alongside its README and file
+  checksums; use that kit folder and archive together. Older complete kits
+  remain usable but report that they lack the newer pre-package validation
+  step. A failed post-restore recovery
   disables and stops the newly deployed Vapor services, the export timer, and
   Caddy, and preserves its marker for review. This
   source path has not yet been exercised on a clean VPS; a successful local

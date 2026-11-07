@@ -220,16 +220,25 @@ bundle digest and source revision; an interrupted run may be resumed only with
 staging and restore. It never cleans unrelated paths.
 
 New recovery exports carry a source-pinned recovery kit inside the archive:
-recover-fresh-host.sh, recovery_bundle_metadata.py, a short operator README,
-and SHA-256 entries for those files. The Windows USB sync extracts the kit
+recover-fresh-host.sh, recovery_bundle_metadata.py, state-bundle-validate.py,
+deployed_source_manifest.py, a short operator README, and SHA-256 entries for
+those files. The fresh-host entrypoint checks kit consistency and runs the
+validator before apt can change host packages, then validates again from the
+checked-out source revision before changing application state. Preflight needs
+the base Ubuntu image to supply Python 3.11+ and stops without package changes
+if that runtime is absent. Kit/archive checksums detect corruption but are not
+signatures: the operator must run a kit from the trusted, owner-held recovery
+copy. The Windows USB sync extracts the kit
 from the latest content-verified archive into Recovery-Kit/<root-commit>/ and
 atomically updates Recovery-Kit/latest.json only after checking the embedded
 hashes. Its sync report states whether the latest archive supplied a usable
-kit. Older generations without the kit remain copyable but do not produce a
+kit and whether it supports pre-package validation. Complete previous kits
+remain usable with their matching archive but do not claim the newer preflight
+guarantee. Generations without the kit remain copyable but do not produce a
 ready kit pointer. The owner can move the matching kit folder, archive, and
 sidecar to a fresh host without independently finding or downloading bootstrap
 files. The coordinator then checks out the exact recorded source/submodules
-before using the archive validator. A clean-host exercise remains necessary
+and revalidates against that source. A clean-host exercise remains necessary
 to verify this chain end to end.
 
 The final machine check requires Identity to report Steam identity and the

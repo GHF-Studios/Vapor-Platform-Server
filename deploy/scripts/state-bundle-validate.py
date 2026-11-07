@@ -20,11 +20,15 @@ class ValidationError(RuntimeError):
 
 ROOT = "vapor-platform-recovery"
 REQUIRED_CATEGORIES = {"state", "config", "host", "source"}
-RECOVERY_KIT_FILES = {
+RECOVERY_KIT_V1_FILES = {
     "recover-fresh-host.sh",
     "recovery_bundle_metadata.py",
     "README.txt",
     "SHA256SUMS",
+}
+RECOVERY_KIT_V2_FILES = RECOVERY_KIT_V1_FILES | {
+    "state-bundle-validate.py",
+    "deployed_source_manifest.py",
 }
 # Restore extracts the validated bundle to a temporary directory before applying
 # state. Bound both archive complexity and expanded disk use before extraction.
@@ -202,7 +206,11 @@ def validate_bundle(path: pathlib.Path) -> None:
             if recovery_kit_members or manifest_values.get("recovery_kit_included") is True:
                 if manifest_values.get("recovery_kit_included") is not True:
                     raise ValidationError("bundle contains an undeclared recovery kit")
-                if set(recovery_kit_members) != RECOVERY_KIT_FILES:
+                kit_files = set(recovery_kit_members)
+                if frozenset(kit_files) not in {
+                    frozenset(RECOVERY_KIT_V1_FILES),
+                    frozenset(RECOVERY_KIT_V2_FILES),
+                }:
                     raise ValidationError("bundle recovery kit is incomplete")
                 checksums_member = recovery_kit_members["SHA256SUMS"]
                 checksums_stream = archive.extractfile(checksums_member)
@@ -215,7 +223,7 @@ def validate_bundle(path: pathlib.Path) -> None:
                     if match is None or match.group(2) in checksums:
                         raise ValidationError("bundle recovery kit checksum file is malformed")
                     checksums[match.group(2)] = match.group(1)
-                expected_kit_files = RECOVERY_KIT_FILES - {"SHA256SUMS"}
+                expected_kit_files = kit_files - {"SHA256SUMS"}
                 if set(checksums) != expected_kit_files:
                     raise ValidationError("bundle recovery kit checksum list is incomplete")
                 for name in expected_kit_files:

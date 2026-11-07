@@ -192,13 +192,17 @@ if grep -Eq '^[-+U]' "${BUNDLE_ROOT}/source/submodules.txt"; then
 fi
 
 RECOVERY_KIT_DIR="${BUNDLE_ROOT}/source/recovery-kit"
-for recovery_file in recover-fresh-host.sh recovery_bundle_metadata.py README.txt; do
+for recovery_file in \
+  recover-fresh-host.sh recovery_bundle_metadata.py \
+  state-bundle-validate.py deployed_source_manifest.py README.txt; do
   source_path="${SCRIPT_DIR}/${recovery_file}"
   [ -f "${source_path}" ] && [ ! -L "${source_path}" ] \
     || { echo "error: required recovery kit source file is missing" >&2; exit 1; }
   install -o root -g root -m 0600 "${source_path}" "${RECOVERY_KIT_DIR}/${recovery_file}"
 done
-(cd "${RECOVERY_KIT_DIR}" && sha256sum README.txt recover-fresh-host.sh recovery_bundle_metadata.py) \
+(cd "${RECOVERY_KIT_DIR}" && sha256sum \
+  README.txt recover-fresh-host.sh recovery_bundle_metadata.py \
+  state-bundle-validate.py deployed_source_manifest.py) \
   > "${RECOVERY_KIT_DIR}/SHA256SUMS"
 chmod 0600 "${RECOVERY_KIT_DIR}/SHA256SUMS"
 
