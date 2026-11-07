@@ -18,6 +18,17 @@
   show a promoted remote cache artifact; deployment builds continue to use the
   primary VPS fallback path recorded in the host snapshot below.
 
+## Primary VPS worker-capacity spot-check (2026-11-07 17:09 UTC)
+
+- The live host reports one vCPU, 1.8 GiB RAM (1.3 GiB available), and 40 GiB
+  free on `/`. It exposes AMD SVM under KVM, and `/dev/kvm` is `root:kvm`
+  mode `0660`; the `leslieghf` operator account is not in `kvm`.
+- Engineering inference: this is enough to retain the current local-build
+  fallback, but there is no useful spare CPU/RAM for a concurrent VM compiler
+  worker. If virtualization-based worker builds remain the plan, put them on
+  the optional second node after its capacity is selected. No VM or host
+  configuration was changed.
+
 ## Current live state (2026-11-07 15:13 UTC)
 
 This is the newest verified state; older entries below are historical snapshots
