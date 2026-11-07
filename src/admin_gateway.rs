@@ -44,10 +44,7 @@ pub async fn proxy_owner_admin(request: Request) -> Response {
     ) {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
-    let Some(owner) = OWNER_ROUTES
-        .iter()
-        .find(|route| path_is_in_section(&parts.uri.path().to_ascii_lowercase(), route.prefix))
-    else {
+    let Some(owner) = owner_route_for_path(parts.uri.path()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -127,6 +124,13 @@ fn path_is_in_section(path: &str, prefix: &str) -> bool {
     path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
 }
 
+fn owner_route_for_path(path: &str) -> Option<&'static OwnerRoute> {
+    let normalized = path.to_ascii_lowercase();
+    OWNER_ROUTES
+        .iter()
+        .find(|route| path_is_in_section(&normalized, route.prefix))
+}
+
 fn is_hop_by_hop(name: &HeaderName, headers: &HeaderMap) -> bool {
     let nominated = headers
         .get_all(CONNECTION)
@@ -152,4 +156,39 @@ pub async fn health() -> impl IntoResponse {
 fn gateway_error(status: StatusCode, message: &'static str) -> Response {
     (status, [(axum::http::header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))], message)
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::owner_route_for_path;
+
+    #[test]
+    fn proxies_only_the_fixed_service_owned_admin_sections() {
+        let cases = [
+            ("/admin/identity", "http://127.0.0.1:7113"),
+            ("/admin/identity/roles/grant", "http://127.0.0.1:7113"),
+            ("/admin/workshop", "http://127.0.0.1:7115"),
+            ("/admin/artifacts", "http://127.0.0.1:7116"),
+            ("/admin/build-cache", "http://127.0.0.1:7117"),
+        ];
+
+        for (path, expected_origin) in cases {
+            assert_eq!(owner_route_for_path(path).map(|route| route.origin), Some(expected_origin));
+        }
+    }
+
+    #[test]
+    fn does_not_proxy_platform_or_neighboring_paths() {
+        for path in [
+            "/admin",
+            "/admin/operations",
+            "/admin/identity-elsewhere",
+            "/api/identity",
+            "/admin/workshop-extra",
+            "/admin/artifacts-v2",
+            "/admin/build-cache-v2",
+        ] {
+            assert_eq!(owner_route_for_path(path).map(|route| route.origin), None, "{path}");
+        }
+    }
 }
