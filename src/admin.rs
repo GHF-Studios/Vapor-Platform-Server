@@ -932,8 +932,12 @@ const JS: &str = r#"
     let selectedRecordId = null;
     let failures = [];
     let sourceStates = [];
+    let pendingRequestsOmitted = 0;
+    const isOpenHistoryRecord = (source, item) =>
+      source.kind !== 'Platform operation' && item.status === 'pending';
     const addRecord = (source, item) => {
       if (!item || typeof item !== 'object') return;
+      if (isOpenHistoryRecord(source, item)) { pendingRequestsOmitted += 1; return; }
       const isOperation = source.kind === 'Platform operation';
       const record = { kind: source.kind, source: source.label, id: safeText(item.id || item.operation_id), status: safeText(isOperation ? item.result : item.status), statusKey: safeText(isOperation ? item.result : item.status), dispatchStatusKey: '', statusLabel: safeText(isOperation ? item.result : item.status), timestamp: Number(item.finished_at_unix || item.decided_at_unix || item.created_at_unix || 0), timestampLabel: item.finished_at_unix ? 'Operation finished' : item.decided_at_unix ? 'Decision recorded' : 'Request created', title: '', subject: '', details: [], link: '', search: '' };
       if (isOperation) {
@@ -1025,7 +1029,17 @@ const JS: &str = r#"
         return;
       }
       if (!visible.length) {
-        operationHistory.textContent = records.length ? 'No records match these filters.' : 'No records have been recorded by the available services.';
+        if (records.length) {
+          operationHistory.textContent = 'No records match these filters.';
+        } else if (pendingRequestsOmitted) {
+          const message = document.createElement('p');
+          message.append(document.createTextNode('No resolved records in the loaded pages. Pending requests are in '));
+          const link = document.createElement('a'); link.href = '/admin/approvals'; link.textContent = 'Approvals';
+          message.append(link, document.createTextNode('.'));
+          operationHistory.append(message);
+        } else {
+          operationHistory.textContent = 'No records have been recorded by the available services.';
+        }
         return;
       }
       const selected = visible.find(record => record.id === selectedRecordId) || visible[0];
@@ -1136,6 +1150,7 @@ const JS: &str = r#"
       if (refreshButton) { refreshButton.disabled = true; refreshButton.textContent = 'Refreshing…'; }
       records = [];
       failures = [];
+      pendingRequestsOmitted = 0;
       operationHistory.replaceChildren();
       sourceStatus.textContent = 'Loading recent request records from their owning services…';
       const results = await Promise.all(sources.map(async source => {
@@ -3049,6 +3064,10 @@ mod tests {
         assert!(script.contains("className = 'history-workbench'"));
         assert!(script.contains("className = 'history-record-list'"));
         assert!(script.contains("const historyStatus = record =>"));
+        assert!(script.contains("const isOpenHistoryRecord = (source, item) =>"));
+        assert!(script.contains("source.kind !== 'Platform operation' && item.status === 'pending'"));
+        assert!(script.contains("if (isOpenHistoryRecord(source, item))"));
+        assert!(script.contains("Pending requests are in"));
         assert!(script.contains("record.id === selectedRecordId"));
         assert!(!script.contains("className = 'history-entry'"));
     }
