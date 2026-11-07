@@ -324,6 +324,23 @@ const JS: &str = r#"
     if (response.status === 403) return 'Your signed-in account does not have the Platform root role.';
     return `${fallback} (HTTP ${response.status})${detail ? `: ${detail}` : ''}`;
   };
+  const capabilityLabel = value => ({
+    vapor_deploy: 'Deploy Vapor updates',
+    vapor_service_control: 'Start and manage Vapor services',
+    host_admin: 'Temporary administrator access (unrestricted sudo)'
+  })[value] || String(value || '').replaceAll('_', ' ');
+  const capabilityList = values => (Array.isArray(values) ? values : []).map(capabilityLabel).join(', ');
+  const formatDuration = seconds => {
+    let remaining = Math.max(0, Math.floor(Number(seconds) || 0));
+    const units = [['d', 86400], ['h', 3600], ['m', 60], ['s', 1]];
+    const parts = [];
+    for (const [label, size] of units) {
+      const amount = Math.floor(remaining / size);
+      if (amount || (label === 's' && !parts.length)) parts.push(`${amount}${label}`);
+      remaining %= size;
+    }
+    return parts.slice(0, 2).join(' ');
+  };
   const showResponseFailure = async (container, response, fallback) => {
     let message = container.querySelector(':scope > .ssh-operation-error');
     if (!message) {
@@ -714,9 +731,9 @@ const JS: &str = r#"
       if (!selectionValid) card.querySelector('form button').disabled = true;
     };
     const renderSsh = (item, card) => {
-      appendText(card, 'h3', `${item.fingerprint || 'Unknown key'} · ${item.requested_capabilities?.join(', ') || 'shell only'}`);
+      appendText(card, 'h3', `${item.fingerprint || 'Unknown key'} · ${capabilityList(item.requested_capabilities) || 'Shell access'}`);
       appendText(card, 'p', item.purpose || 'No purpose provided.');
-      appendText(card, 'p', `Requested by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · requested ${humanTime(item.created_at_unix)} · duration ${item.requested_duration_seconds || 0}s`, 'muted');
+      appendText(card, 'p', `Requested by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · requested ${humanTime(item.created_at_unix)} · duration ${formatDuration(item.requested_duration_seconds)}`, 'muted');
       const form = document.createElement('form');
       const fieldset = document.createElement('fieldset');
       appendText(fieldset, 'legend', 'Grant to issue');
@@ -727,17 +744,17 @@ const JS: &str = r#"
         input.type = 'checkbox'; input.value = capability;
         input.checked = (item.requested_capabilities || []).includes(capability);
         choices.push(input);
-        label.append(input, document.createTextNode(` ${capability}${capability === 'host_admin' ? ' (temporary account + unrestricted sudo)' : ''}`));
+        label.append(input, document.createTextNode(` ${capabilityLabel(capability)}${capability === 'host_admin' ? ' (temporary account, not direct root SSH)' : ''}`));
         fieldset.append(label);
       }
-      const durationLabel = document.createElement('label'); durationLabel.textContent = 'Granted duration in seconds ';
-      const duration = document.createElement('input'); duration.type = 'number'; duration.min = '1'; duration.max = String(8 * 60 * 60);
-      duration.value = String(Math.min(Number(item.requested_duration_seconds) || 3600, 8 * 60 * 60));
+      const durationLabel = document.createElement('label'); durationLabel.textContent = 'Grant duration (hours) ';
+      const duration = document.createElement('input'); duration.type = 'number'; duration.min = '0.25'; duration.max = '8'; duration.step = '0.25';
+      duration.value = String(Math.max(0.25, Math.min((Number(item.requested_duration_seconds) || 3600) / 3600, 8)));
       duration.required = true; durationLabel.append(duration);
       const reviewLabel = document.createElement('label'); const review = document.createElement('input'); review.type = 'checkbox'; review.required = false;
       reviewLabel.append(review, document.createTextNode(' I reviewed the key, purpose, and actual grant'));
       const hostLabel = document.createElement('label'); const hostConfirm = document.createElement('input'); hostConfirm.type = 'checkbox';
-      hostLabel.append(hostConfirm, document.createTextNode(' I approve a temporary account with unrestricted root-equivalent sudo (not direct root SSH)'));
+      hostLabel.append(hostConfirm, document.createTextNode(' I approve a temporary account with unrestricted sudo (not direct root SSH)'));
       const approve = document.createElement('button'); approve.type = 'submit'; approve.textContent = 'Approve selected access';
       form.append(fieldset, durationLabel, reviewLabel, hostLabel, approve);
       form.addEventListener('submit', event => {
@@ -755,7 +772,7 @@ const JS: &str = r#"
         }
         submitDecision(approve, 'ssh', item, 'approve', { expected_version: item.version, confirmed: true,
           host_admin_confirmed: hostConfirm.checked, granted_capabilities: granted,
-          granted_duration_seconds: Number(duration.value) });
+          granted_duration_seconds: Number(duration.value) * 3600 });
       });
       card.append(form);
       card.append(confirmationForm(item, 'I intend to reject this access request', 'Reject', button => submitDecision(button, 'ssh', item, 'reject', { expected_version: item.version, confirmed: true })));
@@ -1337,7 +1354,7 @@ const JS: &str = r#"
     const refreshButton = document.querySelector('#ssh-access-refresh');
     let records = [];
     let selectedId = null;
-    const statusLabel = value => String(value || 'unknown').replaceAll('_', ' ');
+    const statusLabel = value => ({ active: 'Active', pending: 'Pending review', revoked: 'Revoked', rejected: 'Rejected', expired: 'Expired', cancelled: 'Cancelled', failed: 'Setup failed' })[value] || String(value || 'Unknown').replaceAll('_', ' ');
     const formatTime = seconds => Number.isFinite(Number(seconds)) && Number(seconds) > 0
       ? new Date(Number(seconds) * 1000).toLocaleString() : 'Not set';
     const itemName = item => item.username || item.purpose || item.fingerprint || 'SSH access request';
@@ -1357,7 +1374,7 @@ const JS: &str = r#"
     };
     const visibleRecords = () => {
       const needle = search.value.trim().toLocaleLowerCase();
-      return records.filter(item => matchesFilter(item) && (!needle || [itemName(item), item.purpose,
+      return records.filter(item => item.status !== 'pending' && matchesFilter(item) && (!needle || [itemName(item), item.purpose,
         item.fingerprint, item.username, item.host, item.requester_kind, item.requester_profile_id,
         ...(item.requested_capabilities || []), ...(item.granted_capabilities || [])]
         .some(value => String(value || '').toLocaleLowerCase().includes(needle))));
@@ -1382,22 +1399,17 @@ const JS: &str = r#"
       const facts = document.createElement('dl'); facts.className = 'ssh-facts';
       facts.append(makeFact('Public key fingerprint', item.fingerprint),
         makeFact('Requester', `${item.requester_kind || 'Unknown'} · ${item.requester_profile_id || 'Unknown profile'}`),
-        makeFact(item.status === 'active' ? 'Expires' : 'Requested duration', item.status === 'active' ? formatTime(item.expires_at_unix) : `${item.requested_duration_seconds || 0} seconds`),
-        makeFact('Requested access', (item.requested_capabilities || []).join(', ') || 'Shell only'));
+        makeFact(item.status === 'active' ? 'Expires' : 'Requested duration', item.status === 'active' ? formatTime(item.expires_at_unix) : formatDuration(item.requested_duration_seconds)),
+        makeFact('Requested access', capabilityList(item.requested_capabilities) || 'Shell access'));
       if (item.granted_duration_seconds != null) {
-        facts.append(makeFact('Granted duration', `${item.granted_duration_seconds} seconds`),
-          makeFact('Granted capabilities', (item.granted_capabilities || []).join(', ') || 'Shell only'));
+        facts.append(makeFact('Granted duration', formatDuration(item.granted_duration_seconds)),
+          makeFact('Granted access', capabilityList(item.granted_capabilities) || 'Shell access'));
       }
       if (item.username && item.host) facts.append(makeFact('Connection', `${item.username}@${item.host}:22`));
       sshAccessDetail.append(facts);
       if (item.detail) { const detail = document.createElement('p'); detail.className = 'muted'; detail.textContent = item.detail; sshAccessDetail.append(detail); }
 
-      if (item.status === 'pending') {
-        const notice = document.createElement('div'); notice.className = 'ssh-pending-note';
-        notice.textContent = 'This request has not been granted. Review and decide it in the Approvals inbox.';
-        const link = document.createElement('a'); link.href = '/admin/approvals#pending-ssh-approvals'; link.textContent = 'Open pending SSH approvals';
-        notice.append(document.createTextNode(' '), link); sshAccessDetail.append(notice);
-      } else if (item.status === 'active' || item.status === 'failed') {
+      if (item.status === 'active' || item.status === 'failed') {
         const action = document.createElement('div'); action.className = 'ssh-action-row';
         const label = document.createElement('label'); const confirm = document.createElement('input');
         confirm.type = 'checkbox'; confirm.setAttribute('aria-label', item.status === 'failed' ? 'Confirm cleanup of partial SSH account' : 'Confirm revoking this SSH grant');
@@ -1449,7 +1461,7 @@ const JS: &str = r#"
       const visible = visibleRecords();
       const active = records.filter(item => item.status === 'active').length;
       const pending = records.filter(item => item.status === 'pending').length;
-      count.textContent = `${visible.length} shown · ${active} active · ${pending} pending`;
+      count.textContent = `${visible.length} grants shown · ${active} active · ${pending} awaiting review`;
       sshAccessList.replaceChildren();
       if (!visible.length) {
         const row = document.createElement('li'); row.className = 'muted';
@@ -1776,7 +1788,7 @@ fn operations_page(view: OperationsView) -> String {
         )
         .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
-        OperationsView::TemporaryAccess => "<p class=\"eyebrow\">Operate · Access</p><div class=\"request-queue-header\"><div><h1>SSH access</h1><p class=\"muted\">Inspect temporary machine access, connection details, expiry, and grant history. Review new requests in <a href=\"/admin/approvals#pending-ssh-approvals\">Approvals</a>; this workspace manages grants after the decision.</p></div><button id=\"ssh-access-refresh\" type=\"button\">Refresh</button></div><section class=\"ssh-workbench\" aria-label=\"SSH access workbench\"><div class=\"ssh-list-panel\"><div class=\"ssh-list-toolbar\"><label for=\"ssh-access-search\">Find a request or grant<input id=\"ssh-access-search\" type=\"search\" placeholder=\"Name, purpose, fingerprint, account\" autocomplete=\"off\"></label><label for=\"ssh-access-filter\">Show<select id=\"ssh-access-filter\"><option value=\"active\">Active grants</option><option value=\"all\">All access records</option><option value=\"pending\">Pending review</option><option value=\"history\">Closed history</option></select></label><p id=\"ssh-access-count\" class=\"ssh-list-count\" aria-live=\"polite\">Loading access records…</p></div><ul id=\"ssh-access-list\" class=\"ssh-record-list\" aria-label=\"SSH access records\"><li class=\"muted\">Loading…</li></ul></div><section id=\"ssh-access-detail\" class=\"ssh-detail-panel\" aria-live=\"polite\"><p class=\"muted\">Choose a grant to inspect its details.</p></section></section>".to_owned(),
+        OperationsView::TemporaryAccess => "<p class=\"eyebrow\">Operate · Access</p><div class=\"request-queue-header\"><div><h1>SSH access</h1><p class=\"muted\">Manage active grants and closed access records. Pending requests are reviewed in <a href=\"/admin/approvals#pending-ssh-approvals\">Approvals</a>.</p></div><button id=\"ssh-access-refresh\" type=\"button\">Refresh</button></div><section class=\"ssh-workbench\" aria-label=\"SSH access workbench\"><div class=\"ssh-list-panel\"><div class=\"ssh-list-toolbar\"><label for=\"ssh-access-search\">Find a grant<input id=\"ssh-access-search\" type=\"search\" placeholder=\"Purpose, fingerprint, account\" autocomplete=\"off\"></label><label for=\"ssh-access-filter\">Show<select id=\"ssh-access-filter\"><option value=\"active\">Active grants</option><option value=\"all\">All grants</option><option value=\"history\">Closed grants</option></select></label><p id=\"ssh-access-count\" class=\"ssh-list-count\" aria-live=\"polite\">Loading grants…</p></div><ul id=\"ssh-access-list\" class=\"ssh-record-list\" aria-label=\"SSH grants\"><li class=\"muted\">Loading…</li></ul></div><section id=\"ssh-access-detail\" class=\"ssh-detail-panel\" aria-live=\"polite\"><p class=\"muted\">Choose a grant to inspect its details.</p></section></section>".to_owned(),
         OperationsView::History => concat!(
             "<p class=\"eyebrow\">Platform · Records</p><h1>History</h1>",
             "<section class=\"card\"><p class=\"muted\">Search records from their owning services. Select a row to inspect its details.</p>",
@@ -3051,7 +3063,7 @@ mod tests {
             .contains("Sign in with an Identity root account to review temporary SSH requests."));
         assert!(script.contains("Your signed-in account does not have the Platform root role."));
         assert!(script.contains("const responseFailure = async (response, fallback) =>"));
-        assert!(script.contains("Open pending SSH approvals"));
+        assert!(script.contains("awaiting review"));
         assert!(script.contains("const sshAccessList = document.querySelector('#ssh-access-list')"));
         assert!(script.contains("const matchesFilter = item =>"));
         assert!(script.contains("No response received. Refresh to verify whether access was revoked."));
@@ -3060,7 +3072,12 @@ mod tests {
         );
         assert!(script.contains("Show request history"));
         assert!(script.contains("if (item.granted_duration_seconds != null)"));
-        assert!(script.contains("temporary account + unrestricted sudo"));
+        assert!(script.contains("const capabilityLabel = value =>"));
+        assert!(script.contains("const formatDuration = seconds =>"));
+        assert!(script.contains("Grant duration (hours)"));
+        assert!(script.contains("Number(duration.value) * 3600"));
+        assert!(script.contains("item.status !== 'pending' && matchesFilter(item)"));
+        assert!(script.contains("Temporary administrator access (unrestricted sudo)"));
         assert!(script.contains("not direct root SSH"));
     }
 
@@ -3072,6 +3089,8 @@ mod tests {
         assert!(page.contains("id=\"ssh-access-list\""));
         assert!(page.contains("id=\"ssh-access-detail\""));
         assert!(page.contains("Active grants"));
+        assert!(!page.contains("value=\"pending\">Pending review"));
+        assert!(page.contains("Pending requests are reviewed in"));
         assert!(page.contains("SSH access workbench"));
         assert!(!page.contains("Loading access requests and active grants…"));
     }
@@ -3179,8 +3198,8 @@ mod tests {
             .split("const operationHistory =")
             .next()
             .unwrap();
-        assert!(ssh_access.contains("Open pending SSH approvals"));
-        assert!(ssh_access.contains("/admin/approvals#pending-ssh-approvals"));
+        assert!(ssh_access.contains("item.status !== 'pending'"));
+        assert!(!ssh_access.contains("/admin/approvals#pending-ssh-approvals"));
         assert!(!ssh_access.contains("/requests/${encodeURIComponent(item.id)}/approve"));
         assert!(!ssh_access.contains("/requests/${encodeURIComponent(item.id)}/reject"));
         assert!(ssh_access.contains("/grants/${encodeURIComponent(item.id)}/revoke"));
