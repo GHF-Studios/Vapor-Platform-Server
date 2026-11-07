@@ -455,12 +455,11 @@ mod unix_impl {
             .is_ok_and(|contents| contents == expected_sudoers);
         let sudo_policy_valid = sudo_policy_matches
             && temporary_group_sudoers_are_clear()
-            && run_command("/usr/sbin/visudo", &["-c"])
-                .await
-                .is_ok()
+            && run_command("/usr/sbin/visudo", &["-c"]).await.is_ok()
             && run_command("/usr/sbin/visudo", &["-cf", &sudoers_path])
                 .await
-                .is_ok();
+                .is_ok()
+            && effective_sudo_policy_matches(&username, &capabilities);
 
         let timer_name = format!("vapor-ssh-expire-{id}.timer");
         let timer_path = format!("/etc/systemd/system/{timer_name}");
@@ -1081,6 +1080,12 @@ mod unix_impl {
         {
             return Err((id.to_string(), "scoped sudo policy did not validate"));
         }
+        if !effective_sudo_policy_matches(&username, capabilities) {
+            return Err((
+                id.to_string(),
+                "effective sudo policy does not match the approved capabilities",
+            ));
+        }
         Ok(())
     }
 
@@ -1426,6 +1431,67 @@ mod unix_impl {
         }
     }
 
+    fn sudo_list_matches_sudoers(output: &str, username: &str, expected_sudoers: &str) -> bool {
+        let expected_commands = expected_sudoers
+            .lines()
+            .map(|line| {
+                line.split_once(" ALL=")
+                    .map(|(_, command)| command.to_owned())
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(mut expected_commands) = expected_commands else {
+            return false;
+        };
+
+        let heading = format!("User {username} may run the following commands on ");
+        let denied = format!("User {username} is not allowed to run sudo on ");
+        let lines = output.lines().collect::<Vec<_>>();
+        let mut actual_commands = None;
+        for (index, line) in lines.iter().enumerate() {
+            if line.starts_with(&heading) {
+                if actual_commands.is_some() || !line.ends_with(':') {
+                    return false;
+                }
+                actual_commands = Some(
+                    lines[index + 1..]
+                        .iter()
+                        .map(|command| command.trim())
+                        .filter(|command| !command.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>(),
+                );
+            } else if line.starts_with(&denied) && actual_commands.is_some() {
+                return false;
+            }
+        }
+        let Some(mut actual_commands) = actual_commands else {
+            return expected_commands.is_empty() && lines.iter().any(|line| line.starts_with(&denied));
+        };
+        expected_commands.sort();
+        actual_commands.sort();
+        actual_commands == expected_commands
+    }
+
+    fn effective_sudo_policy_matches(username: &str, capabilities: &[String]) -> bool {
+        if capabilities
+            .iter()
+            .any(|capability| capability == "host_admin")
+        {
+            return true;
+        }
+        let expected_sudoers = sudoers_contents(username, capabilities);
+        let Ok(output) = std::process::Command::new("/usr/bin/sudo")
+            .env("LC_ALL", "C")
+            .args(["-n", "-l", "-U", username])
+            .output()
+        else {
+            return false;
+        };
+        output.status.success()
+            && String::from_utf8(output.stdout)
+                .is_ok_and(|stdout| sudo_list_matches_sudoers(&stdout, username, &expected_sudoers))
+    }
+
     fn temporary_group_sudoers_reference_present(paths: &[&std::path::Path]) -> Result<bool, ()> {
         let output = std::process::Command::new("/usr/bin/grep")
             .args(["-RIlE", "^[[:space:]]*[^#[:space:]].*vapor-temp-ssh"])
@@ -1704,7 +1770,7 @@ mod unix_impl {
     #[cfg(test)]
     mod sudoers_tests {
         use super::{
-            sudoers_contents, temporary_group_sudoers_reference_present,
+            sudo_list_matches_sudoers, sudoers_contents, temporary_group_sudoers_reference_present,
             temporary_sudoers_include_layout_supported,
         };
 
@@ -1823,6 +1889,38 @@ mod unix_impl {
                 Ok(false)
             );
             fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn effective_sudo_policy_must_match_exact_grant_scope() {
+            let username = "vpsssh_test";
+            let expected = concat!(
+                "vpsssh_test ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy\n",
+                "vpsssh_test ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-service-control\n"
+            );
+            let allowed = concat!(
+                "User vpsssh_test may run the following commands on ubuntu:\n",
+                "    (root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy\n",
+                "    (root) NOPASSWD: /usr/local/sbin/vapor-ssh-service-control\n"
+            );
+            assert!(sudo_list_matches_sudoers(allowed, username, expected));
+
+            let too_broad = concat!(
+                "User vpsssh_test may run the following commands on ubuntu:\n",
+                "    (root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy\n",
+                "    (root) NOPASSWD: ALL\n"
+            );
+            assert!(!sudo_list_matches_sudoers(too_broad, username, expected));
+            assert!(sudo_list_matches_sudoers(
+                "User vpsssh_test is not allowed to run sudo on ubuntu.\n",
+                username,
+                ""
+            ));
+            assert!(!sudo_list_matches_sudoers(
+                "User vpsssh_test may run the following commands on ubuntu:\n    (root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy\n",
+                username,
+                ""
+            ));
         }
     }
 }
