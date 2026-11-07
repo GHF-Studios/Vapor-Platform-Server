@@ -9,6 +9,12 @@
 - The workstation's approved key (`SHA256:rXxD/039aN25aOaqJIFBFveVlgTWd8grNcdJ9ofIg5c`)
   was rechecked against `root`; the VPS rejected the SSH login. Earlier checks
   also found `leslieghf` unavailable. No alternate credentials were tried.
+- The same key was then tried under the exact managed account name derived from
+  request `240aab1d-8edc-49bd-bbd1-47706983e2c3` (`vpsssh_240aab1d`); SSH also
+  rejected it. The root-shell `getent passwd vpsssh_240aab1d` check found no
+  local account, despite the typed helper reporting the grant as active. Treat
+  that row as inconsistent state, not proof of usable SSH access; reconcile it
+  after the bootstrap before requesting a fresh grant.
 - The guarded one-time bootstrap is published at `sshboot` commit
   `54c2e18fdc1fbad3ccdd8f92ec75e986546fc7c1`, pinned to Platform
   `6f6756d3ec6bd120b010f3486dba3b4f7cb069a2` and Identity
