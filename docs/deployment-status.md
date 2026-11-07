@@ -3,26 +3,34 @@
 ## Directly verified live state (2026-11-07)
 
 This section supersedes earlier status summaries below. The host was inspected
-over root SSH, and public routes were probed directly.
+over root SSH, and local and public health checks were run after recovery.
 
-- The live Platform checkout is `/opt/vapor-platform-server` at
-  `6df33ec06ed1b604ce1ea49510f9b13ddd91162c`, in `monolith` mode. The current
-  approved source candidate `a8462945af4b16befd9e94964917cad15e33cfd6` is not
-  deployed.
-- `vapor-platform-server`, `caddy`, and `vapor-state-export.timer` are active.
-  Platform listens on loopback port `7110`; `/healthz` returns HTTP 200 locally
-  and through `https://vapor.ghf-studios.site/healthz`. The public homepage
-  returns HTTP 200. `/health` returns 404; `/healthz` is the health route.
-- The latest operation record reports a successful monolith deploy of
-  `6df33ec` on 2026-11-06. Two older request-scoped deploy units remain failed;
-  they are historical failures, not currently running workers.
-- Platform's deployment database has request
-  `bdf86cf7-f6b5-4681-bc9d-ee644d2ca5a3` pending for `a846294`. Its dispatch
-  state is `not_attempted`; it has not been approved or dispatched.
-- GitHub Actions run `42319756537` for `main` completed successfully: composed
-  Platform CI passed and the pending approval request was created. The earlier
+- The approved deploy request
+  `bdf86cf7-f6b5-4681-bc9d-ee644d2ca5a3` targeted `a8462945af4b16befd9e94964917cad15e33cfd6`.
+  Approval persisted cleanly, but its deployment failed during startup. The
+  request is terminal with `status=failed`; it was not re-used.
+- Recovery exposed two startup defects: the shared Platform unit imported only
+  `platform.env` even while configured for monolith mode, and the SSH audit
+  trigger migration could fail when the trigger already existed during startup.
+  The unit configuration and migration were corrected in commit
+  `09ae2af441e55911c20087ed8922eb8cab01b8cb`.
+- The Platform service was rebuilt from that exact commit on the VPS as a
+  narrowly scoped recovery. It is running in the existing `monolith` mode with
+  zero restarts since recovery. The full local health script passed, including
+  the public Atlas-through-Caddy route. The SQLite integrity check returned
+  `ok`.
+- A pre-repair SQLite backup is retained at
+  `/var/backups/vapor-server/platform-pre-repair-20261107T010500Z.sqlite3`;
+  the failed candidate binary is retained under
+  `/var/backups/vapor-server/platform-failed-candidate-20261107T011200Z/`.
+  The backup is protected as root-only state.
+- GitHub Actions CI run `42323052997` for recovery commit `09ae2af` completed
+  successfully. This recovery has not yet gone through a new approved deploy
+  request; the live source checkout is at the recovery commit, and the prior
+  failed request remains recorded as failed.
+- The previous successful deploy of `6df33ec` was on 2026-11-06. The earlier
   CI failure on `d5e01da` was a recursive-checkout failure because the pinned
-  Identity commit was not fetchable from its remote at that time. The later
+  Identity commit was not fetchable from its remote at that time; the later
   successful recursive checkout proves that pin is now published and fetchable.
 - The VPS contains retained `.tar.gz` state archives, but the live backup
   directory does not currently contain the new export's checksum sidecars,
