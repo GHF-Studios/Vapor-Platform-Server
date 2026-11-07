@@ -365,8 +365,9 @@ done
 local_health="$(curl --silent --show-error --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:7110/healthz)"
 [ "${local_health}" = 200 ] || fail platform_local_health_failed
 ssh_route="$(curl --silent --show-error --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
+  --resolve vapor.ghf-studios.site:443:127.0.0.1 \
   -H 'content-type: application/json' --data '{}' \
-  http://127.0.0.1:7110/api/identity/v1/cli/ssh-authorization/start)"
+  https://vapor.ghf-studios.site/api/identity/v1/cli/ssh-authorization/start)"
 [[ "${ssh_route}" =~ ^(400|422)$ ]] || fail ssh_authorization_route_not_ready
 ops_route="$(curl --silent --show-error --connect-timeout 3 --max-time 10 -o /dev/null -w '%{http_code}' \
   --resolve vapor.ghf-studios.site:443:127.0.0.1 https://vapor.ghf-studios.site/admin/operations)"
