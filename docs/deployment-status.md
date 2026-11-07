@@ -21,8 +21,9 @@ and must not be read as current host status.
 - Public `/` and `/downloads` return `200`. `/downloads` contains the current
   standalone setup and local-game-source guidance. Both signed stable release
   endpoints (`windows-x86_64` and `linux-x86_64`) currently return `404`, so
-  no installer/archive is advertised as downloadable. The root page remains a
-  minimal link page; the detailed first-run journey is at `/downloads`.
+  no installer/archive is advertised as downloadable. At this live check, the
+  root page was still a minimal link page; the detailed first-run journey is at
+  `/downloads`.
 - Public Build Cache status returns `200` and lists both supported target
   triples, but reports `configured=false` and `current=false` for each. There
   is no promoted Linux or Windows target snapshot and no worker is producing
@@ -60,6 +61,15 @@ and must not be read as current host status.
 - The reusable SSH bootstrap branch has been updated to pin `12192d8` and to
   check the `/cli/ssh/authorize` route as well as the API route. It is a future
   recovery artifact; the current VPS is already cut over.
+
+## Not-yet-deployed public homepage update (2026-11-07 15:28 UTC)
+
+- Homepage commit `ee31c3fcd3b4f70fa7393ca5d4f495d35148d733` replaces the
+  link-only root page with a responsive product overview and directs setup to
+  the existing `/downloads` page. It keeps release status, setup details, and
+  legal routes owned by their current surfaces. `cargo check --locked` passed
+  for the Homepage crate; this commit is not yet in the live Platform
+  composition or deployed on the VPS.
 
 ## Failed-dispatch closure and bootstrap handoff (2026-11-07 12:46 UTC)
 
