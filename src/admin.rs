@@ -186,6 +186,16 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .status-pill.status-healthy { border-color:#316947; color:#8bd59f; }
 .status-pill.status-unavailable { border-color:#7a3e45; color:#f08b92; }
 .status-pill.status-protected { border-color:#53677e; color:#b4c2d1; }
+.deployment-card { display:grid; gap:7px; }
+.deployment-card > h3, .deployment-card > p { margin:0; }
+.deployment-card-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.deployment-card-header h3 { min-width:0; margin:0; overflow-wrap:anywhere; font-size:15px; }
+.deployment-status { flex:0 0 auto; margin:0; text-transform:capitalize; }
+.deployment-status.status-approved, .deployment-status.status-succeeded { border-color:#316947; color:#8bd59f; }
+.deployment-status.status-failed, .deployment-status.status-rejected { border-color:#7a3e45; color:#f08b92; }
+.deployment-status.status-executing { border-color:#806a2f; color:#e5cb78; }
+.deployment-card details { margin-top:2px; }
+.deployment-card details > p { overflow-wrap:anywhere; }
 .history-controls { display:grid; grid-template-columns:minmax(220px,2fr) repeat(2,minmax(150px,1fr)); gap:10px; align-items:end; margin:12px 0; }
 .history-controls label { margin:0; }
 .history-count { margin:8px 0 12px; }
@@ -1037,75 +1047,105 @@ const JS: &str = r#"
       }
       for (const item of items) {
         const card = document.createElement('article');
-        card.className = 'card';
+        card.className = 'card deployment-card';
+        const header = document.createElement('header');
+        header.className = 'deployment-card-header';
         const heading = document.createElement('h3');
-        heading.textContent = `${item.repository} · ${item.branch} · ${item.status}`;
+        heading.textContent = `${item.repository || 'Unknown repository'} · ${item.branch || 'unknown branch'}`;
+        const status = document.createElement('span');
+        const knownStatuses = new Set(['approved', 'executing', 'succeeded', 'failed', 'rejected', 'expired']);
+        status.className = `status-pill deployment-status${knownStatuses.has(item.status) ? ` status-${item.status}` : ''}`;
+        status.textContent = item.status;
+        header.append(heading, status);
+        const summary = document.createElement('p');
+        summary.textContent = item.summary || 'No request summary provided.';
+        const target = document.createElement('p');
+        target.className = validDeploymentSelection(item) ? 'muted' : 'error';
+        target.textContent = `Target: ${deploymentSelectionLabel(item)}`;
+        const retiredDispatch = item.status === 'failed' && item.dispatch_state === 'failed' && String(item.decision_reason || '').startsWith('Closed after failed dispatch:');
+        const dispatchLabels = {
+          not_attempted: 'Not dispatched', dispatching: 'Dispatch in progress',
+          queued: 'Queued for worker', claimed: 'Worker claimed deployment',
+          completed: 'Worker finished deployment', expired: 'Expired before worker claim',
+          failed: 'Dispatch or worker claim failed', unknown: 'Dispatch result unknown'
+        };
+        const lifecycleLabel = item.status === 'pending' ? 'Awaiting approval' :
+          item.status === 'executing' ? 'Worker claimed; deployment running' :
+          item.status === 'succeeded' ? 'Deployment succeeded' :
+          item.status === 'failed' && item.dispatch_state === 'unknown' ? 'Worker stopped; outcome unknown' :
+          retiredDispatch ? 'Closed before deployment' :
+          item.status === 'failed' && item.dispatch_state === 'failed' ? 'Dispatch failed before worker claim' :
+          item.status === 'failed' ? 'Deployment failed' :
+          item.status === 'expired' ? 'Expired before worker claim' : null;
+        const stage = document.createElement('p');
+        stage.className = 'muted';
+        const canRetry = validDeploymentSelection(item) && item.status === 'approved'
+          && item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state);
+        stage.textContent = `${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'Stage not reported'}${canRetry ? ' · retry available' : ''}`;
         const requester = document.createElement('p');
         requester.className = 'muted';
         requester.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
-        const retiredDispatch = item.status === 'failed' && item.dispatch_state === 'failed' && String(item.decision_reason || '').startsWith('Closed after failed dispatch:');
-        const decisionStage = document.createElement('p');
-        decisionStage.className = 'muted';
-        decisionStage.textContent = `Decision: ${item.status === 'pending' ? 'awaiting review' : item.status === 'rejected' ? 'rejected' : item.status === 'expired' ? 'expired' : retiredDispatch ? 'closed before deployment' : item.status === 'failed' ? 'failed' : 'approved and saved'}`;
-        const dispatchStage = document.createElement('p');
-        dispatchStage.className = 'muted';
-        const dispatchLabels = {
-          not_attempted: 'not attempted', dispatching: 'dispatch in progress',
-          queued: 'queued for worker', claimed: 'worker claimed deployment',
-          completed: 'worker finished deployment', expired: 'expired before worker claim',
-          failed: 'dispatch or worker claim failed', unknown: 'dispatch result unknown'
-        };
-        const selectionValid = validDeploymentSelection(item);
-        const retryLabel = selectionValid && item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)
-          ? '; retry available' : '';
-        const lifecycleLabel = item.status === 'executing' ? 'worker claimed; deployment running' :
-          item.status === 'succeeded' ? 'deployment succeeded' :
-          item.status === 'failed' && item.dispatch_state === 'unknown' ? 'worker stopped; deployment outcome unknown' :
-          retiredDispatch ? 'closed by operator before deployment' :
-          item.status === 'failed' && item.dispatch_state === 'failed' ? 'dispatch failed before worker claim' :
-          item.status === 'failed' ? 'deployment failed' :
-          item.status === 'expired' ? 'expired before worker claim' : null;
-        dispatchStage.textContent = `Deployment: ${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail && !lifecycleLabel ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
         const revision = document.createElement('p');
         revision.textContent = `Commit ${item.commit} · tree ${item.tree}`;
-        const target = document.createElement('p');
-        target.className = selectionValid ? 'muted' : 'error';
-        target.textContent = `Target: ${deploymentSelectionLabel(item)}`;
         const pins = document.createElement('p');
         pins.className = 'muted';
-        pins.textContent = `${Array.isArray(item.submodules) ? item.submodules.length : 0} pinned service revisions · expires ${item.expires_at_unix}`;
-        const summary = document.createElement('p');
-        summary.textContent = item.summary;
+        const expiresAt = Number.isFinite(item.expires_at_unix)
+          ? new Date(item.expires_at_unix * 1000).toLocaleString()
+          : 'unknown';
+        pins.textContent = `${Array.isArray(item.submodules) ? item.submodules.length : 0} pinned service revisions · expires ${expiresAt}`;
         const workflow = document.createElement('a');
-        workflow.href = item.workflow_url;
         workflow.rel = 'noopener noreferrer';
         workflow.textContent = 'Open successful CI run';
-        card.append(heading, requester, decisionStage, dispatchStage, revision, target, pins, summary, workflow);
+        card.append(header, summary, target, stage);
         if (actionFeedback.has(item.id)) {
           const feedback = document.createElement('p');
           feedback.className = item.status === 'approved' && ['failed', 'unknown'].includes(item.dispatch_state) ? 'error' : 'muted';
           feedback.textContent = actionFeedback.get(item.id);
           card.append(feedback);
         }
-        if (item.result_detail) {
-          const outcome = document.createElement('p');
-          outcome.className = 'muted';
-          outcome.textContent = item.result_detail;
-          card.append(outcome);
-        }
+        const outcome = document.createElement('p');
+        outcome.className = 'muted';
+        outcome.textContent = item.result_detail || '';
         const details = document.createElement('details');
         const summaryLabel = document.createElement('summary');
-        summaryLabel.textContent = 'Pinned submodules';
+        summaryLabel.textContent = 'Request details';
         const list = document.createElement('ul');
         for (const pin of (Array.isArray(item.submodules) ? item.submodules : [])) {
           const line = document.createElement('li');
           line.textContent = `${pin.path}: ${pin.commit}`;
           list.append(line);
         }
-        details.append(summaryLabel, list);
+        details.append(summaryLabel, requester, revision, pins);
+        try {
+          const ciUrl = new URL(item.workflow_url);
+          if (ciUrl.protocol === 'https:' && ciUrl.hostname === 'github.com' && ciUrl.pathname.startsWith('/GHF-Studios/')) {
+            workflow.href = ciUrl.href;
+            details.append(workflow);
+          }
+        } catch (_) {}
+        if (item.dispatch_detail) {
+          const dispatchDetail = document.createElement('p');
+          dispatchDetail.className = 'muted';
+          dispatchDetail.textContent = `Dispatch detail: ${String(item.dispatch_detail).slice(0, 500)}`;
+          details.append(dispatchDetail);
+        }
+        if (item.decision_reason) {
+          const decisionReason = document.createElement('p');
+          decisionReason.className = 'muted';
+          decisionReason.textContent = `Decision reason: ${item.decision_reason}`;
+          details.append(decisionReason);
+        }
+        if (item.result_detail) details.append(outcome);
+        if (item.dispatch_attempts) {
+          const attempts = document.createElement('p');
+          attempts.className = 'muted';
+          attempts.textContent = `Dispatch attempts: ${item.dispatch_attempts}`;
+          details.append(attempts);
+        }
+        details.append(list);
         card.append(details);
         const actions = [];
-        if (selectionValid && item.status === 'approved' && item.retry_eligible) actions.push('dispatch');
+        if (canRetry) actions.push('dispatch');
         if (item.status === 'executing') actions.push('reconcile');
         if (item.status === 'approved' && item.dispatch_state === 'failed') actions.push('retire');
         for (const decision of actions) {
@@ -2805,14 +2845,13 @@ mod tests {
             .unwrap();
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
-        assert!(script.contains("Decision: ${item.status"));
         assert!(
-            script.contains("Deployment: ${lifecycleLabel || dispatchLabels[item.dispatch_state]")
+            script.contains("${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'Stage not reported'}")
         );
-        assert!(script.contains("expired: 'expired before worker claim'"));
-        assert!(script.contains("claimed: 'worker claimed deployment'"));
-        assert!(script.contains("completed: 'worker finished deployment'"));
-        assert!(script.contains("worker stopped; deployment outcome unknown"));
+        assert!(script.contains("expired: 'Expired before worker claim'"));
+        assert!(script.contains("claimed: 'Worker claimed deployment'"));
+        assert!(script.contains("completed: 'Worker finished deployment'"));
+        assert!(script.contains("Worker stopped; outcome unknown"));
         assert!(script.contains("secondaryLabel: 'Dispatch needs attention'"));
         assert!(script.contains("Approval saved; deployment is queued for the worker."));
         assert!(
@@ -2824,20 +2863,18 @@ mod tests {
         assert!(script.contains(
             "const link = document.createElement('a'); link.href = '/admin/deployments';"
         ));
-        assert!(script.contains("? '; retry available' : '';"));
-        assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const validDeploymentSelection = item =>"));
         assert!(script.contains("serviceDeployTargets.has(item.service_target)"));
         assert!(script.contains("document.querySelector('[data-deployment-targets]')"));
         assert!(script.contains("Target: ${deploymentSelectionLabel(item)}"));
-        assert!(
-            script.contains("selectionValid && item.status === 'approved' && item.retry_eligible")
-        );
+        assert!(script.contains("const canRetry = validDeploymentSelection(item) && item.status === 'approved'"));
+        assert!(script.contains("&& item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)"));
+        assert!(script.contains("if (canRetry) actions.push('dispatch')"));
         assert!(script.contains("item.status === 'approved' && item.dispatch_state === 'failed') actions.push('retire')"));
         assert!(script.contains("Close failed dispatch"));
         assert!(script.contains("reason: reason.value.trim()"));
-        assert!(script.contains("closed before deployment"));
-        assert!(script.contains("dispatch failed before worker claim"));
+        assert!(script.contains("Closed before deployment"));
+        assert!(script.contains("Dispatch failed before worker claim"));
         assert!(script.contains("body?.detail"));
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
