@@ -658,6 +658,28 @@ async fn dispatch_approved_authorized(
     if !valid_uuid(id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let stored_json = match sqlx::query_scalar::<_, String>(
+        "SELECT request_json FROM platform_deploy_requests WHERE id = ? AND status = 'approved' AND version = ?",
+    )
+    .bind(id)
+    .bind(version)
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return StatusCode::CONFLICT.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if request_server_mode(&stored_json).is_none() {
+        return stage_error(
+            StatusCode::CONFLICT,
+            "dispatch_not_started",
+            "dispatch",
+            "This legacy request has no valid deployment target. Submit a fresh CI request; no deployment was queued.",
+            true,
+            false,
+        );
+    }
     if expire_requests(&state.pool, unix_now()).await.is_err() {
         return stage_error(
             StatusCode::SERVICE_UNAVAILABLE,

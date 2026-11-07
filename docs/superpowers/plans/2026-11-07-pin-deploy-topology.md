@@ -64,6 +64,11 @@ and approved.
 - Existing `monolith` remains representable for explicit recovery or migration
   requests; ordinary CI requests target the approved independent-service
   architecture.
+- Retry is a new dispatch attempt against the already approved immutable
+  request, so the API rechecks that its target is present before calling the
+  privileged helper. The dashboard hides Retry for targetless legacy records,
+  and the root helper independently fails closed if the target is absent or
+  unsupported.
 - Existing requests are not rewritten because their body hashes are immutable.
   Missing target is surfaced as legacy and cannot be approved.
 - This change does not alter the currently deployed VPS or approve, reject, or

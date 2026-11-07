@@ -7,6 +7,11 @@ mod ssh_policy;
 const MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES: usize = 4096;
 
 #[cfg_attr(not(unix), allow(dead_code))]
+fn valid_deployment_target(value: Option<&str>) -> bool {
+    matches!(value, Some("monolith" | "services"))
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(serde::Deserialize)]
 struct IdentityAuthorizationDecision {
     allowed: bool,
@@ -598,11 +603,13 @@ mod unix_impl {
         if version < 1 {
             return Err((id.to_string(), "invalid approved deploy version"));
         }
-        let row = sqlx::query("SELECT status, version FROM platform_deploy_requests WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|_| (id.to_string(), "could not read deploy approval"))?;
+        let row = sqlx::query(
+            "SELECT status, version, request_json FROM platform_deploy_requests WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| (id.to_string(), "could not read deploy approval"))?;
         let Some(row) = row else {
             return Err((id.to_string(), "deploy approval does not exist"));
         };
@@ -612,6 +619,19 @@ mod unix_impl {
             return Err((
                 id.to_string(),
                 "deploy approval is not current and approved",
+            ));
+        }
+        let request_json: String = row.get("request_json");
+        let request: serde_json::Value = serde_json::from_str(&request_json)
+            .map_err(|_| (id.to_string(), "approved deploy request is invalid"))?;
+        if !valid_deployment_target(
+            request
+                .get("server_mode")
+                .and_then(serde_json::Value::as_str),
+        ) {
+            return Err((
+                id.to_string(),
+                "approved deploy request has no valid target",
             ));
         }
         Ok(())
@@ -1459,7 +1479,16 @@ fn main() {
 
 #[cfg(test)]
 mod endpoint_tests {
-    use super::valid_identity_authz_endpoint;
+    use super::{valid_deployment_target, valid_identity_authz_endpoint};
+
+    #[test]
+    fn deployment_target_must_be_explicit_and_supported() {
+        assert!(valid_deployment_target(Some("monolith")));
+        assert!(valid_deployment_target(Some("services")));
+        assert!(!valid_deployment_target(None));
+        assert!(!valid_deployment_target(Some("automatic")));
+        assert!(!valid_deployment_target(Some("Services")));
+    }
 
     #[test]
     fn accepts_the_two_configured_identity_topologies() {

@@ -624,7 +624,7 @@ const JS: &str = r#"
           queued: 'queued', expired: 'expired before worker claim',
           failed: 'dispatch failed', unknown: 'dispatch result unknown'
         };
-        const retryLabel = item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)
+        const retryLabel = item.server_mode && item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)
           ? '; retry available' : '';
         dispatchStage.textContent = `Deployment: ${dispatchLabels[item.dispatch_state] || 'not reported'}${retryLabel}${item.dispatch_attempts ? ` · attempt ${item.dispatch_attempts}` : ''}${item.dispatch_detail ? ` · ${String(item.dispatch_detail).slice(0, 240)}` : ''}`;
         const revision = document.createElement('p');
@@ -668,7 +668,7 @@ const JS: &str = r#"
         details.append(summaryLabel, list);
         card.append(details);
         const pendingActions = item.server_mode ? ['approve', 'reject'] : ['reject'];
-        for (const decision of (item.status === 'pending' ? pendingActions : item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
+        for (const decision of (item.status === 'pending' ? pendingActions : item.server_mode && item.status === 'approved' && item.retry_eligible ? ['dispatch'] : item.status === 'executing' ? ['reconcile'] : [])) {
           const form = document.createElement('form');
           form.className = 'inline';
           const label = document.createElement('label');
@@ -1824,6 +1824,7 @@ mod tests {
         assert!(script.contains("item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("Target: missing or invalid (legacy request; cannot be approved)"));
         assert!(script.contains("const pendingActions = item.server_mode ? ['approve', 'reject'] : ['reject']"));
+        assert!(script.contains("item.server_mode && item.status === 'approved' && item.retry_eligible"));
         assert!(script.contains("const body = await result.clone().json()"));
         assert!(script.contains("actionFeedback.set(item.id, String(message).slice(0, 240))"));
     }

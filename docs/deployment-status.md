@@ -29,6 +29,12 @@ over root SSH, and local and public health checks were run after recovery.
   inconsistency, not a failed deployment. The helper's structured failure
   detail is currently discarded by the deployed Platform binary, so its exact
   cause is not yet established.
+- A follow-up request workflow for Platform commit `f78f236` passed its full
+  composed Platform CI job, then failed while submitting the new request:
+  the live API returned HTTP 422 because its deployed request schema does not
+  recognize `server_mode`. This confirms the host is still running the older
+  request contract and cannot yet accept the target-pinned deployment request.
+  No request for `f78f236` was created by that workflow.
 - A pre-repair SQLite backup is retained at
   `/var/backups/vapor-server/platform-pre-repair-20261107T010500Z.sqlite3`;
   the failed candidate binary is retained under
@@ -148,14 +154,18 @@ approved design remains open. USB integrity revalidation is implemented in
 source but has not run on the owner's drive. Fresh-host bootstrap/restore
 remains open; the current recovery scripts are not a proven rebuild path.
 
-The current local work also pins the deployment topology (`services` or
+The current source pins the deployment topology (`services` or
 `monolith`) inside each immutable approval request. New CI requests target the
 approved independent-services architecture; the dashboard displays the target
 and refuses approval of legacy requests without one; the worker verifies and
 deploys only the recorded target. The fixed helper failure reason is also
 recorded in Platform logs when the helper returns a bounded structured error.
-This slice has passed the Platform Rust binary tests and focused deploy-queue
-tests locally; it is not yet pushed or deployed.
+Commit `f78f236` is pushed to `main`; its composed Platform CI test job passed,
+but the follow-up request job failed with the live-schema mismatch documented
+above. This source is therefore pushed but not deployed. Local follow-up edits
+also prevent retrying targetless legacy requests in the API and dashboard, and
+make the root helper enforce an explicit supported target. Those follow-up
+edits are not yet committed or pushed.
 
 ## Verified deployed source
 
