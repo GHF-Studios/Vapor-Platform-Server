@@ -72,7 +72,9 @@ def _trusted_current(root: pathlib.Path, records: dict[str, dict[str, object]]) 
     return name
 
 
-def plan_prune_names(root: pathlib.Path, new_name: str, keep: int) -> tuple[str, ...]:
+def _plan_prune_names(
+    root: pathlib.Path, new_name: str, keep: int
+) -> tuple[tuple[str, ...], bool]:
     if keep < 2:
         raise ValueError("retention must keep at least two generations")
     if not ARCHIVE_NAME.fullmatch(new_name):
@@ -94,9 +96,9 @@ def plan_prune_names(root: pathlib.Path, new_name: str, keep: int) -> tuple[str,
     )
     if metadata_present:
         if current is None:
-            return ()
+            return (), False
     elif any(name != new_name for name in records):
-        return ()
+        return (), False
     protected = {new_name}
     if current:
         protected.add(current)
@@ -110,7 +112,13 @@ def plan_prune_names(root: pathlib.Path, new_name: str, keep: int) -> tuple[str,
             continue
         removals.append(name)
         excess -= 1
-    return tuple(removals)
+    return tuple(removals), True
+
+
+def plan_prune_names(root: pathlib.Path, new_name: str, keep: int) -> tuple[str, ...]:
+    """Return safe removals, keeping the public planner API used by callers."""
+    removals, _metadata_trustworthy = _plan_prune_names(root, new_name, keep)
+    return removals
 
 
 def main(argv: list[str]) -> int:
@@ -121,13 +129,18 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--output", type=pathlib.Path, required=True)
     arguments = parser.parse_args(argv)
     try:
-        removals = plan_prune_names(arguments.root, arguments.new, arguments.keep)
+        removals, metadata_trustworthy = _plan_prune_names(
+            arguments.root, arguments.new, arguments.keep
+        )
     except (OSError, ValueError) as error:
         print(f"recovery-retention: {error}", file=sys.stderr)
         return 1
     arguments.output.write_text("".join(f"{name}\n" for name in removals), encoding="ascii")
-    if not removals and ((arguments.root / "latest.json").exists() or (arguments.root / "index.json").exists()):
-        print("recovery-retention: existing latest/index metadata is not consistent; pruning skipped", file=sys.stderr)
+    if not metadata_trustworthy:
+        print(
+            "recovery-retention: existing recovery metadata is missing or inconsistent; pruning skipped",
+            file=sys.stderr,
+        )
     return 0
 
 

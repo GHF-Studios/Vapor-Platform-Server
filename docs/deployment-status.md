@@ -1,6 +1,6 @@
 # Vapor server deployment status
 
-## Current live state (2026-11-07 15:06 UTC)
+## Current live state (2026-11-07 15:13 UTC)
 
 This is the newest verified state; older entries below are historical snapshots
 and must not be read as current host status.
@@ -30,12 +30,20 @@ and must not be read as current host status.
   VPS, as required by the fallback path.
 - The successful bootstrap created a root-only pre-cutover archive at
   `/var/backups/vapor-server/vapor-platform-recovery-20261107T143242Z-6f6756d3ec6b.tar.gz`.
-  The hourly exporter subsequently published a newer recovery generation for
-  the live revision at
-  `/var/backups/vapor-server/vapor-platform-recovery-20261107T145633Z-12192d853484.tar.gz`.
-  Its `.sha256` sidecar matched; the bundle validator accepted its structure
-  and manifest; metadata reports `services`, Ubuntu 26.04 LTS, and root commit
-  `12192d8`. The periodic deploy timer was not started.
+  The exporter subsequently published recovery generation
+  `/var/backups/vapor-server/vapor-platform-recovery-20261107T151352Z-12192d853484.tar.gz`
+  (4,808,276 bytes; SHA-256
+  `6c9973d1d5e8d9bb5880df3f4a63a4a81cdc920975fd49e4b014fcb0dc9d0b2b`). Its
+  sidecar, archive checksum, bundle structure, and manifest all validate; the
+  latest pointer agrees with the index. The retention planner confirms the
+  current generation is trusted, with 19 verified indexed archives and a
+  168-generation retention limit. No archives were pruned. The exporter's
+  `existing latest/index metadata is not consistent` warning was a false
+  positive: the CLI emitted it whenever the safe prune list was empty, even
+  when metadata was valid and the retention limit had not been reached. A
+  source fix now reports that warning only when metadata is actually missing
+  or inconsistent; it has not yet been deployed. The periodic deploy timer was
+  not started.
 - The three pending full-deploy requests are `f08c9dec-627f-414e-b4e5-54562100df2f`
   (`7d07590`), `ed74751d-d3b2-4e67-a719-744121bd34d5` (`96e650f`), and
   `3196a6b8-2eb2-4957-b56a-2b7241bfce7d` (`12192d8`). The first two are
