@@ -986,3 +986,20 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   tests (91, 10 platform skips), Bash syntax, and whitespace checks also pass.
 - The implementation is still only on the review branch. The VPS remains on
   `12192d8`, and no pending deployment was approved or dispatched.
+
+## Root SSH recovery and live deployment queue (2026-11-07, 18:31 UTC)
+
+- The owner-installed break-glass root public key now authenticates from the
+  workstation. A read-only status check reports host `ubuntu`, Platform
+  `active`, deployed checkout `12192d8`, valid `visudo -c`, and an empty
+  `vapor-temp-ssh` group. The live `health-check.sh` also passed in services
+  mode. No service or host configuration was changed.
+- The live deployment queue still contains four pending requests. The newest
+  targets `b1e2d3c`; other pending commits include the currently deployed
+  `12192d8` and older revisions. The newest request remains the candidate
+  whose installer recreates the broad temporary-SSH sudo rule; it must not be
+  approved or dispatched. The sudo hardening remains on the review branch and
+  has not reached the VPS.
+- The latest docs-only CI run `42401200728` completed successfully for both
+  Linux and Windows. This records source/CI and host-health evidence only; no
+  deployment request was approved, dispatched, or edited.
