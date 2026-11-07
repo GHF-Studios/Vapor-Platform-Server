@@ -76,6 +76,25 @@ and must not be read as current host status.
   and the snapshot contract; it has not yet been included in the live
   composition or deployed.
 
+## Source candidate and access recheck (2026-11-07 15:44 UTC)
+
+- Platform candidate `50729bc3b141663fba2f3f8005f631a35f9c7085` tightens the
+  Deployments cards: the default view keeps repository/branch, status, summary,
+  target, and current stage visible; requester, pinned revisions, CI evidence,
+  dispatch detail, and result detail are expandable. Retry messaging now uses
+  the same target/status/dispatch eligibility as the retry action. The result
+  detail renderer no longer references a block-scoped element outside its
+  creation scope.
+- The local Rust workspace check and embedded JavaScript syntax check passed.
+  GitHub Actions run `42387570348` passed both `root-ci` and
+  `windows-recovery-tests`. This is source/CI evidence only; no live deployment
+  was attempted.
+- A direct SSH attempt with the workstation's designated root key
+  (`SHA256:rXxD/039aN25aOaqJIFBFveVlgTWd8grNcdJ9ofIg5c`) was rejected with
+  `Permission denied (publickey)`. No alternate credentials were tried and no
+  VPS files or services were changed. The last verified live revision remains
+  the one recorded above until a new host check succeeds.
+
 ## Failed-dispatch closure and bootstrap handoff (2026-11-07 12:46 UTC)
 
 Historical: this section records the state before direct root SSH access and
