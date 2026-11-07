@@ -31,7 +31,7 @@ pub async fn ensure_audit_actor_columns(pool: &SqlitePool) -> Result<(), sqlx::E
         .execute(pool)
         .await?;
     sqlx::query(
-        "CREATE TRIGGER platform_ssh_access_insert_audit
+        "CREATE TRIGGER IF NOT EXISTS platform_ssh_access_insert_audit
          AFTER INSERT ON platform_ssh_access_requests
          BEGIN
            INSERT INTO platform_ssh_access_events(
@@ -44,7 +44,7 @@ pub async fn ensure_audit_actor_columns(pool: &SqlitePool) -> Result<(), sqlx::E
     .execute(pool)
     .await?;
     sqlx::query(
-        "CREATE TRIGGER platform_ssh_access_update_audit
+        "CREATE TRIGGER IF NOT EXISTS platform_ssh_access_update_audit
          AFTER UPDATE OF status ON platform_ssh_access_requests
          WHEN OLD.status != NEW.status
          BEGIN

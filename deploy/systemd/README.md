@@ -11,8 +11,9 @@ vapor-state-export.timer
 ```
 
 The app services are installed separately and run as the `vapor` system user.
-They read server-local env files from `/etc/vapor-server` and write state under
-`/var/lib/vapor-server`.
+The composed monolith unit imports the service env files it needs; the
+independent Platform gateway imports only `platform.env`. Both write state
+under `/var/lib/vapor-server`.
 
 The deploy and state-export units run as root-owned oneshot operations. Each
 approved deploy starts its own `vapor-deploy@<request-id>.service`; there is no
