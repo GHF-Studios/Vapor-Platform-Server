@@ -776,3 +776,19 @@ registration is active. Public HTTPS/certificate issuance depends on that DNS
 being correct.
 
 The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
+
+## Temporary account state rechecked (2026-11-07, about 16:46 UTC)
+
+- Repeating the all-users `groups` scan through the working `leslieghf` SSH
+  connection did print `vpsssh_240aab1d : vapor-temp-ssh`; this confirms that
+  the account was present at the instant of that scan. The same key was then
+  rejected for that login. Within about a minute, direct `grep`, `getent`, and
+  `groups` checks found no account and no `/home/vpsssh_240aab1d` directory,
+  consistently across three checks in one SSH session.
+- The host still showed the grant's full UUID expiry timer active, scheduled
+  for 2026-11-07 19:05:58 UTC. The corresponding service was inactive; its
+  `ExecMainStartTimestamp` was empty. The shortened timer name previously
+  queried was not the installed full-UUID unit. The account's disappearance
+  before the timer's scheduled expiry remains unexplained; this is a lifecycle
+  inconsistency, not evidence that the user supplied the wrong key. No host
+  state was changed.
