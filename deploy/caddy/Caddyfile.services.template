@@ -2,6 +2,7 @@
 	encode zstd gzip
 
 	redir /atlas /atlas/ permanent
+	redir /docs /docs/ permanent
 
 	# Keep the shared operator shell at the public origin. Platform serves its
 	# own pages/assets and proxies only fixed service-owned admin sections.

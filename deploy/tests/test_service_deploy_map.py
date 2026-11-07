@@ -14,6 +14,14 @@ SPEC.loader.exec_module(DEPLOY_MAP)
 
 
 class ServiceDeployMapTests(unittest.TestCase):
+    def test_docs_without_trailing_slash_redirects_to_canonical_path(self) -> None:
+        for name in ("Caddyfile.services.template", "Caddyfile.services.example"):
+            with self.subTest(name=name):
+                caddy = (REPO_ROOT / "deploy" / "caddy" / name).read_text(encoding="utf-8")
+                redirect = "redir /docs /docs/ permanent"
+                self.assertIn(redirect, caddy)
+                self.assertLess(caddy.index(redirect), caddy.index("handle_path /docs/*"))
+
     def test_each_target_has_only_fixed_deployer_metadata(self) -> None:
         caddy = (REPO_ROOT / "deploy" / "caddy" / "Caddyfile.services.template").read_text(encoding="utf-8")
         for target, record in DEPLOY_MAP.DEPLOY_TARGETS.items():

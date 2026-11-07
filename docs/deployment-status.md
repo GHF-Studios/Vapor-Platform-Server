@@ -1,5 +1,31 @@
 # Vapor server deployment status
 
+## Current verified state (2026-11-07 22:03 UTC)
+
+- Platform `9db3858dfa66a3177e1bed30a297cc11ef8eee32` is live in `services`
+  mode. Caddy, the seven owner services, and the Platform admin gateway all
+  report active; `/healthz` returns HTTP 200. This snapshot was checked over
+  the designated root SSH identity after the deployment completed.
+- The latest live admin bundle contains the recent Operations changes: terminal
+  deployments are routed to History, pending requests are omitted from History,
+  and approved Identity requests and active SSH grants use owner-specific
+  status meanings.
+- The enabled `vapor-state-export.timer` is active. Its latest pointer names
+  `vapor-platform-recovery-20261107T210817Z-099af75dac0a.tar.gz` (4,831,329
+  bytes); the archive SHA-256 matches the pointer, and the archive contains its
+  manifest and fresh-host recovery entrypoint. It is pinned to `099af75`, so it
+  predates the subsequent Platform admin deployments; the next hourly export
+  is scheduled for 22:11 UTC.
+- The workstation currently has no removable recovery drive mounted, no
+  `%LOCALAPPDATA%\Vapor\Recovery` directory, and no Vapor recovery-sync
+  scheduled task. The owner-held USB copy and clean-host restore therefore
+  remain unverified; VPS archive generation alone is not a completed recovery
+  path.
+- The Platform repo’s production-topology description is corrected in this
+  revision: independent service processes behind Caddy, with Platform as the
+  shared admin gateway and deployment/recovery coordinator. The monolith mode
+  remains an alternate topology.
+
 ## Public web surface spot-check (2026-11-07 17:06 UTC)
 
 - Public `/`, `/downloads`, and `/healthz` returned `200`; `/healthz` returned

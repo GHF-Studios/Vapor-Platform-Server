@@ -29,11 +29,14 @@ Vapor-Platform-Server/
     vapor_server_shared/   # optional later
 ```
 
-The selected VPS runtime is one composed server process. Homepage, Docs,
-Identity, Diagnostics, Registry, Artifact, and Build Cache remain separate
-service repositories with their own state and router builders; the top-level host only composes those
-routers and owns deployment. The independent-process deployment mode remains
-available for service maintenance and rollback.
+Production runs Homepage, Docs, Identity, Diagnostics, Registry, Artifact,
+Build Cache, and the Platform admin gateway as independent service processes
+behind Caddy. Platform owns deployment coordination, shared operator navigation,
+and whole-system recovery; each service retains its own routes, state, and
+business logic. Services can be rebuilt and deployed independently, while the
+Platform recovery workflow composes the whole host. The single-process
+`monolith` mode remains available as an alternate deployment topology, not the
+production topology.
 
 ## Single-domain route map
 
@@ -76,8 +79,9 @@ available for service maintenance and rollback.
 - Operations: Platform owns the latest deploy/restore status pointer; deployment
   and recovery actions remain CLI-owned.
 - Artifact: serves immutable Vapor application release manifests, signatures,
-  and archive bytes from its own release store. The Platform host composes its
-  router; release build/sign/publish tooling remains an operator workflow.
+  and archive bytes from its own release store. It runs as an independent
+  service in production; release build/sign/publish tooling remains an operator
+  workflow.
 - Build Cache: owns one current signed Cargo snapshot per supported target and
   candidate promotion state. VPS-hosted target VM orchestration and Vapor Client
   installation are not yet implemented; an empty cache is not a usable build
@@ -95,17 +99,16 @@ repo composes those into whole-conglomerate export/import.
 
 ## Current status
 
-The repository contains the single-VPS deployment slice: Caddy, systemd service
-units, CI-created human-approved deployment requests, SQLite-backed identity state,
-pre-DNS HTTP fallback routing, health checks, smoke checks, and whole-server
-file-state export/restore scripts. Current live deployment evidence is tracked
-separately in `docs/deployment-status.md`; source changes alone do not imply a
-VPS deployment.
+The repository contains the single-VPS, independent-service deployment slice:
+Caddy, separate systemd service units, CI-created human-approved deployment
+requests, SQLite-backed identity state, health checks, smoke checks, and
+whole-server file-state export/restore scripts. Current live deployment and
+recovery evidence is tracked in `docs/deployment-status.md`; source changes
+alone do not imply a VPS deployment.
 
-The service implementations are still early scaffolds and remain owned by their
-own repositories. Atlas is separately owned source built as static output. The
-composed host imports public router builders; it does not move service handlers
-or persistence code into this repository.
+The service implementations remain owned by their own repositories. Atlas is
+separately owned source built as static output. Platform does not move service
+handlers or persistence code into this repository.
 
 See `docs/decisions-and-backlog.md` for the accepted boundaries, pending
 decisions, and future/backburner items that should not be lost.
