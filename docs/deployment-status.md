@@ -18,6 +18,11 @@ and must not be read as current host status.
   without its required query string; these expected validation responses
   confirm both requests reach Identity. The unauthenticated Operations page
   returns `401` as expected.
+- Public `/` and `/downloads` return `200`. `/downloads` contains the current
+  standalone setup and local-game-source guidance. Both signed stable release
+  endpoints (`windows-x86_64` and `linux-x86_64`) currently return `404`, so
+  no installer/archive is advertised as downloadable. The root page remains a
+  minimal link page; the detailed first-run journey is at `/downloads`.
 - The successful bootstrap created a root-only pre-cutover archive at
   `/var/backups/vapor-server/vapor-platform-recovery-20261107T143242Z-6f6756d3ec6b.tar.gz`.
   The hourly exporter subsequently published a newer recovery generation for
