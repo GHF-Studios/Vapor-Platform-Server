@@ -260,9 +260,9 @@ truth for this pass.
 - [x] Keep request decision and deployment dispatch states independently
   filterable and visible; distinguish the latest deploy/restore pointer from
   request history.
-- [x] Show an Identity request as expired-by-time when its expiry timestamp has
-  passed, while clearly indicating that Identity has not persisted the status
-  transition and leaving owner state untouched.
+- [x] Let Identity persist expired permission-request transitions and audit
+  events; the dashboard displays the owner service's persisted status rather
+  than deriving a competing state from timestamps.
 - [x] Add explicit refresh and per-source refresh status.
 - [x] Show request provenance in owner summaries and review cards without
   exposing or joining owner databases from the Platform shell.
@@ -288,8 +288,9 @@ truth for this pass.
 - Artifact: release inventory, manifests, signatures, targets, channels and
   validation detail; mutations only where Artifact already owns an audited
   operation.
-- Build Cache: per-target current snapshot, lock/freshness and native-builder
-  state, connected to service-owned APIs and builder reports.
+- Build Cache: per-target current/stale snapshot state, lock freshness, and
+  latest successful promotion metadata. Native-builder liveness and failed-run
+  history remain deferred until the builder owns a status contract.
 - Each section keeps independent build/deploy ownership and renders inside the
   shared shell contract.
 
