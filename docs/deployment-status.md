@@ -1,23 +1,23 @@
 # Vapor server deployment status
 
-## Latest candidate validation (2026-11-07 06:06 UTC)
+## Latest candidate validation (2026-11-07 06:10 UTC)
 
-- The latest green pushed candidate is
-  `3265b3f2a858c427402aa3b8d81af4bf2b749c74` on
-  `codex/platform-integration-20261102`. GitHub Actions run `42345175420`
-  passed `root-ci` and `windows-recovery-tests`.
-- The Windows job exposed a runner-specific issue in its predecessor
-  `be4c5e9`: PowerShell returned both Windows and Git copies of `tar.exe`, which
-  were combined into an invalid command path. `3265b3f` selects one executable;
-  all eight USB fixture scenarios then passed on the native Windows runner.
-- The green candidate includes source-pinned recovery files in each new export,
-  hash verification before USB extraction, and an explicit unavailable pointer
-  when the latest archive predates the kit. The stale-pointer transition is
-  covered by the Windows fixtures.
-- After `3265b3f`, a local follow-up makes fresh-host recovery require GitHub
-  browser readiness only when at least one GitHub OAuth credential is
-  configured. The full local test recipe and the eight USB scenarios pass for
-  that follow-up; its pushed CI result is pending.
+- The latest validated candidate is
+  `cc80245b5d33100bcadd4cbe603ba6e451f7d51a` on
+  `codex/platform-integration-20261102`. GitHub Actions run `42345635963`
+  passed both `root-ci` and `windows-recovery-tests`.
+- The full local recipe passed with 75 Python tests (9 platform-dependent
+  skips), all Rust unit/integration/doc tests, shell syntax checks, and the
+  Windows USB fixture suite (8 scenarios).
+- The new exports carry their source-pinned recovery entrypoint and metadata
+  helper; USB sync verifies the kit hashes and explicitly marks the latest kit
+  unavailable when syncing an older archive. Recovery now requires Steam and
+  dashboard readiness, plus GitHub browser readiness only when at least one
+  GitHub OAuth credential is configured. Missing GitHub configuration flags
+  fail closed.
+- The prior Windows failure on `be4c5e9` was caused by PowerShell combining the
+  Windows and Git `tar.exe` paths. `3265b3f` selects a single executable, and
+  its native Windows CI run passed.
 - These are source and CI results only. No live VPS deployment, real USB copy,
   or clean-host restore drill was performed.
 
