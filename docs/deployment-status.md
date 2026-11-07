@@ -62,7 +62,7 @@ and must not be read as current host status.
   check the `/cli/ssh/authorize` route as well as the API route. It is a future
   recovery artifact; the current VPS is already cut over.
 
-## Not-yet-deployed public homepage update (2026-11-07 15:28 UTC)
+## Not-yet-deployed public service UI updates (2026-11-07 15:32 UTC)
 
 - Homepage commit `589be8b5b8438337334fdf5200b07292899e3270` replaces the
   link-only root page with a responsive product overview and directs setup to
@@ -70,6 +70,11 @@ and must not be read as current host status.
   legal routes owned by their current surfaces. `cargo check --locked` passed
   for the Homepage crate; this commit is not yet in the live Platform
   composition or deployed on the VPS.
+- Build Cache commit `cb0a281bece554b709b4d702a342aa0d39b818c9` corrects its
+  admin page: the service validates and promotes candidate archives submitted
+  by Platform, but does not run builds. This matches the current implementation
+  and the snapshot contract; it has not yet been included in the live
+  composition or deployed.
 
 ## Failed-dispatch closure and bootstrap handoff (2026-11-07 12:46 UTC)
 
