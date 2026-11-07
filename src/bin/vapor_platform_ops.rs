@@ -454,6 +454,10 @@ mod unix_impl {
         let sudo_policy_matches = std::fs::read_to_string(&sudoers_path)
             .is_ok_and(|contents| contents == expected_sudoers);
         let sudo_policy_valid = sudo_policy_matches
+            && temporary_group_sudoers_are_clear()
+            && run_command("/usr/sbin/visudo", &["-c"])
+                .await
+                .is_ok()
             && run_command("/usr/sbin/visudo", &["-cf", &sudoers_path])
                 .await
                 .is_ok();
@@ -992,6 +996,12 @@ mod unix_impl {
         capabilities: &[String],
         expires: i64,
     ) -> Result<(), (String, &'static str)> {
+        if !temporary_group_sudoers_are_clear() {
+            return Err((
+                id.to_string(),
+                "temporary SSH group has a group-wide sudo rule; no access was granted",
+            ));
+        }
         let username = ssh_username(id);
         let hash = random_password_hash(id).await?;
         if run_command(
@@ -1416,6 +1426,31 @@ mod unix_impl {
         }
     }
 
+    fn temporary_group_sudoers_reference_present(
+        paths: &[&std::path::Path],
+    ) -> Result<bool, ()> {
+        let output = std::process::Command::new("/usr/bin/grep")
+            .args(["-RIlE", "^[[:space:]]*[^#].*%vapor-temp-ssh"])
+            .args(paths.iter().map(|path| path.as_os_str()))
+            .output()
+            .map_err(|_| ())?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(()),
+        }
+    }
+
+    fn temporary_group_sudoers_are_clear() -> bool {
+        matches!(
+            temporary_group_sudoers_reference_present(&[
+                std::path::Path::new("/etc/sudoers"),
+                std::path::Path::new("/etc/sudoers.d"),
+            ]),
+            Ok(false)
+        )
+    }
+
     async fn install_expiry_units(id: &str, expires: i64) -> Result<(), ()> {
         let date = chrono_free_iso(expires).ok_or(())?;
         let service_path = format!("/etc/systemd/system/vapor-ssh-expire-{id}.service");
@@ -1667,6 +1702,55 @@ mod unix_impl {
                 sudoers_contents("vpsssh_test", &["host_admin".to_owned()]),
                 "vpsssh_test ALL=(ALL:ALL) NOPASSWD: ALL\n"
             );
+        }
+
+        #[test]
+        fn sudoers_scan_detects_group_rules_and_aliases_and_fails_closed() {
+            use std::fs;
+            use std::time::{SystemTime, UNIX_EPOCH};
+
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "vapor-sudoers-scan-{}-{nonce}",
+                std::process::id()
+            ));
+            let includes = root.join("sudoers.d");
+            fs::create_dir_all(&includes).unwrap();
+            let main = root.join("sudoers");
+            fs::write(
+                &main,
+                "# %vapor-temp-ssh ALL=(root) NOPASSWD: ALL\nroot ALL=(ALL) ALL\n",
+            )
+            .unwrap();
+            assert_eq!(
+                temporary_group_sudoers_reference_present(&[&main, &includes]),
+                Ok(false)
+            );
+
+            fs::write(&includes.join("alias"), "User_Alias TEMP_ACCESS = %vapor-temp-ssh\n")
+                .unwrap();
+            assert_eq!(
+                temporary_group_sudoers_reference_present(&[&main, &includes]),
+                Ok(true)
+            );
+
+            fs::remove_file(includes.join("alias")).unwrap();
+            fs::write(
+                &includes.join("legacy"),
+                "%vapor-temp-ssh ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy\n",
+            )
+            .unwrap();
+            assert_eq!(
+                temporary_group_sudoers_reference_present(&[&main, &includes]),
+                Ok(true)
+            );
+
+            fs::remove_dir_all(&includes).unwrap();
+            assert!(temporary_group_sudoers_reference_present(&[&main, &includes]).is_err());
+            fs::remove_dir_all(root).unwrap();
         }
     }
 }

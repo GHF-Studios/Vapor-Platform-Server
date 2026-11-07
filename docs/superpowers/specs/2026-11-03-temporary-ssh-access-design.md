@@ -93,6 +93,13 @@ and name only the root-owned wrappers allowed by that grant. The full-admin
 profile grants unrestricted sudo only on that temporary account and only until
 cleanup.
 
+The installer and root helper both fail closed if any active sudoers line
+references `vapor-temp-ssh`, including through a sudoers alias. Grant creation
+must not proceed while such a rule exists, and host verification reports a
+grant as inconsistent until the global policy is clean. This preserves the
+per-grant capability boundary even if the installer is bypassed or the host
+policy changes after setup.
+
 ## Privilege boundary
 
 The Rust Platform process must not write `/etc/ssh`, create users, edit sudoers,
