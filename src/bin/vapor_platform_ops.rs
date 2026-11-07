@@ -1441,14 +1441,49 @@ mod unix_impl {
         }
     }
 
+    fn temporary_sudoers_include_layout_supported(
+        paths: &[&std::path::Path],
+    ) -> Result<bool, ()> {
+        let Some(main_sudoers) = paths.first() else {
+            return Err(());
+        };
+        let output = std::process::Command::new("/usr/bin/grep")
+            .args([
+                "-RInE",
+                "^[[:space:]]*(@include(dir)?|#include(dir)?)[[:space:]]+",
+            ])
+            .args(paths.iter().map(|path| path.as_os_str()))
+            .output()
+            .map_err(|_| ())?;
+        match output.status.code() {
+            Some(1) => Ok(true),
+            Some(0) => {
+                let matches = String::from_utf8(output.stdout).map_err(|_| ())?;
+                for line in matches.lines() {
+                    let mut fields = line.splitn(3, ':');
+                    let path = fields.next().ok_or(())?;
+                    let _line_number = fields.next().ok_or(())?;
+                    let directive = fields.next().ok_or(())?.trim();
+                    if path != main_sudoers.to_str().ok_or(())?
+                        || (directive != "@includedir /etc/sudoers.d"
+                            && directive != "#includedir /etc/sudoers.d")
+                    {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => Err(()),
+        }
+    }
+
     fn temporary_group_sudoers_are_clear() -> bool {
-        matches!(
-            temporary_group_sudoers_reference_present(&[
-                std::path::Path::new("/etc/sudoers"),
-                std::path::Path::new("/etc/sudoers.d"),
-            ]),
-            Ok(false)
-        )
+        let paths = [
+            std::path::Path::new("/etc/sudoers"),
+            std::path::Path::new("/etc/sudoers.d"),
+        ];
+        matches!(temporary_group_sudoers_reference_present(&paths), Ok(false))
+            && matches!(temporary_sudoers_include_layout_supported(&paths), Ok(true))
     }
 
     async fn install_expiry_units(id: &str, expires: i64) -> Result<(), ()> {
@@ -1672,7 +1707,10 @@ mod unix_impl {
 
     #[cfg(test)]
     mod sudoers_tests {
-        use super::{sudoers_contents, temporary_group_sudoers_reference_present};
+        use super::{
+            sudoers_contents, temporary_group_sudoers_reference_present,
+            temporary_sudoers_include_layout_supported,
+        };
 
         #[test]
         fn temporary_sudoers_are_limited_to_the_granted_capabilities() {
@@ -1750,6 +1788,43 @@ mod unix_impl {
 
             fs::remove_dir_all(&includes).unwrap();
             assert!(temporary_group_sudoers_reference_present(&[&main, &includes]).is_err());
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn sudoers_scan_rejects_unscanned_include_paths() {
+            use std::fs;
+            use std::time::{SystemTime, UNIX_EPOCH};
+
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "vapor-sudoers-includes-{}-{nonce}",
+                std::process::id()
+            ));
+            let includes = root.join("sudoers.d");
+            fs::create_dir_all(&includes).unwrap();
+            let main = root.join("sudoers");
+            fs::write(&main, "@includedir /etc/sudoers.d\n").unwrap();
+            assert_eq!(
+                temporary_sudoers_include_layout_supported(&[&main, &includes]),
+                Ok(true)
+            );
+
+            fs::write(&main, "#include /etc/sudoers.local\n").unwrap();
+            assert_eq!(
+                temporary_sudoers_include_layout_supported(&[&main, &includes]),
+                Ok(false)
+            );
+
+            fs::write(&main, "@includedir /etc/sudoers.d\n").unwrap();
+            fs::write(includes.join("custom"), "@include /opt/site-sudoers\n").unwrap();
+            assert_eq!(
+                temporary_sudoers_include_layout_supported(&[&main, &includes]),
+                Ok(false)
+            );
             fs::remove_dir_all(root).unwrap();
         }
     }

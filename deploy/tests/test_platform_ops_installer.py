@@ -25,6 +25,12 @@ class PlatformOpsInstallerTests(unittest.TestCase):
         self.assertNotRegex(source, r"(?m)^\s*%vapor-temp-ssh\s+ALL\s*=")
         self.assertIn("grep -RIlE", source)
         self.assertIn("^[[:space:]]*[^#[:space:]].*vapor-temp-ssh", source)
+        self.assertIn("unsupported sudoers include path", source)
+        include_scan = re.compile(
+            r"^\s*(@include(?:dir)?|#include(?:dir)?)\s+", re.MULTILINE
+        )
+        self.assertIsNotNone(include_scan.search("@include /etc/sudoers.local"))
+        self.assertIsNotNone(include_scan.search("#includedir /etc/sudoers.d"))
         scan = re.compile(r"^\s*[^#\s].*vapor-temp-ssh", re.MULTILINE)
         self.assertIsNotNone(scan.search("%vapor-temp-ssh ALL=(root) NOPASSWD: ALL"))
         self.assertIsNotNone(scan.search("User_Alias TEMP = %vapor-temp-ssh"))

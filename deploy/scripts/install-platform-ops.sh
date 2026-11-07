@@ -91,6 +91,28 @@ if [ -e "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ]; then
   fi
   rm -- "${legacy_sudoers}"
 fi
+if include_directives="$(grep -RInE '^[[:space:]]*(@include(dir)?|#include(dir)?)[[:space:]]+' \
+  /etc/sudoers /etc/sudoers.d 2>/dev/null)"; then
+  if ! printf '%s\n' "${include_directives}" | awk -F: '
+    $1 != "/etc/sudoers" { bad=1; next }
+    {
+      directive=$3
+      sub(/^[[:space:]]*/, "", directive)
+      sub(/[[:space:]]*$/, "", directive)
+      if (directive != "@includedir /etc/sudoers.d" && directive != "#includedir /etc/sudoers.d") bad=1
+    }
+    END { exit bad }
+  '; then
+    echo "error: unsupported sudoers include path; refusing to enable temporary access" >&2
+    exit 1
+  fi
+else
+  include_scan_status=$?
+  if [ "${include_scan_status}" -ne 1 ]; then
+    echo "error: could not verify sudoers include paths; refusing to enable temporary access" >&2
+    exit 1
+  fi
+fi
 if grep -RIlE '^[[:space:]]*[^#[:space:]].*vapor-temp-ssh' \
   /etc/sudoers /etc/sudoers.d >/dev/null 2>&1; then
   echo "error: unexpected group-wide temporary-access sudo rule remains; refusing to enable access" >&2
