@@ -440,13 +440,15 @@ const JS: &str = r#"
         state.textContent = !services.length ? 'No service status reported' : unavailable.length ? `${unavailable.length} service${unavailable.length === 1 ? '' : 's'} need attention` : 'All services healthy';
         summaryText.append(state, document.createTextNode(` · ${services.length} services · revision ${body.deployed_revision || 'not recorded'}`));
         summary.append(summaryText);
-        if (unavailable.length) {
+        overview.append(summary);
+
+        if (overview.id === 'platform-overview') {
           const hosting = document.createElement('a');
           hosting.href = '/admin/hosting';
-          hosting.textContent = 'Open service health';
-          summary.append(hosting);
+          hosting.textContent = 'View service details';
+          overview.append(hosting);
+          return;
         }
-        overview.append(summary);
 
         const table = document.createElement('table');
         table.className = 'service-directory';
@@ -501,7 +503,7 @@ const JS: &str = r#"
     const sources = [
       { name: 'Deployments', url: '/api/admin/deploy-requests?limit=200', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'approved' && ['failed', 'unknown', 'dispatching'].includes(item.dispatch_state)).length, secondaryLabel: 'Dispatch needs attention' }) },
       { name: 'Temporary access', url: '/api/admin/ssh-access/requests?limit=200', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'active').length, secondaryLabel: 'Active grants' }) },
-      { name: 'Identity permissions', url: '/api/identity/v1/admin/permission-requests', href: '/admin/approvals', summarize: items => { const pending = items.filter(item => item.status === 'pending'); const overdue = pending.filter(item => Number(item.expires_at_unix) > 0 && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000)).length; return { primary: pending.length - overdue, label: 'Awaiting review', secondary: overdue, secondaryLabel: 'Expired by time; owner transition pending' }; } }
+      { name: 'Identity permissions', url: '/api/identity/v1/admin/permission-requests/page?limit=200', href: '/admin/approvals', summarize: items => { const pending = items.filter(item => item.status === 'pending'); const overdue = pending.filter(item => Number(item.expires_at_unix) > 0 && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000)).length; return { primary: pending.length - overdue, label: 'Awaiting review', secondary: overdue, secondaryLabel: 'Expired by time; owner transition pending' }; } }
     ];
     const renderQueue = async () => {
       if (refreshQueueButton?.disabled) return;
@@ -517,7 +519,8 @@ const JS: &str = r#"
           if (!response.ok) return { source, error: response.status === 401 ? 'Sign in required' : response.status === 403 ? 'Root access required' : `Unavailable (HTTP ${response.status})` };
           const records = Array.isArray(items) ? items : items?.items;
           if (!Array.isArray(records)) return { source, error: 'Invalid service response' };
-          return { source, counts: source.summarize(records) };
+          const moreAvailable = !Array.isArray(items) && typeof items?.next_cursor === 'string' && items.next_cursor.length > 0;
+          return { source, counts: source.summarize(records), moreAvailable };
         } catch (_) { return { source, error: 'Could not contact service' }; }
       }));
       for (const outcome of outcomes) {
@@ -531,8 +534,8 @@ const JS: &str = r#"
           primary.textContent = '—';
           secondary.textContent = outcome.error;
         } else {
-          primary.textContent = String(outcome.counts.primary);
-          secondary.textContent = outcome.counts.secondary > 0 ? `${outcome.counts.secondary} · ${outcome.counts.secondaryLabel}` : '—';
+          primary.textContent = `${outcome.counts.primary}${outcome.moreAvailable ? '+' : ''}`;
+          secondary.textContent = outcome.counts.secondary > 0 ? `${outcome.counts.secondary}${outcome.moreAvailable ? '+' : ''} · ${outcome.counts.secondaryLabel}` : outcome.moreAvailable ? 'More records available' : '—';
           if (outcome.counts.primary > 0) actionText = 'Review';
           if (outcome.source.name === 'Deployments' && outcome.counts.primary === 0 && outcome.counts.secondary > 0) { actionHref = '/admin/deployments'; actionText = 'Inspect'; }
           if (outcome.source.name === 'Temporary access' && outcome.counts.primary === 0) { actionHref = '/admin/ssh-access'; actionText = 'Manage'; }
@@ -1823,7 +1826,7 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Services</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading service health…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Incoming work</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Waiting requests are shown by owner. Review them in Approvals; active access opens its own work area.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section>";
+    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Services</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading service health…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Incoming work</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts cover loaded records; a + means older records are available. Review requests in Approvals; active access opens its own work area.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section>";
     admin_page_response(StatusCode::OK, fragment)
 }
 
@@ -2608,6 +2611,12 @@ mod tests {
         assert!(script.contains("className = 'service-directory'"));
         assert!(script.contains("className = 'request-queue-table'"));
         assert!(script.contains("service.readiness !== 'not reported'"));
+        assert!(script.contains("overview.id === 'platform-overview'"));
+        assert!(script.contains("source.summarize(records)"));
+        assert!(script.contains("moreAvailable = !Array.isArray(items) && typeof items?.next_cursor === 'string'"));
+        assert!(script.contains("permission-requests/page?limit=200"));
+        assert!(script.contains("${outcome.moreAvailable ? '+' : ''}"));
+        assert!(script.contains("hosting.textContent = 'View service details'"));
         assert!(script.contains("actionHref = '/admin/deployments'"));
         assert!(script.contains("actionHref = '/admin/ssh-access'"));
         assert!(!script.contains("className = 'service-grid'"));
@@ -3023,7 +3032,7 @@ mod tests {
         let script = std::str::from_utf8(&body).unwrap();
         assert!(script.contains("'/api/admin/deploy-requests'"));
         assert!(script.contains("'/api/admin/ssh-access/requests'"));
-        assert!(script.contains("'/api/identity/v1/admin/permission-requests'"));
+        assert!(script.contains("/api/identity/v1/admin/permission-requests/page?limit=200"));
         assert!(
             script.contains("/api/identity/v1/admin/permission-requests/${encodedId}/${action}")
         );
