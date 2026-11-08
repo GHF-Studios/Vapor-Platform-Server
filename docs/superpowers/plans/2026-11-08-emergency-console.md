@@ -55,6 +55,9 @@
 - Ttyd is not reachable by TCP and Caddy is its only socket peer.
 - User-supplied values never become command arguments or Caddy upstreams.
 - Auth failure, helper timeout, ttyd absence, or stop failure fail closed.
+- Installer accepts only an exact reviewed ttyd version; no version is
+  currently approved, so preparation remains blocked until upstream fixes the
+  reported crash and that release is reviewed.
 - The UI states the missing recent-authentication/second-factor limitation.
 - The feature remains disabled until the shared-origin XSS risk is addressed by
   an isolated admin origin/session boundary or a verified Identity step-up.

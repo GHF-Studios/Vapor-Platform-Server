@@ -84,10 +84,14 @@ for smoke testing only; the intended public endpoint remains
   units and remove the retired periodic deploy timer.
 - `scripts/install-platform-ops.sh`: install the fixed root operation helper,
   SSH wrappers, and the isolated temporary-account SSH policy.
-- `scripts/install-emergency-console.sh`: optional Ubuntu/Debian preparation
-  for a browser-based root shell. It installs ttyd, a dedicated unenabled
-  systemd unit, and the fixed shell wrapper; it does not start or enable the
-  service. The host's root-owned `/etc/vapor-server/platform.env` must opt in
+- `scripts/install-emergency-console.sh`: optional Linux preparation
+  for a browser-based root shell. It requires an exact, reviewed ttyd release
+  at `/usr/bin/ttyd`, then installs a dedicated unenabled systemd unit and
+  fixed shell wrapper; it does not install ttyd, start the unit, or enable it.
+  Upstream's latest release is still 1.7.7 and has an unresolved
+  empty-WebSocket-frame crash report, so no version is currently approved and
+  setup intentionally fails closed until a fixed release is reviewed.
+  The host's root-owned `/etc/vapor-server/platform.env` must opt in
   with `VAPOR_EMERGENCY_CONSOLE_ENABLED=1`, and Caddy must be updated from the
   same release. The root-only Emergency Console page then has a separate
   enable switch and issues one 20-minute, one-connection grant at a time.

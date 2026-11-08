@@ -70,11 +70,14 @@ recovery path or OpenSSH.
   vulnerability in ttyd, Caddy, Identity, or the browser route can still expose
   root access. The deployment has a global enable/disable switch and the
   feature remains disabled unless the owner enables it in root-owned config.
-- Upstream currently reports a zero-length WebSocket crash for ttyd 1.7.7 and
-  has an open proposed fix. Here, forward-auth means reaching that frame handler
-  already requires a root Identity session and active console grant; the
-  reported impact is terminal availability, not unauthenticated access. Recheck
-  upstream status before enabling this for more than the owner account.
+- Upstream's latest release is still 1.7.7; the zero-length WebSocket crash
+  report and proposed fix remain open as of 2026-11-08. Here, forward-auth means
+  reaching that frame handler already requires a root Identity session and
+  active console grant; the reported impact is terminal availability, not
+  unauthenticated access. The installer currently has no approved ttyd version
+  and refuses to prepare the console. Add an exact version only after a fixed
+  release has been reviewed. Recheck upstream status before enabling this for
+  more than the owner account.
 - The forward-auth callback is a loopback-only internal interface; Caddy must
   return 404 for public requests to that callback before the general admin API
   path proxy. Caddy overwrites the internal context headers when proxying the
