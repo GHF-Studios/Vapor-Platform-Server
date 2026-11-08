@@ -15,6 +15,9 @@ Emergency Browser Console design.
   `admin.vapor.ghf-studios.site`, for Platform admin pages/APIs and Identity's
   browser login/session flow.
 - Keep Identity's session cookie host-only; never widen it to the parent domain.
+- Independently of hostname isolation, require a root Identity session before
+  returning any `/admin` document, navigation, stylesheet, or script. Failed
+  authorization returns a small standalone response without the admin shell.
 - Redirect human login/admin entry points from the public host to the admin
   host when configured, while refusing admin API and terminal access from the
   public host.
@@ -62,6 +65,9 @@ fixed terminal proxy are served.
   admin mutation guards.
 - Identity owns login/session semantics and is configured with the admin host
   as its single canonical browser origin when isolation is enabled.
+- Platform's shared shell gate verifies the root role before composing admin
+  fragments or serving admin assets. Service APIs continue to authorize their
+  own reads and mutations; a shell authorization is not a substitute.
 - Caddy remains the only public gateway; independent service routing remains
   unchanged for public traffic.
 - The admin host is not considered active until DNS, HTTPS, login callback,
@@ -73,7 +79,13 @@ fixed terminal proxy are served.
 ## Acceptance
 
 - With no admin host configured, current public routes continue to work and the
-  emergency console cannot be enabled.
+  emergency console cannot be enabled. `/admin` still requires root Identity
+  authorization; a shared origin is not a reason to serve the operator shell
+  publicly.
+- Requests without a valid root session do not reach admin document/asset
+  handlers and receive no admin navigation, layout, CSS, or JavaScript.
+- When Identity denies the root role or is unavailable, the response has no
+  admin shell and is not cacheable as a public page.
 - With an admin host configured, public `/admin` redirects to that host,
   public admin APIs and terminal routes return 404, and public login entry
   points redirect while preserving the path and query.

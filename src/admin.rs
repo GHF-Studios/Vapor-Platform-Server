@@ -1782,15 +1782,101 @@ async fn platform_healthz() -> &'static str {
     "ok\n"
 }
 
-/// Apply the Platform-owned document frame to a versioned service page fragment.
-/// Owner services keep authorization and page contents; this middleware only
-/// composes the bounded fragment with Platform navigation and assets.
+/// Require a root Identity session before serving any Platform admin page,
+/// navigation, stylesheet, or script, then compose authorized page fragments.
+/// Owner services still authorize their own records and actions.
 pub async fn shell_middleware(request: Request, next: Next) -> Response {
     let path = request.uri().path().to_owned();
-    let is_admin_document = request.method() == axum::http::Method::GET
+    let method = request.method().clone();
+    if path == "/admin" || path.starts_with("/admin/") {
+        if let Err(failure) = authorize_admin_shell(request.headers()).await {
+            return admin_shell_auth_response(failure);
+        }
+    }
+    let response = next.run(request).await;
+    apply_admin_shell(path, method, response).await
+}
+
+#[cfg(test)]
+pub async fn shell_composition_only_for_tests(request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_owned();
+    let method = request.method().clone();
+    let response = next.run(request).await;
+    apply_admin_shell(path, method, response).await
+}
+
+async fn authorize_admin_shell(
+    headers: &axum::http::HeaderMap,
+) -> Result<(), crate::admin_auth::AuthFailure> {
+    let endpoint = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL")
+        .unwrap_or_else(|_| DEFAULT_IDENTITY_AUTHZ_URL.to_owned());
+    let service_token = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| crate::admin_auth::AuthFailure::Unavailable)?;
+    crate::admin_auth::authorize_root_with_client(
+        headers,
+        service_token.as_deref(),
+        &endpoint,
+        &client,
+    )
+    .await
+}
+
+fn admin_shell_auth_response(failure: crate::admin_auth::AuthFailure) -> Response {
+    let (title, message, login_link) = match failure {
+        crate::admin_auth::AuthFailure::Unauthorized => (
+            "Sign-in required",
+            "Sign in to continue.",
+            "<p><a href=\"/login\">Continue to sign in</a></p>",
+        ),
+        crate::admin_auth::AuthFailure::Forbidden => (
+            "Access unavailable",
+            "This page is not available to this account.",
+            "",
+        ),
+        crate::admin_auth::AuthFailure::Unavailable => (
+            "Access check unavailable",
+            "Authorization is temporarily unavailable. Try again shortly.",
+            "",
+        ),
+    };
+    let body = format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title></head><body><main><h1>{}</h1><p>{}</p>{}</main></body></html>",
+        escape_html(title),
+        escape_html(title),
+        escape_html(message),
+        login_link,
+    );
+    let mut response = (failure.status(), body).into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+        .headers_mut()
+        .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    response
+}
+
+async fn apply_admin_shell(
+    path: String,
+    method: axum::http::Method,
+    mut response: Response,
+) -> Response {
+    let is_admin_document = method == axum::http::Method::GET
         && (path == "/admin" || path.starts_with("/admin/"))
         && !path.starts_with("/admin/assets/");
-    let mut response = next.run(request).await;
     let is_admin_fragment = response
         .headers()
         .get(CONTENT_TYPE)
@@ -2777,10 +2863,38 @@ mod tests {
         "vapor-session-12345678-1234-4234-9234-123456789abc-12345678-1234-4234-9234-123456789abc";
     const SERVICE_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    // The Platform installs this middleware around the composed service
-    // routers. Exercise the same public admin surface in route-level tests.
+    // Keep shell-composition tests independent from Identity availability;
+    // the production middleware's authorization gate has a dedicated test.
     fn admin_app() -> Router {
-        super::router().layer(axum::middleware::from_fn(super::shell_middleware))
+        super::router().layer(axum::middleware::from_fn(
+            super::shell_composition_only_for_tests,
+        ))
+    }
+
+    #[tokio::test]
+    async fn admin_shell_denies_documents_and_assets_before_serving_them_without_a_session() {
+        let app = super::router().layer(axum::middleware::from_fn(super::shell_middleware));
+
+        for path in [
+            "/admin",
+            "/admin/approvals",
+            "/admin/assets/admin.css",
+            "/admin/assets/admin.js",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            assert_eq!(response.headers()["cache-control"], "private, no-store");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let html = std::str::from_utf8(&body).unwrap();
+            assert!(html.contains("Sign-in required"));
+            assert!(!html.contains("Platform administration"));
+            assert!(!html.contains("/admin/assets/admin.css"));
+            assert!(!html.contains("/admin/assets/admin.js"));
+        }
     }
 
     #[derive(Clone)]
@@ -2962,7 +3076,9 @@ mod tests {
             }),
         );
         let response = owner
-            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .layer(axum::middleware::from_fn(
+                super::shell_composition_only_for_tests,
+            ))
             .oneshot(
                 Request::get("/admin/build-cache")
                     .body(Body::empty())
@@ -3018,7 +3134,9 @@ mod tests {
             }),
         );
         let response = owner
-            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .layer(axum::middleware::from_fn(
+                super::shell_composition_only_for_tests,
+            ))
             .oneshot(
                 Request::get("/admin/build-cache")
                     .body(Body::empty())
@@ -3062,7 +3180,9 @@ mod tests {
             }),
         );
         let response = owner
-            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .layer(axum::middleware::from_fn(
+                super::shell_composition_only_for_tests,
+            ))
             .oneshot(
                 Request::get("/admin/build-cache")
                     .body(Body::empty())
@@ -3103,7 +3223,9 @@ mod tests {
             }),
         );
         let response = owner
-            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .layer(axum::middleware::from_fn(
+                super::shell_composition_only_for_tests,
+            ))
             .oneshot(
                 Request::get("/admin/build-cache")
                     .body(Body::empty())
@@ -3136,7 +3258,9 @@ mod tests {
             }),
         );
         let response = owner
-            .layer(axum::middleware::from_fn(super::shell_middleware))
+            .layer(axum::middleware::from_fn(
+                super::shell_composition_only_for_tests,
+            ))
             .oneshot(
                 Request::get("/admin/build-cache")
                     .body(Body::empty())
@@ -3231,7 +3355,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_shell_contains_no_operator_data() {
+    async fn rendered_shell_contains_no_operator_data() {
         let response = admin_app()
             .oneshot(
                 Request::builder()

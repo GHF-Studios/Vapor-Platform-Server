@@ -4,7 +4,7 @@
 
 **Goal:** Isolate privileged pages and terminal routing on a configured admin hostname while preserving the public Vapor host.
 
-**Architecture:** Keep Caddy as the single gateway and add an optional `VAPOR_ADMIN_DOMAIN`. When configured, public human entry routes redirect to the admin host, public admin APIs/terminal paths return 404, and the admin host routes Platform and Identity endpoints. Platform mutation guards use the admin origin; Identity's canonical browser origin becomes the admin host. The root shell remains disabled until the admin host is explicitly configured.
+**Architecture:** Keep Caddy as the single gateway and add an optional `VAPOR_ADMIN_DOMAIN`. When configured, public human entry routes redirect to the admin host, public admin APIs/terminal paths return 404, and the admin host routes Platform and Identity endpoints. Platform mutation guards use the admin origin; Identity's canonical browser origin becomes the admin host. The admin shell always requires a root Identity session; the emergency browser root console remains disabled until the admin host is explicitly configured.
 
 **Tech Stack:** Caddyfile templates, Bash deployment configuration, Rust/Axum origin guards, Python `unittest`, existing shell deployment tests.
 
@@ -17,6 +17,7 @@
 - Identity session cookies remain host-only; never set `Domain=.vapor.ghf-studios.site`.
 - Public/login/admin routes stay behind the same Caddy gateway and service ownership boundaries.
 - Emergency shell cannot be enabled unless a distinct admin origin is configured.
+- The Platform verifies a root Identity session before serving any `/admin` page or asset, regardless of whether the admin hostname is configured.
 - Caddy must validate the candidate before replacing the installed file.
 
 ## Review Focus
@@ -87,6 +88,23 @@
 - [x] Fail console enablement closed unless the admin origin is distinct and canonical.
 - [x] Implement the shared resolver without changing Identity role semantics or service-owned behavior.
 - [x] Run focused Rust tests and formatting checks limited to modified Rust files.
+
+### Task 3b: Gate the admin shell before serving pages and assets
+
+**Files:**
+- Modify: `src/admin.rs`
+- Test: `src/admin.rs` module tests
+
+**Interfaces:**
+- All `/admin` paths, including page fragments and `admin.css`/`admin.js`,
+  require a root Identity session before the route handler runs.
+- A failed shell authorization returns a standalone, private no-store HTML
+  response with no admin navigation, styles, or scripts.
+- `/api/admin/*` continues to authorize independently in its owning handlers.
+
+- [x] Add coverage that missing-session requests cannot reach page or asset handlers.
+- [x] Verify the response is private/no-store and contains no admin shell content.
+- [x] Run the Platform admin test module and `cargo check --locked`.
 
 ### Task 4: Docs, integration review, and deployment gate
 
