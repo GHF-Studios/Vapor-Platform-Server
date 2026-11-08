@@ -755,6 +755,7 @@ const JS: &str = r#"
     const renderDeploy = (item, card) => {
       appendText(card, 'h3', `${item.repository || 'Unknown repository'} · ${item.branch || 'unknown branch'}`);
       const selectionValid = validDeploymentSelection(item);
+      const orderReady = item.approval_order_ready === true;
       appendText(card, 'p', `Commit ${item.commit || 'unknown'} · ${deploymentSelectionLabel(item)}`, selectionValid ? 'muted' : 'error');
       appendText(card, 'p', item.summary || 'No request summary provided.');
       const metadata = document.createElement('p'); metadata.className = 'muted';
@@ -773,10 +774,12 @@ const JS: &str = r#"
       const list = document.createElement('ul');
       for (const pin of (Array.isArray(item.submodules) ? item.submodules : [])) appendText(list, 'li', `${pin.path}: ${pin.commit}`);
       pins.append(summary, list); card.append(pins);
-      appendText(card, 'p', 'Approving records the decision and asks Platform to queue this exact target.', 'muted');
-      card.append(confirmationForm(item, 'I reviewed this exact revision and target', 'Approve and queue', button => submitDecision(button, 'deploy', item, 'approve', { expected_version: item.version, confirmed: true, reason: 'approved in Platform Approvals' })));
+      if (orderReady) appendText(card, 'p', 'Next in deploy order · approving queues this exact revision.', 'muted');
+      else appendText(card, 'p', 'Waiting for an earlier deploy request to be decided or completed.', 'muted');
+      const approveForm = confirmationForm(item, 'I reviewed this exact revision and target', 'Approve and queue', button => submitDecision(button, 'deploy', item, 'approve', { expected_version: item.version, confirmed: true, reason: 'approved in Platform Approvals' }));
+      if (!orderReady || !selectionValid) approveForm.querySelector('button').disabled = true;
+      card.append(approveForm);
       card.append(confirmationForm(item, 'I intend to reject this request', 'Reject', button => submitDecision(button, 'deploy', item, 'reject', { expected_version: item.version, confirmed: true, reason: 'rejected in Platform Approvals' })));
-      if (!selectionValid) card.querySelector('form button').disabled = true;
     };
     const renderSsh = (item, card) => {
       appendText(card, 'h3', `${item.fingerprint || 'Unknown key'} · ${capabilityList(item.requested_capabilities) || 'Shell access'}`);
@@ -873,7 +876,9 @@ const JS: &str = r#"
       const expiredIdentity = source.key === 'identity' ? pending.filter(isExpiredByTime) : [];
       const actionable = source.key === 'identity'
         ? pending.filter(item => !isExpiredByTime(item))
-        : pending;
+        : source.key === 'deploy'
+          ? pending.slice().sort((a, b) => Number(a.created_at_unix || 0) - Number(b.created_at_unix || 0) || String(a.id).localeCompare(String(b.id)))
+          : pending;
       container.replaceChildren();
       if (!pending.length) appendText(container, 'p', 'No pending requests in the loaded records.', 'muted');
       for (const item of actionable) {
@@ -3830,6 +3835,9 @@ mod tests {
             .unwrap();
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
+        assert!(script.contains("item.approval_order_ready === true"));
+        assert!(script.contains("Waiting for an earlier deploy request to be decided or completed."));
+        assert!(script.contains("created_at_unix || 0) - Number(b.created_at_unix || 0)"));
         let deployments = script
             .split("const deployRequests = document.querySelector('#deploy-requests');")
             .nth(1)

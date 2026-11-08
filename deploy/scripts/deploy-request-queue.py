@@ -88,8 +88,14 @@ def claim(db, request_id):
         row = db.execute(
             "SELECT * FROM platform_deploy_requests WHERE id = ? AND status = 'approved' "
             "AND expires_at_unix > ? AND dispatch_state IN ('dispatching', 'queued') "
-            "AND dispatch_attempted_at_unix > ?",
-            (request_id, now, now - DISPATCH_STALE_SECONDS),
+            "AND (dispatch_state = 'queued' OR dispatch_attempted_at_unix > ?) "
+            "AND NOT EXISTS (SELECT 1 FROM platform_deploy_requests older "
+            "WHERE (older.created_at_unix < platform_deploy_requests.created_at_unix "
+            "OR (older.created_at_unix = platform_deploy_requests.created_at_unix "
+            "AND older.id < platform_deploy_requests.id)) "
+            "AND older.expires_at_unix > ? AND (older.status IN ('pending','executing') "
+            "OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown'))))",
+            (request_id, now, now - DISPATCH_STALE_SECONDS, now),
         ).fetchone()
         if row is None:
             db.execute("COMMIT")
@@ -172,6 +178,16 @@ def approve_and_queue(db, request_id, expected_commit, reason, now=None):
             raise ValueError("only a pending deployment request can be approved")
         if int(row["expires_at_unix"]) <= now:
             raise ValueError("deployment request has expired")
+        earlier_open_request = db.execute(
+            "SELECT id FROM platform_deploy_requests older "
+            "WHERE (older.created_at_unix < ? OR (older.created_at_unix = ? AND older.id < ?)) "
+            "AND older.expires_at_unix > ? AND (older.status IN ('pending','executing') "
+            "OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown'))) "
+            "LIMIT 1",
+            (row["created_at_unix"], row["created_at_unix"], canonical_id, now),
+        ).fetchone()
+        if earlier_open_request is not None:
+            raise ValueError("an older deployment request must be decided or completed first")
         request = decode_request(row)
         validate_selection(request)
         if row["repository"] != "GHF-Studios/Vapor-Platform-Server":
@@ -235,6 +251,37 @@ def approve_and_queue(db, request_id, expected_commit, reason, now=None):
     return 0
 
 
+def next_ready(db):
+    """Return the oldest approved queued request only when it is the next open item."""
+    now = int(time.time())
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        db.execute(
+            "UPDATE platform_deploy_requests SET status='expired', version=version+1, decided_at_unix=?, "
+            "dispatch_state=CASE WHEN dispatch_state IN ('queued','dispatching') THEN 'expired' ELSE dispatch_state END, "
+            "dispatch_detail=CASE WHEN dispatch_state IN ('queued','dispatching') "
+            "THEN 'Approval expired before the worker claimed this request.' ELSE dispatch_detail END "
+            "WHERE status IN ('pending','approved') AND expires_at_unix <= ?",
+            (now, now),
+        )
+        row = db.execute(
+            "SELECT id,status,dispatch_state FROM platform_deploy_requests "
+            "WHERE expires_at_unix > ? AND (status IN ('pending','executing') "
+            "OR (status='approved' AND dispatch_state IN ('queued','dispatching','unknown'))) "
+            "ORDER BY created_at_unix,id LIMIT 1",
+            (now,),
+        ).fetchone()
+        db.execute("COMMIT")
+        if row is None or row["status"] != "approved" or row["dispatch_state"] != "queued":
+            print("null")
+        else:
+            print(row["id"])
+        return 0
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+
+
 def verify_claim(db, request_id, version, commit, server_mode, deployment_scope, service_target):
     row = db.execute(
         "SELECT * FROM platform_deploy_requests WHERE id = ? AND status = 'executing' AND version = ?",
@@ -276,6 +323,7 @@ def main():
     verify.add_argument("--server-mode", required=True, choices=("monolith", "services"))
     verify.add_argument("--deployment-scope", required=True, choices=("full", "service"))
     verify.add_argument("--service-target", default="")
+    subparsers.add_parser("next")
     args = parser.parse_args()
 
     if args.command == "approve-and-queue" and getattr(os, "geteuid", lambda: -1)() != 0:
@@ -286,6 +334,8 @@ def main():
         with connect(args.database) as db:
             if args.command == "claim":
                 return claim(db, args.id)
+            if args.command == "next":
+                return next_ready(db)
             if args.command == "approve-and-queue":
                 result = approve_and_queue(db, args.id, args.commit, args.reason)
                 print(json.dumps({"id": args.id, "status": "approved", "dispatch_state": "dispatching"}))

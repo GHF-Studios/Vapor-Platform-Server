@@ -105,6 +105,7 @@ struct DeployRequestSummary {
     dispatch_attempted_at_unix: Option<i64>,
     dispatch_detail: Option<String>,
     retry_eligible: bool,
+    approval_order_ready: bool,
 }
 
 #[derive(Serialize)]
@@ -436,6 +437,7 @@ async fn list_requests(
                     row.get("dispatch_attempted_at_unix"),
                     unix_now(),
                 ),
+                approval_order_ready: row.get("approval_order_ready"),
             })
         })
         .collect::<Vec<_>>();
@@ -454,7 +456,14 @@ async fn fetch_request_rows(
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
     let query = "SELECT id, requester_profile_id, requester_credential_id, repository, branch, commit_hash, tree_hash, submodules_json, request_json, workflow_url,
                         summary, status, version, created_at_unix, expires_at_unix, decided_at_unix, decision_reason, result_detail,
-                        dispatch_state, dispatch_attempts, dispatch_attempted_at_unix, dispatch_detail
+                        dispatch_state, dispatch_attempts, dispatch_attempted_at_unix, dispatch_detail,
+                        NOT EXISTS (SELECT 1 FROM platform_deploy_requests older
+                          WHERE (older.created_at_unix < platform_deploy_requests.created_at_unix
+                            OR (older.created_at_unix = platform_deploy_requests.created_at_unix AND older.id < platform_deploy_requests.id))
+                            AND older.expires_at_unix > strftime('%s','now')
+                            AND (older.status IN ('pending','executing')
+                              OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))
+                        ) AS approval_order_ready
                  FROM platform_deploy_requests";
     let limit = (page_size + 1) as i64;
     let cursor_clause = " AND (created_at_unix < ? OR (created_at_unix = ? AND id < ?))";
@@ -591,13 +600,31 @@ async fn decide_request(
             )
                 .into_response();
         }
+        match has_earlier_open_request(&state.pool, &id, unix_now()).await {
+            Ok(true) => {
+                return (
+                    StatusCode::CONFLICT,
+                    "an older deployment request must be decided or completed first\n",
+                )
+                    .into_response();
+            }
+            Ok(false) => {}
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        }
     }
     let now = unix_now();
     let next = if approve { "approved" } else { "rejected" };
     let result = sqlx::query(
         "UPDATE platform_deploy_requests SET status = ?, version = version + 1,
          decided_by_profile_id = ?, decided_at_unix = ?, decision_reason = ?
-         WHERE id = ? AND status = 'pending' AND version = ? AND expires_at_unix > ?",
+         WHERE id = ? AND status = 'pending' AND version = ? AND expires_at_unix > ?
+           AND (NOT ? OR NOT EXISTS (
+             SELECT 1 FROM platform_deploy_requests older
+             WHERE (older.created_at_unix < (SELECT current.created_at_unix FROM platform_deploy_requests current WHERE current.id = ?)
+               OR (older.created_at_unix = (SELECT current.created_at_unix FROM platform_deploy_requests current WHERE current.id = ?) AND older.id < ?))
+               AND older.expires_at_unix > ? AND (older.status IN ('pending','executing')
+                 OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))
+           ))",
     )
     .bind(next)
     .bind(actor_profile_id)
@@ -605,6 +632,11 @@ async fn decide_request(
     .bind(reason)
     .bind(&id)
     .bind(request.expected_version)
+    .bind(now)
+    .bind(approve)
+    .bind(&id)
+    .bind(&id)
+    .bind(&id)
     .bind(now)
     .execute(&state.pool)
     .await;
@@ -636,6 +668,28 @@ async fn decide_request(
             )
         }
     }
+}
+
+async fn has_earlier_open_request(
+    pool: &SqlitePool,
+    id: &str,
+    now: i64,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+           SELECT 1 FROM platform_deploy_requests older
+           WHERE (older.created_at_unix < (SELECT current.created_at_unix FROM platform_deploy_requests current WHERE current.id = ?)
+             OR (older.created_at_unix = (SELECT current.created_at_unix FROM platform_deploy_requests current WHERE current.id = ?) AND older.id < ?))
+             AND older.expires_at_unix > ? AND (older.status IN ('pending','executing')
+               OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))
+         )",
+    )
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(now)
+    .fetch_one(pool)
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1127,7 +1181,7 @@ async fn normalize_stale_dispatches(pool: &SqlitePool, now: i64) -> Result<(), s
         "UPDATE platform_deploy_requests
          SET dispatch_state = 'unknown',
              dispatch_detail = 'Previous dispatch attempt stopped responding; retry is available.'
-         WHERE status = 'approved' AND dispatch_state IN ('dispatching', 'queued')
+         WHERE status = 'approved' AND dispatch_state = 'dispatching'
            AND dispatch_attempted_at_unix <= ?",
     )
     .bind(now - DISPATCH_STALE_SECONDS)
@@ -1196,7 +1250,7 @@ async fn retire_failed_dispatch(
 #[cfg(test)]
 mod dispatch_tests {
     use super::{
-        begin_dispatch_attempt, expire_requests, finish_dispatch_attempt,
+        begin_dispatch_attempt, expire_requests, finish_dispatch_attempt, has_earlier_open_request,
         normalize_stale_dispatches, retire_failed_dispatch, retry_eligible, worker_has_progressed,
     };
     use sqlx::sqlite::SqlitePoolOptions;
@@ -1499,7 +1553,7 @@ mod dispatch_tests {
     }
 
     #[tokio::test]
-    async fn stale_queued_attempt_becomes_retryable_but_claimed_work_is_untouched() {
+    async fn stale_queued_work_remains_queued_but_claimed_work_is_untouched() {
         let pool = pool_with_approved_request().await;
         sqlx::query(
             "UPDATE platform_deploy_requests SET dispatch_state='queued', dispatch_attempts=1,
@@ -1526,16 +1580,8 @@ mod dispatch_tests {
         .await
         .unwrap();
         assert_eq!(queued.get::<String, _>("status"), "approved");
-        assert_eq!(queued.get::<String, _>("dispatch_state"), "unknown");
-        assert!(queued
-            .get::<String, _>("dispatch_detail")
-            .contains("retry is available"));
-        assert!(retry_eligible(
-            queued.get("status"),
-            queued.get("dispatch_state"),
-            Some(100),
-            130
-        ));
+        assert_eq!(queued.get::<String, _>("dispatch_state"), "queued");
+        assert_eq!(queued.get::<Option<String>, _>("dispatch_detail"), None);
 
         let claimed = sqlx::query(
             "SELECT status, dispatch_state FROM platform_deploy_requests WHERE id='claimed'",
@@ -1545,6 +1591,25 @@ mod dispatch_tests {
         .unwrap();
         assert_eq!(claimed.get::<String, _>("status"), "executing");
         assert_eq!(claimed.get::<String, _>("dispatch_state"), "claimed");
+    }
+
+    #[tokio::test]
+    async fn earlier_open_deployment_blocks_a_newer_decision() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE platform_deploy_requests (id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, created_at_unix INTEGER NOT NULL, expires_at_unix INTEGER NOT NULL, dispatch_state TEXT NOT NULL)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO platform_deploy_requests (id,status,version,created_at_unix,expires_at_unix,dispatch_state) VALUES ('older','pending',1,10,200,'not_attempted'), ('newer','pending',1,20,200,'not_attempted')")
+            .execute(&pool).await.unwrap();
+
+        assert!(has_earlier_open_request(&pool, "newer", 100).await.unwrap());
+        assert!(!has_earlier_open_request(&pool, "older", 100).await.unwrap());
+        sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='older'")
+            .execute(&pool).await.unwrap();
+        assert!(!has_earlier_open_request(&pool, "newer", 100).await.unwrap());
     }
 }
 

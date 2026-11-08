@@ -52,6 +52,13 @@ report_result() {
     --version "${REQUEST_VERSION}" \
     --result "${result}" \
     --detail "${detail}"
+  local next_id
+  next_id="$(python3 "${SCRIPT_DIR}/deploy-request-queue.py" --database "${QUEUE_DB}" next)"
+  if [[ "${next_id}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    if ! systemctl start --no-block "vapor-deploy@${next_id}.service"; then
+      echo "deploy-worker: could not wake the next approved request ${next_id}; it remains queued for retry" >&2
+    fi
+  fi
 }
 
 fail_claim() {
@@ -101,6 +108,10 @@ if ! git -C "${VAPOR_DEPLOY_ROOT}" cat-file -e "${REQUEST_COMMIT}^{commit}"; the
 fi
 if ! git -C "${VAPOR_DEPLOY_ROOT}" merge-base --is-ancestor "${REQUEST_COMMIT}" "origin/${VAPOR_BRANCH}"; then
   fail_claim "the approved commit is no longer reachable from the protected branch"
+fi
+LATEST_MAIN_COMMIT="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse "origin/${VAPOR_BRANCH}")"
+if [ "${REQUEST_COMMIT}" != "${LATEST_MAIN_COMMIT}" ]; then
+  fail_claim "this approved revision was superseded by a newer main commit; no older snapshot was deployed"
 fi
 ACTUAL_TREE="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse "${REQUEST_COMMIT}^{tree}")"
 if [ "${ACTUAL_TREE}" != "${REQUEST_TREE}" ]; then

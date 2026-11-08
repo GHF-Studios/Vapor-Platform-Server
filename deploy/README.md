@@ -99,8 +99,12 @@ console remains separately disabled by default.
 - `scripts/run-approved-deploy.sh`: atomically claim one approved, unexpired
   request, verify its immutable root tree and every submodule gitlink, check the
   commit remains reachable from the protected branch, verify the exact
-  first-party submodule source URLs, then invoke only the fixed deployment
-  script. A request is terminal after one execution attempt.
+  first-party submodule source URLs, and require the request to name the
+  current protected `main` head before invoking the fixed deployment script.
+  This prevents an old approved or retried request from rolling the host back.
+  Requests are reviewed and claimed in creation order; a queued request stays
+  queued while it waits for the global deploy lock, and each completed worker
+  wakes the next approved request in that order.
 - `scripts/deploy-atlas.sh`: validate and atomically publish the Atlas commit
   pinned by the approved root revision under `/srv/vapor-web/atlas`, separately
   from Docs.
@@ -362,3 +366,10 @@ process. A failed systemd queue attempt leaves the approval recorded and marks
 dispatch retryable; inspect the request and worker state before retrying. This
 is an explicit pre-alpha owner operation, not a substitute for user-facing
 authorization or future multi-operator policy.
+
+The web approvals page and the root helper both refuse to approve a newer
+request while an older open request remains. The worker independently enforces
+the order, so UI sorting is not a safety boundary. An approved revision that
+is no longer the current protected `main` head is closed before deployment; a
+newer main commit already contains its ancestors, so replaying the older
+snapshot would only risk replacing newer live code.

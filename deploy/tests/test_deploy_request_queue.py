@@ -27,7 +27,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         db.execute(
             "CREATE TABLE platform_deploy_requests ("
             "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, "
-            "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
+            "created_at_unix INTEGER NOT NULL DEFAULT 100, expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
             "decided_by_profile_id TEXT, decision_reason TEXT, "
             "dispatch_state TEXT NOT NULL, dispatch_attempts INTEGER NOT NULL DEFAULT 1, "
             "dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT, result_detail TEXT, "
@@ -227,6 +227,7 @@ class DeployRequestQueueTests(unittest.TestCase):
             "UPDATE platform_deploy_requests SET dispatch_state='queued', "
             "dispatch_attempted_at_unix=69 WHERE id='req'"
         )
+        db.execute("UPDATE platform_deploy_requests SET dispatch_state='dispatching' WHERE id='req'")
         output = io.StringIO()
         with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
             result = QUEUE.claim(db, "req")
@@ -236,7 +237,7 @@ class DeployRequestQueueTests(unittest.TestCase):
             "SELECT status, dispatch_state FROM platform_deploy_requests WHERE id='req'"
         ).fetchone()
         self.assertEqual(row["status"], "approved")
-        self.assertEqual(row["dispatch_state"], "queued")
+        self.assertEqual(row["dispatch_state"], "dispatching")
 
         db.execute(
             "UPDATE platform_deploy_requests SET dispatch_state='not_attempted', "
@@ -247,6 +248,102 @@ class DeployRequestQueueTests(unittest.TestCase):
             result = QUEUE.claim(db, "req")
         self.assertEqual(result, 0)
         self.assertEqual(output.getvalue().strip(), "null")
+        db.close()
+
+    def test_queued_request_survives_waiting_for_global_deploy_lock(self) -> None:
+        db = self._database_with_request(self._request())
+        db.execute(
+            "UPDATE platform_deploy_requests SET dispatch_state='queued', "
+            "dispatch_attempted_at_unix=69 WHERE id='req'"
+        )
+        output = io.StringIO()
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
+            QUEUE.claim(db, "req")
+        self.assertNotEqual(output.getvalue().strip(), "null")
+        self.assertEqual(
+            db.execute("SELECT status FROM platform_deploy_requests WHERE id='req'").fetchone()[0],
+            "executing",
+        )
+        db.close()
+
+    def test_newer_approved_request_cannot_overtake_older_open_request(self) -> None:
+        db = self._database_with_request(self._request(), request_id="newer")
+        request = self._request()
+        raw = json.dumps(request, separators=(",", ":"))
+        db.execute(
+            "INSERT INTO platform_deploy_requests "
+            "(id,status,version,created_at_unix,expires_at_unix,dispatch_state,dispatch_attempts,"
+            "dispatch_attempted_at_unix,body_hash,request_json,repository,branch,commit_hash,tree_hash,"
+            "workflow_url,summary,submodules_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "older", "pending", 1, 99, 9999999999, "not_attempted", 0, None,
+                hashlib.sha256(raw.encode()).hexdigest(), raw, request["repository"], request["branch"],
+                request["commit"], request["tree"], request["workflow_url"], request["summary"], "[]",
+            ),
+        )
+        output = io.StringIO()
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
+            QUEUE.claim(db, "newer")
+        self.assertEqual(output.getvalue().strip(), "null")
+        self.assertEqual(
+            tuple(db.execute("SELECT status,dispatch_state FROM platform_deploy_requests WHERE id='newer'").fetchone()),
+            ("approved", "dispatching"),
+        )
+        db.close()
+
+    def test_newer_request_cannot_be_approved_before_older_pending_request(self) -> None:
+        request = self._request()
+        newer_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        older_id = "6d5d44f6-3c2c-4b5e-9668-a6edfe270204"
+        db = self._database_with_request(request, status="pending", version=1, request_id=newer_id)
+        db.execute("UPDATE platform_deploy_requests SET created_at_unix=200 WHERE id=?", (newer_id,))
+        raw = json.dumps(request, separators=(",", ":"))
+        db.execute(
+            "INSERT INTO platform_deploy_requests "
+            "(id,status,version,created_at_unix,expires_at_unix,dispatch_state,dispatch_attempts,"
+            "body_hash,request_json,repository,branch,commit_hash,tree_hash,workflow_url,summary,submodules_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                older_id, "pending", 1, 100, 9999999999, "not_attempted", 0,
+                hashlib.sha256(raw.encode()).hexdigest(), raw, request["repository"], request["branch"],
+                request["commit"], request["tree"], request["workflow_url"], request["summary"], "[]",
+            ),
+        )
+        with mock.patch.object(QUEUE.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "older deployment request"):
+                QUEUE.approve_and_queue(db, newer_id, request["commit"], "newer revision", now=200)
+        run.assert_not_called()
+        self.assertEqual(
+            tuple(db.execute("SELECT status,version FROM platform_deploy_requests WHERE id=?", (newer_id,)).fetchone()),
+            ("pending", 1),
+        )
+        db.close()
+
+    def test_next_ready_waits_for_oldest_open_request_then_returns_queued_successor(self) -> None:
+        db = self._database_with_request(self._request(), request_id="newer")
+        db.execute("UPDATE platform_deploy_requests SET dispatch_state='queued' WHERE id='newer'")
+        request = self._request()
+        raw = json.dumps(request, separators=(",", ":"))
+        db.execute(
+            "INSERT INTO platform_deploy_requests "
+            "(id,status,version,created_at_unix,expires_at_unix,dispatch_state,dispatch_attempts,"
+            "dispatch_attempted_at_unix,body_hash,request_json,repository,branch,commit_hash,tree_hash,"
+            "workflow_url,summary,submodules_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "older", "pending", 1, 99, 9999999999, "not_attempted", 0, None,
+                hashlib.sha256(raw.encode()).hexdigest(), raw, request["repository"], request["branch"],
+                request["commit"], request["tree"], request["workflow_url"], request["summary"], "[]",
+            ),
+        )
+        output = io.StringIO()
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
+            QUEUE.next_ready(db)
+        self.assertEqual(output.getvalue().strip(), "null")
+        db.execute("UPDATE platform_deploy_requests SET status='succeeded' WHERE id='older'")
+        output = io.StringIO()
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
+            QUEUE.next_ready(db)
+        self.assertEqual(output.getvalue().strip(), "newer")
         db.close()
 
     def test_claim_fails_closed_for_invalid_scope_target_combinations(self) -> None:
@@ -298,7 +395,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         db.row_factory = sqlite3.Row
         db.execute(
             "CREATE TABLE platform_deploy_requests ("
-            "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, "
+            "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, created_at_unix INTEGER NOT NULL DEFAULT 100, "
             "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
             "dispatch_state TEXT NOT NULL, dispatch_attempts INTEGER NOT NULL DEFAULT 1, "
             "dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT, result_detail TEXT, "
@@ -344,7 +441,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         db.row_factory = sqlite3.Row
         db.execute(
             "CREATE TABLE platform_deploy_requests ("
-            "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, "
+            "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, created_at_unix INTEGER NOT NULL DEFAULT 100, "
             "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
             "dispatch_state TEXT NOT NULL, dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT)"
         )
