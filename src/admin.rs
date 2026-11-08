@@ -437,7 +437,7 @@ const JS: &str = r#"
         summary.setAttribute('role', 'status');
         const summaryText = document.createElement('p');
         const state = document.createElement('strong');
-        state.textContent = !services.length ? 'No service status reported' : unavailable.length ? `${unavailable.length} service${unavailable.length === 1 ? '' : 's'} need attention` : 'All services healthy';
+        state.textContent = !services.length ? 'No service status reported' : unavailable.length ? `${unavailable.length} service${unavailable.length === 1 ? '' : 's'} need attention` : 'All service probes healthy';
         summaryText.append(state, document.createTextNode(` · ${services.length} services · revision ${body.deployed_revision || 'not recorded'}`));
         summary.append(summaryText);
         overview.append(summary);
@@ -2621,6 +2621,7 @@ mod tests {
         assert!(script.contains("className = 'service-directory'"));
         assert!(script.contains("className = 'request-queue-table'"));
         assert!(script.contains("service.readiness !== 'not reported'"));
+        assert!(script.contains("All service probes healthy"));
         assert!(script.contains("overview.id === 'platform-overview'"));
         assert!(script.contains("source.summarize(records)"));
         assert!(script.contains("moreAvailable = !Array.isArray(items) && typeof items?.next_cursor === 'string'"));
