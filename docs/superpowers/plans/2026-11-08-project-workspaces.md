@@ -130,4 +130,5 @@
 - [x] Verify export/import composition includes all new Identity and Registry tables.
 - [x] Run each affected service's full test suite, root `cargo check --locked`, and relevant root CI tests.
 - [x] Update boundary docs to reflect implemented Project APIs, membership model, and the remaining catalog/workbench gap.
-- [ ] Commit/push each service-owned implementation, update root submodule pins, run composed CI, then submit through the approved deployment flow.
+- [x] Commit/push each service-owned implementation and update/push the root submodule pins.
+- [ ] Finish composed GitHub CI, then submit through the approved deployment flow.
