@@ -925,7 +925,7 @@ const JS: &str = r#"
       { kind: 'Platform operation', label: 'Platform deploy/restore operations', url: '/api/admin/operations/history' },
       { kind: 'Deployment', label: 'Platform deployments', url: '/api/admin/deploy-requests' },
       { kind: 'Temporary access', label: 'Platform temporary access', url: '/api/admin/ssh-access/requests' },
-      { kind: 'Identity request', label: 'Identity permission requests', url: '/api/identity/v1/admin/permission-requests' }
+      { kind: 'Identity request', label: 'Identity permission requests', url: '/api/identity/v1/admin/permission-requests/page' }
     ];
     const validTimestamp = value => Number.isFinite(value) && value > 0 && value <= 8640000000000;
     const humanTime = value => validTimestamp(value)
@@ -1161,7 +1161,7 @@ const JS: &str = r#"
       sourceStatus.textContent = 'Loading recent request records from their owning services…';
       const results = await Promise.all(sources.map(async source => {
         try {
-          const url = source.kind === 'Identity request' ? source.url : `${source.url}?limit=50`;
+          const url = `${source.url}?limit=50`;
           const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
           const body = await response.json().catch(() => null);
           if (!response.ok) return { source, error: response.status === 401 ? 'Sign in required.' : response.status === 403 ? 'Root access required.' : `Unavailable (HTTP ${response.status}).` };
@@ -1192,14 +1192,23 @@ const JS: &str = r#"
   if (deployRequests) {
     const isCurrentDeployment = item => ['approved', 'executing'].includes(item.status);
     const actionFeedback = new Map();
+    const refreshButton = document.querySelector('#deployment-refresh');
+    const moreButton = document.querySelector('#deployments-more');
+    let deploymentCursor = null;
+    let deploymentItems = [];
     const refreshDeployRequests = async () => {
+      if (moreButton?.disabled) return;
+      if (refreshButton) { refreshButton.disabled = true; refreshButton.textContent = 'Refreshing…'; }
+      if (moreButton) moreButton.disabled = true;
       let response;
       let requests;
       try {
-        response = await fetch('/api/admin/deploy-requests?limit=200', { credentials: 'same-origin', cache: 'no-store' });
+        response = await fetch('/api/admin/deploy-requests?limit=200', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
         requests = await response.json().catch(() => null);
       } catch (_) {
         deployRequests.textContent = 'Deploy approvals are temporarily unavailable.';
+        if (refreshButton) { refreshButton.disabled = false; refreshButton.textContent = 'Refresh'; }
+        if (moreButton) { moreButton.disabled = false; moreButton.hidden = !deploymentCursor; }
         return;
       }
       deployRequests.replaceChildren();
@@ -1207,17 +1216,30 @@ const JS: &str = r#"
         deployRequests.textContent = response.status === 401 ? 'Sign in to review deploy requests.' :
           response.status === 403 ? 'Root access is required to review deploy requests.' :
           'Deploy approvals are temporarily unavailable.';
+        if (refreshButton) { refreshButton.disabled = false; refreshButton.textContent = 'Refresh'; }
+        if (moreButton) { moreButton.disabled = false; moreButton.hidden = !deploymentCursor; }
         return;
       }
-      const items = (Array.isArray(requests) ? requests : (Array.isArray(requests?.items) ? requests.items : []))
-        .filter(item => item && isCurrentDeployment(item));
+      deploymentItems = Array.isArray(requests) ? requests : (Array.isArray(requests?.items) ? requests.items : []);
+      deploymentCursor = Array.isArray(requests) ? null : (typeof requests?.next_cursor === 'string' ? requests.next_cursor : null);
+      renderDeployments();
+      if (refreshButton) { refreshButton.disabled = false; refreshButton.textContent = 'Refresh'; }
+    };
+    const renderDeployments = () => {
+      deployRequests.replaceChildren();
+      if (moreButton) {
+        moreButton.hidden = !deploymentCursor;
+        moreButton.disabled = false;
+        moreButton.textContent = 'Load older records';
+      }
+      const items = deploymentItems.filter(item => item && isCurrentDeployment(item));
       if (!items.length) {
         const approvalsLink = document.createElement('a'); approvalsLink.href = '/admin/approvals#pending-deploy-approvals';
         approvalsLink.textContent = 'Approvals';
         const historyLink = document.createElement('a'); historyLink.href = '/admin/history';
         historyLink.textContent = 'History';
         deployRequests.replaceChildren(
-          document.createTextNode('No active deployments. Pending approvals are in '),
+          document.createTextNode(deploymentCursor ? 'No active deployments in the loaded records; older requests may still be active. Pending approvals are in ' : 'No active deployments. Pending approvals are in '),
           approvalsLink,
           document.createTextNode('; completed and closed runs are in '),
           historyLink,
@@ -1382,7 +1404,32 @@ const JS: &str = r#"
         }
         deployRequests.append(card);
       }
+      if (moreButton) {
+        moreButton.hidden = !deploymentCursor;
+        moreButton.disabled = false;
+        moreButton.textContent = 'Load older records';
+      }
     };
+    const loadMoreDeployments = async () => {
+      if (!deploymentCursor || moreButton?.disabled) return;
+      if (moreButton) { moreButton.disabled = true; moreButton.textContent = 'Loading…'; }
+      try {
+        const params = new URLSearchParams({ limit: '200', cursor: deploymentCursor });
+        const response = await fetch(`/api/admin/deploy-requests?${params}`, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        const body = await response.json().catch(() => null);
+        if (!response.ok || !Array.isArray(body?.items)) throw new Error(response.status === 403 ? 'Root access is required to review deploy requests.' : `Older deployments are unavailable (HTTP ${response.status}).`);
+        const knownIds = new Set(deploymentItems.map(item => item?.id));
+        deploymentItems.push(...body.items.filter(item => item && !knownIds.has(item.id)));
+        deploymentCursor = typeof body.next_cursor === 'string' ? body.next_cursor : null;
+        renderDeployments();
+      } catch (error) {
+        const message = document.createElement('p'); message.className = 'error'; message.textContent = error.message || 'Could not load older deployments.';
+        deployRequests.prepend(message);
+      }
+      if (moreButton) { moreButton.disabled = false; moreButton.textContent = 'Load older records'; }
+    };
+    refreshButton?.addEventListener('click', refreshDeployRequests);
+    moreButton?.addEventListener('click', loadMoreDeployments);
     refreshDeployRequests();
   }
 
@@ -1396,7 +1443,9 @@ const JS: &str = r#"
     feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
     sshAccessList.closest('.ssh-workbench')?.before(feedback);
     const refreshButton = document.querySelector('#ssh-access-refresh');
+    const moreButton = document.querySelector('#ssh-access-more');
     let records = [];
+    let nextCursor = null;
     let selectedId = null;
     const statusLabel = value => ({ active: 'Active', pending: 'Pending review', revoked: 'Revoked', rejected: 'Rejected', expired: 'Expired', cancelled: 'Cancelled', failed: 'Setup failed' })[value] || String(value || 'Unknown').replaceAll('_', ' ');
     const formatTime = seconds => Number.isFinite(Number(seconds)) && Number(seconds) > 0
@@ -1505,7 +1554,8 @@ const JS: &str = r#"
       const visible = visibleRecords();
       const active = records.filter(item => item.status === 'active').length;
       const pending = records.filter(item => item.status === 'pending').length;
-      count.textContent = `${visible.length} grants shown · ${active} active · ${pending} awaiting review`;
+      count.textContent = `${visible.length} grants shown · ${active} active · ${pending} awaiting review${nextCursor ? ' in loaded records · more available' : ''}`;
+      if (moreButton) moreButton.hidden = !nextCursor;
       sshAccessList.replaceChildren();
       if (!visible.length) {
         const row = document.createElement('li'); row.className = 'muted';
@@ -1525,22 +1575,46 @@ const JS: &str = r#"
       renderDetail(visible.find(item => item.id === selectedId));
     };
     const refresh = async () => {
+      if (moreButton?.disabled) return;
       if (refreshButton) refreshButton.disabled = true;
+      if (moreButton) moreButton.disabled = true;
       let response;
-      try { response = await fetch('/api/admin/ssh-access/requests?limit=200', { credentials: 'same-origin', cache: 'no-store' }); }
+      try { response = await fetch('/api/admin/ssh-access/requests?limit=200', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) }); }
       catch (_) {
         sshAccessList.innerHTML = '<li class="error">Could not contact the temporary SSH service.</li>';
-        if (refreshButton) refreshButton.disabled = false; return;
+        if (refreshButton) refreshButton.disabled = false;
+        if (moreButton) { moreButton.disabled = false; moreButton.hidden = !nextCursor; }
+        return;
       }
-      if (!response.ok) { await showResponseFailure(sshAccessList, response, 'Could not load SSH access records'); if (refreshButton) refreshButton.disabled = false; return; }
+      if (!response.ok) { await showResponseFailure(sshAccessList, response, 'Could not load SSH access records'); if (refreshButton) refreshButton.disabled = false; if (moreButton) { moreButton.disabled = false; moreButton.hidden = !nextCursor; } return; }
       const body = await response.json().catch(() => null);
-      records = Array.isArray(body) ? body : body?.items;
-      if (!Array.isArray(records)) { sshAccessList.innerHTML = '<li class="error">The SSH service returned an invalid response.</li>'; if (refreshButton) refreshButton.disabled = false; return; }
+      const updatedRecords = Array.isArray(body) ? body : body?.items;
+      if (!Array.isArray(updatedRecords)) { sshAccessList.innerHTML = '<li class="error">The SSH service returned an invalid response.</li>'; if (refreshButton) refreshButton.disabled = false; if (moreButton) { moreButton.disabled = false; moreButton.hidden = !nextCursor; } return; }
+      records = updatedRecords;
+      nextCursor = Array.isArray(body) ? null : (typeof body?.next_cursor === 'string' ? body.next_cursor : null);
       records.sort((a, b) => (b.created_at_unix || 0) - (a.created_at_unix || 0));
-      renderList(); if (refreshButton) refreshButton.disabled = false;
+      renderList(); if (refreshButton) refreshButton.disabled = false; if (moreButton) moreButton.disabled = false;
+    };
+    const loadMore = async () => {
+      if (!nextCursor || moreButton?.disabled) return;
+      if (moreButton) { moreButton.disabled = true; moreButton.textContent = 'Loading…'; }
+      try {
+        const params = new URLSearchParams({ limit: '200', cursor: nextCursor });
+        const response = await fetch(`/api/admin/ssh-access/requests?${params}`, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        const body = await response.json().catch(() => null);
+        if (!response.ok || !Array.isArray(body?.items)) throw new Error(response.status === 403 ? 'Root access is required to review SSH access.' : `Older access records are unavailable (HTTP ${response.status}).`);
+        const knownIds = new Set(records.map(item => item?.id));
+        records.push(...body.items.filter(item => item && !knownIds.has(item.id)));
+        nextCursor = typeof body.next_cursor === 'string' ? body.next_cursor : null;
+        records.sort((a, b) => (b.created_at_unix || 0) - (a.created_at_unix || 0));
+        renderList();
+      } catch (error) {
+        feedback.textContent = error.message || 'Could not load older SSH access records.';
+      }
+      if (moreButton) { moreButton.disabled = false; moreButton.textContent = 'Load older records'; }
     };
     search.addEventListener('input', renderList); filter.addEventListener('change', renderList);
-    refreshButton?.addEventListener('click', refresh); refresh();
+    refreshButton?.addEventListener('click', refresh); moreButton?.addEventListener('click', loadMore); refresh();
   }
 })();
 "#;
@@ -1827,12 +1901,12 @@ fn operations_page(view: OperationsView) -> String {
     let content = match view {
         OperationsView::Approvals => approvals_page_content().to_owned(),
         OperationsView::Deployments => concat!(
-            "<section class=\"card\"><h2>Execution queue</h2><p class=\"muted\">This is the lifecycle after approval: pinned revisions, dispatch, worker progress, outcome, and eligible recovery actions. New decisions are made in <a href=\"/admin/approvals\">Approvals</a>.</p><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment execution…</p></div></section>",
+            "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Execution queue</h2><p class=\"muted\">This is the lifecycle after approval: pinned revisions, dispatch, worker progress, outcome, and eligible recovery actions. New decisions are made in <a href=\"/admin/approvals\">Approvals</a>.</p></div><button id=\"deployment-refresh\" type=\"button\">Refresh</button></div><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment execution…</p></div><button id=\"deployments-more\" type=\"button\" hidden>Load older records</button></section>",
             "<section class=\"card\"><h2>Latest deploy or restore result</h2><p class=\"muted\">This is the current Platform status pointer. Historical requests are listed separately under History.</p><div id=\"latest-operation-status\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>"
         )
         .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
-        OperationsView::TemporaryAccess => "<p class=\"eyebrow\">Operate · Access</p><div class=\"request-queue-header\"><div><h1>SSH access</h1><p class=\"muted\">Manage active grants and closed access records. Pending requests are reviewed in <a href=\"/admin/approvals#pending-ssh-approvals\">Approvals</a>.</p></div><button id=\"ssh-access-refresh\" type=\"button\">Refresh</button></div><section class=\"ssh-workbench\" aria-label=\"SSH access workbench\"><div class=\"ssh-list-panel\"><div class=\"ssh-list-toolbar\"><label for=\"ssh-access-search\">Find a grant<input id=\"ssh-access-search\" type=\"search\" placeholder=\"Purpose, fingerprint, account\" autocomplete=\"off\"></label><label for=\"ssh-access-filter\">Show<select id=\"ssh-access-filter\"><option value=\"active\">Active grants</option><option value=\"all\">All grants</option><option value=\"history\">Closed grants</option></select></label><p id=\"ssh-access-count\" class=\"ssh-list-count\" aria-live=\"polite\">Loading grants…</p></div><ul id=\"ssh-access-list\" class=\"ssh-record-list\" aria-label=\"SSH grants\"><li class=\"muted\">Loading…</li></ul></div><section id=\"ssh-access-detail\" class=\"ssh-detail-panel\" aria-live=\"polite\"><p class=\"muted\">Choose a grant to inspect its details.</p></section></section>".to_owned(),
+        OperationsView::TemporaryAccess => "<p class=\"eyebrow\">Operate · Access</p><div class=\"request-queue-header\"><div><h1>SSH access</h1><p class=\"muted\">Manage active grants and closed access records. Pending requests are reviewed in <a href=\"/admin/approvals#pending-ssh-approvals\">Approvals</a>.</p></div><button id=\"ssh-access-refresh\" type=\"button\">Refresh</button></div><section class=\"ssh-workbench\" aria-label=\"SSH access workbench\"><div class=\"ssh-list-panel\"><div class=\"ssh-list-toolbar\"><label for=\"ssh-access-search\">Find a grant<input id=\"ssh-access-search\" type=\"search\" placeholder=\"Purpose, fingerprint, account\" autocomplete=\"off\"></label><label for=\"ssh-access-filter\">Show<select id=\"ssh-access-filter\"><option value=\"active\">Active grants</option><option value=\"all\">All grants</option><option value=\"history\">Closed grants</option></select></label><p id=\"ssh-access-count\" class=\"ssh-list-count\" aria-live=\"polite\">Loading grants…</p></div><ul id=\"ssh-access-list\" class=\"ssh-record-list\" aria-label=\"SSH grants\"><li class=\"muted\">Loading…</li></ul><button id=\"ssh-access-more\" type=\"button\" hidden>Load older records</button></div><section id=\"ssh-access-detail\" class=\"ssh-detail-panel\" aria-live=\"polite\"><p class=\"muted\">Choose a grant to inspect its details.</p></section></section>".to_owned(),
         OperationsView::History => concat!(
             "<p class=\"eyebrow\">Platform · Records</p><h1>History</h1>",
             "<section class=\"card\"><p class=\"muted\">Search records from their owning services. Select a row to inspect its details.</p>",
@@ -3061,6 +3135,8 @@ mod tests {
         let page = super::operations_page(super::OperationsView::History);
         assert!(page.contains("Platform operation</option>"));
         assert!(script.contains("/api/admin/operations/history"));
+        assert!(script.contains("/api/identity/v1/admin/permission-requests/page"));
+        assert!(script.contains("const url = `${source.url}?limit=50`;"));
         assert!(script
             .contains("record.title = `${safeText(item.operation)} · ${safeText(item.result)}`"));
         assert!(script.contains("next_cursor"));
@@ -3118,6 +3194,11 @@ mod tests {
         assert!(script.contains("const responseFailure = async (response, fallback) =>"));
         assert!(script.contains("awaiting review"));
         assert!(script.contains("const sshAccessList = document.querySelector('#ssh-access-list')"));
+        assert!(script.contains("let nextCursor = null;"));
+        assert!(script.contains("cursor: nextCursor"));
+        assert!(script.contains("ssh-access-more"));
+        assert!(script.contains("const updatedRecords = Array.isArray(body) ? body : body?.items;"));
+        assert!(script.contains("if (!Array.isArray(updatedRecords))"));
         assert!(script.contains("const matchesFilter = item =>"));
         assert!(script.contains("No response received. Refresh to verify whether access was revoked."));
         assert!(
@@ -3145,6 +3226,7 @@ mod tests {
         assert!(!page.contains("value=\"pending\">Pending review"));
         assert!(page.contains("Pending requests are reviewed in"));
         assert!(page.contains("SSH access workbench"));
+        assert!(page.contains("id=\"ssh-access-more\""));
         assert!(!page.contains("Loading access requests and active grants…"));
     }
 
@@ -3198,6 +3280,10 @@ mod tests {
             script.contains("Approval saved; the worker claimed the deployment and it is running.")
         );
         assert!(script.contains("Approval saved; deployment succeeded."));
+        assert!(script.contains("let deploymentCursor = null;"));
+        assert!(script.contains("cursor: deploymentCursor"));
+        assert!(script.contains("deployment-refresh"));
+        assert!(script.contains("deployments-more"));
         assert!(script
             .contains("dispatch_attempt_superseded: 'was superseded by a newer request state'"));
         assert!(script.contains(
