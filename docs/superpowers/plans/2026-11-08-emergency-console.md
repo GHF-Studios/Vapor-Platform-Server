@@ -64,6 +64,8 @@
 - Installer accepts only an exact reviewed ttyd version; no version is
   currently approved, so preparation remains blocked until upstream fixes the
   reported crash and that release is reviewed.
+- The fixed root start helper repeats that exact-version check before every
+  service start, so a pre-existing unit cannot bypass the installer gate.
 - The UI states the missing recent-authentication/second-factor limitation.
 - The feature remains disabled until the shared-origin XSS risk is addressed by
   an isolated admin origin/session boundary or a verified Identity step-up.

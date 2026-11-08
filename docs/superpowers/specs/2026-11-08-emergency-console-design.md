@@ -95,9 +95,10 @@ recovery path or OpenSSH.
   reaching that frame handler already requires a root Identity session and
   active console grant; the reported impact is terminal availability, not
   unauthenticated access. The installer currently has no approved ttyd version
-  and refuses to prepare the console. Add an exact version only after a fixed
-  release has been reviewed. Recheck upstream status before enabling this for
-  more than the owner account.
+  and refuses to prepare the console; the root start helper repeats the exact
+  allowlist check to prevent an already-installed unit from bypassing that
+  gate. Add an exact version only after a fixed release has been reviewed.
+  Recheck upstream status before enabling this for more than the owner account.
 - The forward-auth callback is a loopback-only internal interface; Caddy must
   return 404 for public requests to that callback before the general admin API
   path proxy. Caddy overwrites the internal context headers when proxying the

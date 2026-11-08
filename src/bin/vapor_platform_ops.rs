@@ -136,6 +136,7 @@ mod unix_impl {
     const MAX_INPUT: usize = 8192;
     const MAX_DURATION: i64 = 8 * 60 * 60;
     const CAPABILITIES: &[&str] = &["vapor_deploy", "vapor_service_control", "host_admin"];
+    const APPROVED_TTYD_VERSIONS: &[&str] = &[];
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -182,6 +183,16 @@ mod unix_impl {
     pub async fn run_entry() {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
         if args.as_slice() == ["emergency-console-start"] {
+            let version = command_output("/usr/bin/ttyd", &["--version"]).await;
+            if !version.is_ok_and(|output| ttyd_version_is_approved(&output)) {
+                emit(
+                    false,
+                    "emergency-console",
+                    "failed",
+                    "ttyd version is not approved for root console access",
+                );
+                std::process::exit(1);
+            }
             return match run_command(
                 "/usr/bin/systemctl",
                 &["restart", "vapor-emergency-console.service"],
@@ -1933,6 +1944,21 @@ mod unix_impl {
         }
         let state = String::from_utf8(output.stdout).map_err(|_| ())?;
         Ok(state.trim().to_string())
+    }
+
+    fn ttyd_version_is_approved(output: &str) -> bool {
+        output.split_whitespace().any(|token| {
+            let token = token.strip_prefix('v').unwrap_or(token);
+            let candidate = token.trim_matches(|character: char| {
+                matches!(character, ',' | ';' | '(' | ')')
+            });
+            let parts = candidate.split('.').collect::<Vec<_>>();
+            parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+                && APPROVED_TTYD_VERSIONS.contains(&candidate)
+        })
     }
 
     async fn expire(id: &str) -> Result<(), &'static str> {

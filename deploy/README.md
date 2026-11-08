@@ -89,7 +89,9 @@ for smoke testing only; the intended public endpoint remains
   version at `/usr/bin/ttyd`, then installs a dedicated unenabled systemd unit
   and fixed shell wrapper; it does not install ttyd, verify binary provenance,
   start the unit, or enable it. The version allowlist must be updated only
-  after the binary's source and release are reviewed.
+  after the binary's source and release are reviewed. The root operation helper
+  repeats the exact-version gate on every session start, including on hosts
+  where the unit was installed outside this script.
   Upstream's latest release is still 1.7.7 and has an unresolved
   empty-WebSocket-frame crash report, so no version is currently approved and
   setup intentionally fails closed until a fixed release is reviewed.
