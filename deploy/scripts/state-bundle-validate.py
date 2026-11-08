@@ -10,6 +10,10 @@ import sys
 import tarfile
 import tomllib
 
+# This validator is also shipped inside the USB recovery kit. Running it there
+# must not write interpreter bytecode into the source-pinned directory, where
+# the sync tool correctly treats unlisted files as tampering.
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from deployed_source_manifest import ManifestError, validate_manifest_text as validate_deployed_source_manifest
 
