@@ -206,6 +206,24 @@ mod unix_impl {
             };
         }
         if args.as_slice() == ["emergency-console-stop"] {
+            let load_state = command_output(
+                "/usr/bin/systemctl",
+                &[
+                    "show",
+                    "--property=LoadState",
+                    "--value",
+                    "vapor-emergency-console.service",
+                ],
+            )
+            .await;
+            if matches!(load_state.as_deref(), Ok("not-found")) {
+                return emit(
+                    true,
+                    "emergency-console",
+                    "stopped",
+                    "emergency console service is not installed",
+                );
+            }
             return match run_command(
                 "/usr/bin/systemctl",
                 &["stop", "vapor-emergency-console.service"],
