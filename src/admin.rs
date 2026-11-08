@@ -56,9 +56,9 @@ const MODULES: &[AdminSection] = &[
     },
     AdminSection {
         group: "Ecosystem",
-        name: "Workshop / Registry",
-        path: Some("/admin/workshop"),
-        description: "Registry-owned catalog inventory",
+        name: "Registry",
+        path: Some("/admin/registry"),
+        description: "Ecosystem source inventory; typed content catalog not implemented",
         service_ids: &["registry"],
         state: SectionState::Implemented,
     },
@@ -79,10 +79,10 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Implemented,
     },
     AdminSection {
-        name: "Build Cache",
+        name: "Build Snapshots",
         group: "Ecosystem",
         path: Some("/admin/build-cache"),
-        description: "Per-target compiler snapshots",
+        description: "Signed Cargo target snapshots; not a shared compiler cache",
         service_ids: &["build-cache"],
         state: SectionState::Implemented,
     },
@@ -309,6 +309,9 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
 .eyebrow { color:#80a8cd; text-transform:uppercase; letter-spacing:.12em; font-size:11px; }
 h1 { margin:.35rem 0 1.25rem; font-size:26px; }
+.page-intro { max-width:760px; margin:-8px 0 22px; color:#aebdc3; line-height:1.65; }
+.button-link { display:inline-flex; min-height:38px; align-items:center; padding:0 13px; border-radius:5px; background:#9fe1ce; color:#10201d; font-weight:700; text-decoration:none; }
+.button-link:hover { background:#b8f0df; }
 .card { background:#182330; border:1px solid #2b3a4b; border-radius:7px; padding:16px; }
 .muted { color:#9eacba; }
 table { border-collapse:collapse; width:100%; margin:12px 0 24px; }
@@ -409,15 +412,15 @@ const JS: &str = r#"
     }
     if (!response.ok) {
       const label = response.status === 401 ? 'Sign in required' :
-        response.status === 403 ? 'Root access required' : 'Unavailable';
+        response.status === 403 ? 'Not an operator' : 'Unavailable';
       const state = response.status === 401 || response.status === 403 ? 'protected' : 'unavailable';
       setPill(operator, label, state);
-      setPill(platform, response.status === 401 || response.status === 403 ? 'Protected' : 'Unavailable', state);
+      setPill(platform, response.status === 401 || response.status === 403 ? 'Access restricted' : 'Unavailable', state);
       updateNavHealth(null);
       return;
     }
 
-    setPill(operator, 'Root session verified', 'healthy');
+    setPill(operator, 'Authorized', 'healthy');
     const services = Array.isArray(body && body.services) ? body.services : [];
     const platformService = services.find(service => service.id === 'platform');
     const platformState = platformService &&
@@ -440,14 +443,14 @@ const JS: &str = r#"
         if (!response.ok) {
           const message = document.createElement('p');
           message.className = 'muted';
-          message.textContent = response.status === 401 ? 'Sign in to view service status.' :
-            response.status === 403 ? 'Root access is required to view service status.' :
+          message.textContent = response.status === 401 ? 'Sign in with Steam. Platform status is visible to authorized operators.' :
+            response.status === 403 ? 'This account is signed in but is not authorized for Platform operations.' :
             'Service status is temporarily unavailable.';
           overview.append(message);
           if (response.status === 401) {
             const login = document.createElement('a');
             login.href = '/login';
-            login.textContent = 'Sign in';
+            login.textContent = 'Continue with Steam';
             overview.append(login);
           }
           return;
@@ -538,7 +541,7 @@ const JS: &str = r#"
         try {
           const response = await fetch(source.url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
           const items = await response.json().catch(() => null);
-          if (!response.ok) return { source, error: response.status === 401 ? 'Sign in required' : response.status === 403 ? 'Root access required' : `Unavailable (HTTP ${response.status})` };
+          if (!response.ok) return { source, error: response.status === 401 ? 'Sign in with Steam' : response.status === 403 ? 'Not an operator' : `Unavailable (HTTP ${response.status})` };
           const records = Array.isArray(items) ? items : items?.items;
           if (!Array.isArray(records)) return { source, error: 'Invalid service response' };
           const moreAvailable = !Array.isArray(items) && typeof items?.next_cursor === 'string' && items.next_cursor.length > 0;
@@ -1890,7 +1893,7 @@ fn render_admin_header(current_path: &str) -> String {
     let section_name = admin_page_title(current_path).unwrap_or("Administration");
     let deployment_targets = crate::deploy_requests::SERVICE_DEPLOY_TARGETS.join(",");
     format!(
-        "<header class=\"admin-header\" data-deployment-targets=\"{}\"><div><p class=\"eyebrow\">Current section</p><p class=\"admin-section-name\">{}</p></div><div class=\"admin-statuses\"><p class=\"admin-status-item\">Operator session <span class=\"status-pill status-protected\" data-operator-session role=\"status\" aria-live=\"polite\">Checking</span></p><p class=\"admin-status-item\">Platform <span class=\"status-pill\" data-platform-status role=\"status\" aria-live=\"polite\">Checking</span></p></div></header>",
+        "<header class=\"admin-header\" data-deployment-targets=\"{}\"><div><p class=\"admin-section-name\">{}</p></div><div class=\"admin-statuses\"><p class=\"admin-status-item\">Access <span class=\"status-pill status-protected\" data-operator-session role=\"status\" aria-live=\"polite\">Checking…</span></p><p class=\"admin-status-item\">Services <span class=\"status-pill\" data-platform-status role=\"status\" aria-live=\"polite\">Checking…</span></p></div></header>",
         escape_html(&deployment_targets),
         escape_html(section_name),
     )
@@ -1959,7 +1962,7 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Services</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading service health…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Incoming work</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts describe loaded records; “shown” means older pages remain. Review requests in Approvals; active access opens its own work area.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section>";
+    let fragment = "<p class=\"eyebrow\">Vapor Platform</p><h1>Operator overview</h1><p class=\"page-intro\">Service health and work that needs an operator decision. Sign in with an authorized Steam-linked Vapor account to load protected information.</p><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Service health</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Needs review</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Requests awaiting a decision appear here. Active SSH grants, deployment runs, and past decisions have their own work areas.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section>";
     admin_page_response(StatusCode::OK, fragment)
 }
 
@@ -2430,10 +2433,10 @@ fn auth_unavailable_response(failure: crate::admin_auth::AuthFailure) -> Respons
 fn admin_page_auth_response(failure: crate::admin_auth::AuthFailure) -> Response {
     let fragment = match failure {
         crate::admin_auth::AuthFailure::Unauthorized => {
-            "<p class=\"eyebrow\">Platform · Operations</p><h1>Sign-in required</h1><p>Sign in with a root administrator account to view Operations.</p><a href=\"/login\">Sign in</a>"
+            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Sign in to continue</h1><p>Use Steam to sign in to your Vapor account. This area is available only to accounts with the Platform root role.</p><a class=\"button-link\" href=\"/login\">Continue to sign in</a>"
         }
         crate::admin_auth::AuthFailure::Forbidden => {
-            "<p class=\"eyebrow\">Platform · Operations</p><h1>Root access required</h1><p>This work area is available to root administrators.</p>"
+            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Operator access required</h1><p>You are signed in, but this account does not have the Platform root role.</p><a href=\"/login\">View account</a>"
         }
         crate::admin_auth::AuthFailure::Unavailable => {
             "<p class=\"eyebrow\">Platform · Operations</p><h1>Authorization unavailable</h1><p>Identity authorization is temporarily unavailable. Retry in a moment.</p>"
@@ -2504,10 +2507,10 @@ async fn probe_services_for_mode(
             ),
             service(
                 "registry",
-                "Workshop / Registry",
+                "Registry",
                 registry,
                 "not reported",
-                Some("/admin/workshop"),
+                Some("/admin/registry"),
             ),
             service(
                 "artifacts",
@@ -2573,10 +2576,10 @@ async fn probe_services_for_mode(
         ),
         service(
             "registry",
-            "Workshop / Registry",
+            "Registry",
             registry,
             "not reported",
-            Some("/admin/workshop"),
+            Some("/admin/registry"),
         ),
         service(
             "artifacts",
@@ -3157,7 +3160,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let html = std::str::from_utf8(&body).unwrap();
 
-        assert!(html.contains("href=\"/admin/workshop\""));
+        assert!(html.contains("href=\"/admin/registry\""));
         assert!(html.contains("href=\"/admin/artifacts\""));
         assert!(!html.contains("Workshop</span><small class=\"nav-status\">Planned"));
         assert!(html.contains("href=\"/admin/build-cache\""));

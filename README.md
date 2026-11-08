@@ -52,10 +52,10 @@ production topology.
 /admin/hosting            -> service health and feature readiness
 /admin/history            -> bounded owner-sourced request and operation history
 /admin/operations         -> Platform operations pages via view query
-/admin/workshop           -> Registry-owned read-only catalog inventory
+/admin/registry           -> Registry-owned ecosystem/source topology inventory
 /admin/identity           -> Identity-owned admin section
 /admin/artifacts          -> Artifact-owned read-only release inventory
-/admin/build-cache        -> Build Cache-owned read-only target snapshot inventory
+/admin/build-cache        -> Build Cache-owned read-only Cargo target snapshot inventory
 /api/admin/overview       -> root-authorized service health summary
 /api/admin/operations     -> root-authorized latest deploy/restore status
 /api/identity/            -> identity
@@ -75,17 +75,23 @@ production topology.
 - Identity: owns linked Steam/GitHub identities, roles, and auth/session state.
 - Diagnostics: owns opt-in diagnostics uploads, indexes, retention metadata,
   and export/import data.
-- Registry: owns the canonical Vapor content catalog and Workshop inventory.
+- Registry: currently owns ecosystem/source topology and visibility policy. The
+  typed content catalog, Workshop bindings, release metadata, and publishing
+  decisions are accepted target work, not implemented state.
 - Operations: Platform owns the latest deploy/restore status pointer; deployment
   and recovery actions remain CLI-owned.
 - Artifact: serves immutable Vapor application release manifests, signatures,
   and archive bytes from its own release store. It runs as an independent
   service in production; release build/sign/publish tooling remains an operator
   workflow.
-- Build Cache: owns one current signed Cargo snapshot per supported target and
-  candidate promotion state. VPS-hosted target VM orchestration and Vapor Client
-  installation are not yet implemented; an empty cache is not a usable build
-  distribution.
+- Build Cache: owns signed Cargo target-directory snapshots and candidate
+  promotion. It is not a shared compiler-result cache. Native builder operations
+  and Vapor Client snapshot installation are not implemented; an empty snapshot
+  store is not a usable build distribution.
+
+See [`docs/vapor-content-and-build-domain-contract.md`](docs/vapor-content-and-build-domain-contract.md)
+for the intended boundaries among typed content, acquisition, compositions,
+application releases, target snapshots, compiler caching, and native builds.
 
 ## Restore model
 
