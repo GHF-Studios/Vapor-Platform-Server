@@ -1839,9 +1839,9 @@ async fn authorize_admin_shell(
 fn admin_shell_auth_response(failure: crate::admin_auth::AuthFailure) -> Response {
     let (title, message, login_link) = match failure {
         crate::admin_auth::AuthFailure::Unauthorized => (
-            "Sign-in required",
-            "Sign in to continue.",
-            "<p><a href=\"/login\">Continue to sign in</a></p>",
+            "Operator sign-in required",
+            "A normal Vapor account sign-in does not open the Platform admin session.",
+            "<p><a href=\"/operator/login\">Continue to operator sign-in</a></p>",
         ),
         crate::admin_auth::AuthFailure::Forbidden => (
             "Access unavailable",
@@ -2534,10 +2534,10 @@ fn auth_unavailable_response(failure: crate::admin_auth::AuthFailure) -> Respons
 fn admin_page_auth_response(failure: crate::admin_auth::AuthFailure) -> Response {
     let fragment = match failure {
         crate::admin_auth::AuthFailure::Unauthorized => {
-            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Sign-in required</h1><p>Use Steam to sign in to your Vapor account. This area is available only to accounts with the Platform root role.</p><a class=\"button-link\" href=\"/login\">Continue to sign in</a>"
+            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Operator sign-in required</h1><p>A normal Vapor account sign-in does not open the Platform admin session. Use the separate operator sign-in; admin access still requires the Platform root role.</p><a class=\"button-link\" href=\"/operator/login\">Continue to operator sign-in</a>"
         }
         crate::admin_auth::AuthFailure::Forbidden => {
-            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Root access required</h1><p>You are signed in, but this account does not have the Platform root role.</p><a href=\"/login\">View account</a>"
+            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Root access required</h1><p>You are signed in with an operator session, but this account does not have the Platform root role.</p><a href=\"/operator/login\">View operator account</a>"
         }
         crate::admin_auth::AuthFailure::Unavailable => {
             "<p class=\"eyebrow\">Platform · Operations</p><h1>Authorization unavailable</h1><p>Identity authorization is temporarily unavailable. Retry in a moment.</p>"
@@ -2900,7 +2900,7 @@ mod tests {
             assert_eq!(response.headers()["cache-control"], "private, no-store");
             let body = response.into_body().collect().await.unwrap().to_bytes();
             let html = std::str::from_utf8(&body).unwrap();
-            assert!(html.contains("Sign-in required"));
+            assert!(html.contains("Operator sign-in required"));
             assert!(!html.contains("Platform administration"));
             assert!(!html.contains("/admin/assets/admin.css"));
             assert!(!html.contains("/admin/assets/admin.js"));
@@ -3532,8 +3532,8 @@ mod tests {
         );
         let body = get_response.into_body().collect().await.unwrap().to_bytes();
         let document = std::str::from_utf8(&body).unwrap();
-        assert!(document.contains("Sign-in required"));
-        assert!(document.contains("/login"));
+        assert!(document.contains("Operator sign-in required"));
+        assert!(document.contains("/operator/login"));
         assert!(document.contains("<nav aria-label=\"Platform administration\">"));
 
         let post_response = admin_app()
@@ -3555,7 +3555,7 @@ mod tests {
             (
                 crate::admin_auth::AuthFailure::Unauthorized,
                 StatusCode::UNAUTHORIZED,
-                "Sign-in required",
+                "Operator sign-in required",
             ),
             (
                 crate::admin_auth::AuthFailure::Forbidden,
@@ -3580,6 +3580,29 @@ mod tests {
             assert!(fragment.contains(expected_text));
             assert!(!fragment.starts_with('{'));
         }
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_admin_shell_points_to_operator_sign_in() {
+        let response = super::admin_shell_auth_response(crate::admin_auth::AuthFailure::Unauthorized);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let html = std::str::from_utf8(&body).unwrap();
+
+        assert!(html.contains("Operator sign-in required"));
+        assert!(html.contains("/operator/login"));
+        assert!(html.contains("normal Vapor account sign-in does not open the Platform admin session"));
+        assert!(!html.contains("href=\"/login\""));
+    }
+
+    #[tokio::test]
+    async fn admin_page_auth_challenge_explains_the_separate_operator_session() {
+        let response = super::admin_page_auth_response(crate::admin_auth::AuthFailure::Unauthorized);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let html = std::str::from_utf8(&body).unwrap();
+
+        assert!(html.contains("normal Vapor account sign-in does not open the Platform admin session"));
+        assert!(html.contains("href=\"/operator/login\""));
+        assert!(!html.contains("href=\"/login\""));
     }
 
     #[test]
