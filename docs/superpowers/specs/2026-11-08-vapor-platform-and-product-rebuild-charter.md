@@ -61,9 +61,9 @@ flowchart TB
 
 - One physical VPS may run multiple independent service processes behind one public domain and a shared authenticated admin gateway. The Platform repo owns composition, fixed host operations, deployment orchestration, backup/import/recovery, and the shared shell. Each service repo owns its business rules, records, policy, and service-specific interface fragment.
 - The web dashboard is the normal graphical interface into these services; “service-owned authority” does not mean the owner must use the CLI. The gateway may present and invoke workflows, but never shadows owner records or bypasses their authorization/audit.
-- Public pages serve Vapor downloads, clear product-aware getting-started flows, and working documentation. Admin tools are separate from public user flows and are not a general-purpose remote shell.
+- Public pages serve Vapor downloads, clear product-aware getting-started flows, and working documentation. Admin tools are separate from public user flows. A narrowly scoped one-host emergency browser terminal is now in scope in a separate high-security dashboard area; it is not a general remote-shell product and remains disabled until its security prerequisites are met.
 - Product workbenches are specialized views for Mad Max, native Loo Cast, and an isolated developer Sandbox. Shared UI primitives are encouraged; product licenses, local source detection, and content policy remain separate.
-- No web-accessible arbitrary root shell/VNC is in scope. Browser compromise must not imply unrestricted VPS root. Keep owner-controlled Strato console and SSH as break-glass; provide bounded, named, audited operations in the dashboard.
+- The emergency browser terminal is equivalent to root SSH on the one Platform VPS. It requires root Identity authorization, a separate explicit short-lived session grant, a single connection, expiry and revocation, and lifecycle audit without transcript storage. This does not replace Strato VNC or owner SSH. The current shared public/admin origin remains a blocker: a same-origin script-injection flaw can issue requests as the root operator. Keep the host switch off until the admin origin/session boundary is isolated or Identity provides a verifiable step-up signal. Other privileged work remains bounded, named, and audited; do not turn this into arbitrary multi-host SSH, port forwarding, file transfer, or an always-on shell.
 
 ### Authority and identity
 
@@ -118,7 +118,7 @@ flowchart TB
 - Do not let one server/service own every workflow or move service business logic into the Platform root.
 - Do not perform the production host wipe until a fresh-host restore drill and an owner-reviewed exact deletion inventory exist.
 - Do not indiscriminately clean dirty checkouts, Ghidra databases, source caches, or game directories. Provide a reviewed clean-room operation and classify each path first.
-- Do not add an arbitrary browser shell, web root login, or permanent general-purpose SSH key as a convenience feature.
+- Do not turn the one-host emergency console into a general shell service, enable it by default, or distribute a permanent general-purpose SSH key. Browser root access stays an explicit, time-bounded emergency capability with its own security gate.
 
 ## Open decisions that block only their dependent work
 
@@ -140,6 +140,7 @@ flowchart TB
 - Vapor uninstall and full clean-room purge report exact paths and have separately tested preserve/export and delete modes.
 - Public download/getting-started/docs links work; Platform admin pages are task-oriented, compact, accessible, and have real unavailable/failed/partial states.
 - A browser cannot obtain arbitrary shell access. Privileged operations are typed, owner-gated, audited, and attributable.
+- The emergency console stays inaccessible unless its host gate is explicitly enabled, root authorization succeeds, and the separate session grant is active. A clean security review records the admin-origin/step-up prerequisite before anyone enables it.
 - Recovery on a disposable fresh Ubuntu host verifies service-owned state,
   Caddy routes, login/auth flows, exact source/submodule pins, and a repeat
   export. The drill must not use the production host. External provider
