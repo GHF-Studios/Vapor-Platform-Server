@@ -5,6 +5,8 @@ mod deploy_request_schema;
 mod deploy_requests;
 mod operation_history;
 mod pagination;
+mod recovery;
+mod recovery_status;
 mod ssh_access;
 mod ssh_key;
 mod ssh_policy;

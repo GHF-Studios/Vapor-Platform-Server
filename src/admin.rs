@@ -143,6 +143,22 @@ const MODULES: &[AdminSection] = &[
         service_ids: &["platform", "identity"],
         state: SectionState::Implemented,
     },
+    AdminSection {
+        group: "Emergency",
+        name: "Recovery",
+        path: Some("/admin/recovery"),
+        description: "Recovery evidence and backup status",
+        service_ids: &["platform"],
+        state: SectionState::Implemented,
+    },
+    AdminSection {
+        group: "Emergency",
+        name: "Browser console",
+        path: None,
+        description: "Isolated, short-lived browser terminal is under security design",
+        service_ids: &[],
+        state: SectionState::Planned,
+    },
 ];
 
 const CSS: &str = r#"
@@ -273,6 +289,12 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .ssh-history-list { max-height:260px; overflow:auto; }
 .ssh-history-list p { margin:7px 0; padding-left:10px; border-left:2px solid #40536a; }
 .ssh-pending-note { padding:10px; border-left:3px solid #d4bd69; background:#28271e; }
+.recovery-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin:14px 0 0; }
+.recovery-fact { min-width:0; padding:11px; background:#111821; border-radius:5px; }
+.recovery-fact dt { color:#9eacba; font-size:11px; }
+.recovery-fact dd { margin:4px 0 0; overflow-wrap:anywhere; font-weight:600; }
+.recovery-fact dd.state-warning { color:#e5cb78; }
+.recovery-fact dd.state-danger { color:#f08b92; }
 .approval-source { margin:10px 0; background:#182330; border:1px solid #2b3a4b; border-radius:7px; overflow:hidden; }
 .approval-source > summary { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px; cursor:pointer; list-style:none; font-weight:650; }
 .approval-source > summary::-webkit-details-marker { display:none; }
@@ -1631,6 +1653,51 @@ const JS: &str = r#"
     search.addEventListener('input', renderList); filter.addEventListener('change', renderList);
     refreshButton?.addEventListener('click', refresh); moreButton?.addEventListener('click', loadMore); refresh();
   }
+
+  const recoveryFeedback = document.querySelector('#recovery-feedback');
+  const recoveryFacts = document.querySelector('#recovery-facts');
+  const recoveryRefresh = document.querySelector('#recovery-refresh');
+  if (recoveryFeedback && recoveryFacts) {
+    const fact = (label, value, state = '') => {
+      const wrap = document.createElement('div'); wrap.className = 'recovery-fact';
+      const term = document.createElement('dt'); term.textContent = label;
+      const detail = document.createElement('dd'); detail.textContent = value;
+      if (state) detail.className = `state-${state}`;
+      wrap.append(term, detail); return wrap;
+    };
+    const humanSize = value => {
+      let size = Number(value); const units = ['B', 'KB', 'MB', 'GB', 'TB']; let index = 0;
+      while (size >= 1024 && index < units.length - 1) { size /= 1024; index++; }
+      return `${size.toFixed(index ? 1 : 0)} ${units[index]}`;
+    };
+    const refreshRecovery = async () => {
+      recoveryRefresh.disabled = true; recoveryFeedback.textContent = 'Checking recovery evidence…';
+      try {
+        const response = await fetch('/api/admin/recovery/status', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Recovery status is unavailable (HTTP ${response.status}).`);
+        const data = await response.json();
+        if (data?.schema_version !== 1 || !['active', 'inactive', 'unknown'].includes(data.timer_state) || !['recent', 'stale', 'unknown'].includes(data.freshness) || !Number.isInteger(data.archive_count) || data.archive_count < 0 || (data.latest_archive !== null && (!data.latest_archive || !Number.isFinite(data.latest_archive.modified_at_unix) || !Number.isFinite(data.latest_archive.size_bytes)))) throw new Error('The recovery service returned an invalid status.');
+        const latest = data.latest_archive;
+        const freshnessText = data.freshness === 'recent' ? 'Recent archive found — validation not verified' : data.freshness === 'stale' ? 'Latest archive is stale' : latest || data.archive_count > 0 ? 'Archive time unknown' : 'No archive found';
+        const freshnessState = data.freshness === 'recent' ? 'warning' : 'danger';
+        const modified = latest ? new Date(latest.modified_at_unix * 1000).toLocaleString() : 'Not available';
+        recoveryFacts.replaceChildren(
+          fact('Archive evidence', freshnessText, freshnessState),
+          fact('Latest snapshot', latest ? `${humanSize(latest.size_bytes)} · ${modified}` : 'Not available'),
+          fact('Source revision', latest?.commit_short || 'Not available'),
+          fact('Checksum sidecar', latest ? (latest.checksum_sidecar_present ? 'Present; not rechecked here' : 'Missing') : 'Not available', latest?.checksum_sidecar_present ? 'warning' : 'danger'),
+          fact('Export timer', data.timer_state === 'active' ? 'Active' : data.timer_state === 'inactive' ? 'Inactive' : 'Unknown', data.timer_state === 'active' ? 'warning' : 'danger'),
+          fact('Next scheduled run', typeof data.next_run_display === 'string' && data.next_run_display ? data.next_run_display : 'Not available'),
+          fact('Snapshots found', String(data.archive_count))
+        );
+        recoveryFeedback.textContent = 'Status read from the VPS recovery helper. Archive recency is based on file time only.';
+      } catch (error) {
+        recoveryFacts.replaceChildren(); recoveryFeedback.textContent = error.message || 'Recovery status is unavailable.';
+      }
+      recoveryRefresh.disabled = false;
+    };
+    recoveryRefresh?.addEventListener('click', refreshRecovery); refreshRecovery();
+  }
 })();
 "#;
 
@@ -1644,9 +1711,11 @@ pub fn router() -> Router {
         .route("/admin/ssh-access", get(temporary_access))
         .route("/admin/hosting", get(hosting))
         .route("/admin/history", get(history))
+        .route("/admin/recovery", get(recovery_page))
         .route("/api/admin/overview", get(overview))
         .route("/api/admin/platform-healthz", get(platform_healthz))
         .route("/api/admin/operations", get(operations_status))
+        .merge(crate::recovery::router())
         .merge(crate::operation_history::router())
         .route("/admin/assets/admin.css", get(stylesheet))
         .route("/admin/assets/admin.js", get(script))
@@ -1779,7 +1848,7 @@ fn render_admin_navigation(current_path: &str) -> String {
     let mut html = String::from(
         "<nav aria-label=\"Platform administration\"><p class=\"brand\">Vapor Platform</p>",
     );
-    let group_order = ["Operate", "Ecosystem", "Accounts"];
+    let group_order = ["Operate", "Ecosystem", "Accounts", "Emergency"];
     for group in group_order {
         let sections: Vec<_> = MODULES.iter().filter(|section| section.group == group).collect();
         if sections.is_empty() {
@@ -1873,6 +1942,38 @@ async fn hosting(headers: axum::http::HeaderMap) -> Response {
 
 async fn history(headers: axum::http::HeaderMap) -> Response {
     operations_view(headers, OperationsView::History).await
+}
+
+async fn recovery_page(headers: axum::http::HeaderMap) -> Response {
+    let endpoint = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL")
+        .unwrap_or_else(|_| DEFAULT_IDENTITY_AUTHZ_URL.to_owned());
+    let service_token = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok();
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return admin_page_auth_response(crate::admin_auth::AuthFailure::Unavailable),
+    };
+    if let Err(failure) = crate::admin_auth::authorize_root_with_client(
+        &headers,
+        service_token.as_deref(),
+        &endpoint,
+        &client,
+    )
+    .await
+    {
+        return admin_page_auth_response(failure);
+    }
+    let fragment = concat!(
+        "<p class=\"eyebrow\">Emergency · Read only</p><h1>Recovery</h1>",
+        "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>VPS recovery snapshot</h2><p class=\"muted\">Internet reachable, root sign-in required. This page reports evidence only; it cannot export, restore, wipe, or open a shell.</p></div><button id=\"recovery-refresh\" type=\"button\">Refresh</button></div>",
+        "<p id=\"recovery-feedback\" role=\"status\" aria-live=\"polite\">Loading recovery status…</p><dl id=\"recovery-facts\" class=\"recovery-facts\"></dl></section>",
+        "<section class=\"card\"><h2>Evidence not connected</h2><p><strong>USB copy:</strong> Not reported to Platform.</p><p><strong>Fresh-host restore drill:</strong> Not recorded.</p><p class=\"muted\">A recent server archive does not prove that an offline copy exists or that a clean-host restore has succeeded.</p><a href=\"/docs\">Open recovery runbooks</a></section>"
+    );
+    admin_page_response(StatusCode::OK, fragment)
 }
 
 async fn operations_view(headers: axum::http::HeaderMap, view: OperationsView) -> Response {

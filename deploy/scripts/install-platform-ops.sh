@@ -69,7 +69,10 @@ install -o root -g root -m 0750 "${HELPER}" /usr/local/libexec/vapor-platform-op
 install -d -o root -g root -m 0755 /etc/sudoers.d
 temporary_sudoers="$(mktemp /etc/sudoers.d/vapor-platform-ops.XXXXXX)"
 trap 'rm -f -- "${temporary_sudoers}"; cleanup' EXIT
-printf '%s\n' 'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""' > "${temporary_sudoers}"
+printf '%s\n' \
+  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""' \
+  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops recovery-status' \
+  > "${temporary_sudoers}"
 chown root:root "${temporary_sudoers}"
 chmod 0440 "${temporary_sudoers}"
 visudo -cf "${temporary_sudoers}"

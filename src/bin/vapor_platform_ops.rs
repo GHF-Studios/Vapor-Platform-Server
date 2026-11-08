@@ -2,6 +2,9 @@
 mod ssh_cli;
 #[path = "../ssh_policy.rs"]
 mod ssh_policy;
+#[cfg_attr(not(unix), allow(dead_code))]
+#[path = "../recovery_status.rs"]
+mod recovery_status;
 
 #[cfg_attr(not(unix), allow(dead_code))]
 const MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES: usize = 4096;
@@ -114,6 +117,7 @@ async fn record_stopped_deploy_failure(
 
 #[cfg(unix)]
 mod unix_impl {
+    use super::recovery_status;
     use base64::Engine;
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
@@ -177,6 +181,16 @@ mod unix_impl {
 
     pub async fn run_entry() {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
+        if args.as_slice() == ["recovery-status"] {
+            match recovery_status().await {
+                Ok(status) => println!("{}", serde_json::to_string(&status).unwrap_or_default()),
+                Err(_) => {
+                    eprintln!("recovery status is unavailable");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         if args.first().is_some_and(|value| value == "ssh") {
             match super::ssh_cli::parse_ssh_args(&args[1..]) {
                 Ok(super::ssh_cli::SshCommand::Help) => {
@@ -222,6 +236,162 @@ mod unix_impl {
                 std::process::exit(1);
             }
         }
+    }
+
+    async fn recovery_status() -> Result<recovery_status::RecoveryStatus, ()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        const MAX_ARCHIVES: usize = 10_000;
+        let root = PathBuf::from("/var/backups/vapor-server");
+        if std::fs::symlink_metadata(&root)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
+        {
+            return Err(());
+        }
+        let mut archive_count = 0u32;
+        let mut latest: Option<(PathBuf, i64, u64)> = None;
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for (index, entry) in entries.enumerate() {
+                if index >= MAX_ARCHIVES {
+                    return Err(());
+                }
+                let entry = entry.map_err(|_| ())?;
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if recovery_archive_commit(&name).is_none() {
+                    continue;
+                }
+                let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| ())?;
+                if !metadata.file_type().is_file() {
+                    continue;
+                }
+                if metadata.len() == 0 {
+                    continue;
+                }
+                archive_count = archive_count.saturating_add(1);
+                let modified_at_unix = metadata.modified().ok()
+                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                    .and_then(|duration| i64::try_from(duration.as_secs()).ok());
+                let Some(modified_at_unix) = modified_at_unix.filter(|value| *value > 0) else {
+                    continue;
+                };
+                if latest
+                    .as_ref()
+                    .is_none_or(|(_, current, _)| modified_at_unix > *current)
+                {
+                    latest = Some((entry.path(), modified_at_unix, metadata.len()));
+                }
+            }
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| ())?
+            .as_secs();
+        let latest_archive = latest.and_then(|(path, modified_at_unix, size_bytes)| {
+            let commit_short = recovery_archive_commit(path.file_name()?.to_str()?)?.to_owned();
+            let sidecar = PathBuf::from(format!("{}.sha256", path.display()));
+            let checksum_sidecar_present = std::fs::symlink_metadata(sidecar).is_ok_and(|metadata| {
+                metadata.file_type().is_file() && !metadata.file_type().is_symlink()
+            });
+            Some(recovery_status::LatestArchive {
+                modified_at_unix,
+                size_bytes,
+                commit_short,
+                checksum_sidecar_present,
+            })
+        });
+        let freshness = match latest_archive.as_ref() {
+            None => "unknown",
+            Some(archive) if archive.modified_at_unix as u64 > now.saturating_add(300) => "unknown",
+            Some(archive) if now.saturating_sub(archive.modified_at_unix as u64) <= 7200 => "recent",
+            Some(_) => "stale",
+        };
+        let timer_state = command_output_bounded(
+            "/usr/bin/systemctl",
+            &["show", "--property=ActiveState", "--value", "vapor-state-export.timer"],
+            64,
+        )
+        .await
+        .map(|value| match value.as_str() {
+            "active" => "active",
+            "inactive" => "inactive",
+            _ => "unknown",
+        })
+        .unwrap_or("unknown");
+        let next_run_display = command_output_bounded(
+            "/usr/bin/systemctl",
+            &["list-timers", "--all", "--no-pager", "--no-legend", "vapor-state-export.timer"],
+            256,
+        )
+        .await
+        .ok()
+        .filter(|value| !value.is_empty());
+
+        Ok(recovery_status::RecoveryStatus {
+            schema_version: 1,
+            timer_state: timer_state.to_owned(),
+            next_run_display,
+            archive_count,
+            latest_archive,
+            freshness: freshness.to_owned(),
+        })
+    }
+
+    fn recovery_archive_commit(name: &str) -> Option<&str> {
+        let prefix = "vapor-platform-recovery-";
+        let value = name.strip_prefix(prefix)?.strip_suffix(".tar.gz")?;
+        let (timestamp, commit) = value.rsplit_once('-')?;
+        let timestamp_bytes = timestamp.as_bytes();
+        if timestamp_bytes.len() != 16
+            || timestamp_bytes[8] != b'T'
+            || timestamp_bytes[15] != b'Z'
+            || !timestamp_bytes[..8].iter().all(u8::is_ascii_digit)
+            || !timestamp_bytes[9..15].iter().all(u8::is_ascii_digit)
+            || commit.len() != 12
+            || !commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return None;
+        }
+        Some(commit)
+    }
+
+    async fn command_output_bounded(
+        path: &str,
+        args: &[&str],
+        max_bytes: usize,
+    ) -> Result<String, ()> {
+        use tokio::io::AsyncReadExt;
+        let mut child = tokio::process::Command::new(path)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|_| ())?;
+        let mut stdout = child.stdout.take().ok_or(())?;
+        let mut bytes = Vec::with_capacity(max_bytes.min(1024));
+        let mut limited = stdout.take((max_bytes + 1) as u64);
+        tokio::time::timeout(Duration::from_secs(2), limited.read_to_end(&mut bytes))
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?;
+        if bytes.len() > max_bytes {
+            return Err(());
+        }
+        let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?;
+        if !status.success() {
+            return Err(());
+        }
+        let output = String::from_utf8(bytes).map_err(|_| ())?;
+        if output.chars().any(char::is_control) {
+            return Err(());
+        }
+        Ok(output.trim().to_owned())
     }
 
     async fn run_ssh_command(command: super::ssh_cli::SshCommand) -> Result<(), String> {
