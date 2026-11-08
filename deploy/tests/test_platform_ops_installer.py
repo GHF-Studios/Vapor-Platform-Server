@@ -36,6 +36,7 @@ class PlatformOpsInstallerTests(unittest.TestCase):
         self.assertIn("grep -RIlE", source)
         self.assertIn("^[[:space:]]*[^#[:space:]].*vapor-temp-ssh", source)
         self.assertIn("unsupported sudoers include path", source)
+        self.assertIn('grep -vxF "${legacy_sudoers}"', source)
         include_scan = re.compile(
             r"^\s*(@include(?:dir)?|#include(?:dir)?)\s+", re.MULTILINE
         )
