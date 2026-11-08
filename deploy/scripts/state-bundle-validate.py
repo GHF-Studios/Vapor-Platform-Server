@@ -181,7 +181,9 @@ def validate_state_only_members(
     for name, member in members.items():
         if name in {f"{ROOT}/manifest.toml"}:
             continue
-        if member.isdir() and name in allowed_dirs:
+        if member.isdir() and (
+            name in allowed_dirs or any(name.startswith(prefix) for prefix in allowed_prefixes)
+        ):
             continue
         if name in allowed_exact and member.isfile():
             continue

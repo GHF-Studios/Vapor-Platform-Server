@@ -303,6 +303,8 @@ included_categories = ["state"]
             (f"{ROOT}/state/platform/platform.sqlite3", "file", b"platform-db"),
             (f"{ROOT}/state/registry", "dir", None),
             (f"{ROOT}/state/registry/registry.sqlite3", "file", b"registry-db"),
+            (f"{ROOT}/state/docs/current/client", "dir", None),
+            (f"{ROOT}/state/docs/current/client/index.html", "file", b"nested published docs"),
             (f"{ROOT}/state/docs/current/index.html", "file", b"published docs"),
             (f"{ROOT}/state/operations/deployed-sources.json", "file", b'{"schema_version":1,"targets":{}}'),
         ])
