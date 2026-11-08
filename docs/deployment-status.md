@@ -1,10 +1,10 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-08 10:57 UTC)
+## Current verified state (2026-11-08 11:09 UTC)
 
-- Platform `12ab9d8d2f1b581bb728e60bcc5835e6d57a226d` is live in `services`
-  mode. Its approved request `dc62975c-86b6-4c41-8e4b-e7aed4f10bf8` completed
-  successfully at `2026-11-08T10:01:59Z`. The host's deployed-source map pins
+- Platform `31f192a4f0c6bb54e6c581e8b2d6471c7c951ab7` is live in `services`
+  mode. Its approved request `1ead570a-756e-4eef-aa1e-fc25d3239f01` completed
+  successfully at `2026-11-08T11:07:39Z`. The host's deployed-source map pins
   all eight service targets to this composition revision and their exact source
   commits.
 - Caddy and the Platform, Homepage, Docs, Identity, Diagnostics, Registry,
@@ -16,18 +16,18 @@
   `x86_64-pc-windows-gnullvm`. The service is reachable, but there are no
   promoted snapshots; the primary VPS remains the deployment-build fallback.
 - The latest host recovery archive is
-  `vapor-platform-recovery-20261108T100225Z-12ab9d8d2f1b.tar.gz` (4,828,556
+  `vapor-platform-recovery-20261108T110848Z-31f192a4f0c6.tar.gz` (4,816,179
   bytes; SHA-256
-  `b02d04bde8b8267e2f0dc2442d3d4f69ad31cf7d1a4274ea9c1552318f1b9e48`). The
+  `6fe0c90bc6993d2f94a919fd47e6300b48d3f00e630393abe6e982cdae616088`). The
   manifest includes the recovery kit and matches the latest pointer.
 - The owner-held `E:\VaporRecovery` sync completed successfully at
-  `2026-11-08T10:57:58Z`. It copied no archives, re-hashed all 43 indexed
-  archives, reported zero unverified archives and 206,553,954 bytes of archive
+  `2026-11-08T11:09:06Z`. It copied the current archive, re-hashed all 44
+  indexed archives, reported zero unverified archives and 211,370,133 bytes of archive
   payload, and validated the embedded recovery kit against source commit
-  `7204d749bb1ee555855f97a6b92d6e858e834cd1`. A one-time full checksum sweep
+  `31f192a4f0c6bb54e6c581e8b2d6471c7c951ab7`. A one-time full checksum sweep
   also found no checksum failures. The hourly task is registered and its last
   result was success; the next run was scheduled for 12:00 local time.
-- A direct host snapshot reports about 39.4 GiB free on `/`, 1 vCPU, and 1.8
+- A direct host snapshot reports 47 GiB free on `/`, 1 vCPU, and 1.8
   GiB RAM. The VPS remains suitable for its current deployment-build fallback,
   not for a concurrent guest compiler worker.
 - The two newest deployment requests were both successful. Older approved
