@@ -52,6 +52,13 @@ class StateOnlyRecoveryMarkerTests(unittest.TestCase):
         if os.name == "posix":
             self.root.chmod(0o700)
 
+    def make_interrupted_write(self) -> pathlib.Path:
+        path = self.root / ".state-only.abcd1234"
+        path.write_text('{"partial":', encoding="utf-8")
+        if os.name == "posix":
+            path.chmod(0o600)
+        return path
+
     def test_init_writes_a_small_secret_free_marker(self) -> None:
         result = self.run_tool(
             "init",
@@ -109,8 +116,7 @@ class StateOnlyRecoveryMarkerTests(unittest.TestCase):
 
     def test_read_recovers_from_a_stale_atomic_write_temporary_file(self) -> None:
         self.init()
-        interrupted_write = self.root / ".state-only.abcd1234"
-        interrupted_write.write_text('{"partial":', encoding="utf-8")
+        interrupted_write = self.make_interrupted_write()
         result = self.run_tool(
             "read",
             "--root",
@@ -126,8 +132,7 @@ class StateOnlyRecoveryMarkerTests(unittest.TestCase):
 
     def test_prepare_cleans_interrupted_first_write_and_allows_init(self) -> None:
         self.make_root()
-        interrupted_write = self.root / ".state-only.abcd1234"
-        interrupted_write.write_text('{"partial":', encoding="utf-8")
+        interrupted_write = self.make_interrupted_write()
         prepared = self.run_tool(
             "prepare",
             "--root",
