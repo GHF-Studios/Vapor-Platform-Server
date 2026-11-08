@@ -1818,8 +1818,7 @@ fn admin_page_title(current_path: &str) -> Option<&'static str> {
         .map(|section| section.name)
 }
 
-fn admin_shell_error(status: StatusCode, current_path: &str) -> Response {
-    let _ = current_path;
+fn admin_shell_error(status: StatusCode, _current_path: &str) -> Response {
     // Keep this error document independent of the shared navigation: it must
     // remain bounded even as the operator workbench grows.
     let body = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Admin page unavailable · Vapor Admin</title><link rel=\"stylesheet\" href=\"/admin/assets/admin.css\"></head><body><main id=\"admin-content\"><p class=\"eyebrow\">Platform</p><h1>Admin page unavailable</h1><p class=\"error\">The service returned an invalid or oversized page fragment.</p><a href=\"/admin\">Return to Platform</a></main></body></html>";
