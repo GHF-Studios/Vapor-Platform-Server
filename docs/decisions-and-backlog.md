@@ -45,11 +45,14 @@ while the implementation is still moving quickly.
   systems. Registry's first protected ecosystem lookup now uses the internal
   Identity decision route; every future protected resource route must adopt the
   same service-owned-policy boundary.
-- Registry is the target owner of Vapor's provider-neutral content catalog:
-  typed content identity, immutable releases, acquisition bindings, discovery,
-  and product compositions. Steam Workshop is one acquisition/distribution
-  provider; its IDs and tags do not define Vapor content types. Identity
-  supplies author and role authorization facts, not catalog records. Current
+- Registry is the target owner of Vapor's provider-neutral Projects and content
+  catalog: Project metadata, typed content identity, immutable releases,
+  acquisition bindings, discovery, and runnable compositions. A Project is the
+  workspace; a composition selects releases and prerequisites into a runnable
+  setup. Engine, Game, Packagepack, and Mod are content roles, not synonyms for
+  Project or composition. Steam Workshop is one acquisition/distribution
+  provider; its IDs and tags do not define Vapor content types. Identity owns
+  account and Project-access decisions, not catalog records. Current
   Registry storage is only provider/repository/ecosystem source topology; the
   typed catalog and its read/write lifecycle do not exist yet.
 - Server state must be restorable service-by-service and as a composed whole:

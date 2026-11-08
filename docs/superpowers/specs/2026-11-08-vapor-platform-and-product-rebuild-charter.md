@@ -16,13 +16,15 @@ This is pre-alpha. Weak implementations may be replaced outright. The acceptable
 flowchart TB
   Steam[Steam: Loo Cast depot content only] --> Locator[Small optional Vapor locator]
   Locator --> Runtime[Standalone Vapor install in Vapor home]
-  Runtime --> LC[Loo Cast product adapter]
-  Runtime --> MM[Mad Max product adapter]
+  Runtime --> LC[Loo Cast project adapter]
+  Runtime --> MM[Mad Max Modding project adapter]
   Runtime --> Sandbox[Developer sandbox]
   Runtime --> Tools[Vapor Studio / developer tools]
 
   Browser[Public browser] --> Public[Standalone download, getting started, docs]
-  Browser --> Admin[Authenticated Platform operator toolbench]
+  Browser --> User[Signed-in personal dashboard]
+  User --> Project[Authorized project workspaces]
+  Browser --> Admin[Root-authorized Platform operator toolbench]
   Admin --> Gateway[Shared admin gateway]
   Gateway --> Platform[Platform: deployment, host, recovery]
   Gateway --> Identity[Identity: accounts, roles, authorization, audit]
@@ -33,12 +35,36 @@ flowchart TB
   Main --> USB
 ```
 
-### Standalone runtime and product boundary
+### Project and content boundary
+
+- A **Project** is the top-level workspace and access scope for something
+  people build or manage, such as Loo Cast, Mad Max Modding, or a new game
+  built on Spacetime Engine. Project identity is distinct from a Steam AppID,
+  repository, content item, release, or installable composition. Registry is
+  the target owner of project metadata and content relationships; Identity
+  remains the authority for accounts and project access grants. The dashboard
+  presents these records but does not create a second source of truth.
+- A **composition** is a named runnable setup made from exact compatible
+  content releases and any required locally acquired sources. It is the
+  install/launch selection inside a Project, not another project identity.
+  Do not introduce a separate Product entity until an actual workflow needs a
+  distinct product grouping above compositions.
+- **Engine, Game, Packagepack, and Mod** are distinct content roles/types. A
+  Packagepack is not inherently a Game or a Project; a Game need not be shipped
+  as a Packagepack. One Packagepack archive may contain several typed content
+  entries. Content can be reused by compositions in more than one Project.
+- Steam AppIDs, Workshop item IDs, repository URLs, local install paths, and
+  Artifact release URLs are provider/source references. They describe where a
+  release is acquired, not its Vapor identity, content type, project identity,
+  or publication authority.
+
+### Standalone runtime and project boundary
 
 - Vapor is installed, updated, and uninstalled independently of Steam. Its managed binaries, source checkouts, toolchains, caches, settings, and state live under Vapor-owned user/system locations, not in a Steam app directory.
 - The Loo Cast Steam app root is limited to `App.vapor.toml` and one final
-  Packagepack artifact. That artifact represents the three first-party local
-  products: Spacetime Engine, Loo Cast game, and Loo Cast Packagepack. Do not
+  Packagepack archive. That archive contains the three first-party local
+  content entries: Spacetime Engine (Engine), Loo Cast (Game), and Loo Cast
+  Packagepack (Packagepack). Do not
   add a third loose root item. If Steam needs a direct “Vapor tools” launch
   option, resolve it inside the package/manifest launch contract or through
   Steam metadata, without bundling the Vapor runtime. The locator may only
@@ -46,8 +72,15 @@ flowchart TB
   guidance when Vapor is absent; it never installs Vapor implicitly. Steam
   content must not carry developer toolchains, build caches, or Vapor user
   state.
-- The three first-party Loo Cast products are depot-provided/local-only and cannot be made community-publishable by editing `App.vapor.toml` or another client manifest. The owning server policy is authoritative.
-- Mad Max remains a separately acquired local game. Vapor detects and mounts the user's installation, maintains derived/cache data under Vapor-owned paths, and installs the MadMaxModding adapter/packagepack reversibly. No proprietary game bytes are uploaded or redistributed.
+- The three first-party Loo Cast content entries are depot-provided/local-only
+  and cannot be made community-publishable by editing `App.vapor.toml` or
+  another client manifest. The owning server policy is authoritative.
+- Mad Max remains a separately acquired local game. Vapor Client's Mad Max
+  adapter detects and mounts the user's installation and maintains derived
+  data in Vapor-owned paths. It manages the separate `MadMaxModding`
+  Packagepack, which carries the reversible loader/bridge integration and
+  configuration; the adapter is client software, not Packagepack content. No
+  proprietary game bytes are uploaded or redistributed.
 - A clean-room uninstall is an explicit, inspectable operation that inventories
   Vapor-owned current and historical paths, Steam integration, registrations,
   tasks, source checkouts, caches, and unsaved data. It is not the default
@@ -61,8 +94,34 @@ flowchart TB
 
 - One physical VPS may run multiple independent service processes behind one public domain and a shared authenticated admin gateway. The Platform repo owns composition, fixed host operations, deployment orchestration, backup/import/recovery, and the shared shell. Each service repo owns its business rules, records, policy, and service-specific interface fragment.
 - The web dashboard is the normal graphical interface into these services; “service-owned authority” does not mean the owner must use the CLI. The gateway may present and invoke workflows, but never shadows owner records or bypasses their authorization/audit.
+- The target browser experience has separate audiences: public pages; a signed-in
+  personal dashboard; authorized Project workspaces; and the root-only Platform
+  operator dashboard. Public visitors do not receive admin navigation, page
+  layout, or operator scripts. A signed-in non-operator does not receive the
+  admin shell. Admin authorization must succeed before the shell is rendered,
+  not merely before protected records or actions load. Project pages require
+  project-scoped authorization, and owning services recheck it for every API
+  read or mutation. A route being hidden is not an authorization check.
+- Current gap: `/admin` can return the Platform shell before Identity confirms
+  operator authorization; current page-data and action checks do not protect
+  that chrome. Shell authorization must be implemented before this target is
+  met. Optional admin-origin isolation is a separate routing defense: it does
+  not replace authorization, and while it is unconfigured the admin route may
+  still share the public origin.
+- The personal dashboard is account-scoped and lists only the current user's
+  profile, installations/entitlements as provided by their owners, and Projects
+  they can access. A Project workspace composes owner-service views for its
+  content, releases, acquisition sources, and compositions; it does not copy
+  those records into a dashboard database. Product-specific UI is selected by
+  Project/content context, not by Steam AppID or Packagepack type.
 - Public pages serve Vapor downloads, clear product-aware getting-started flows, and working documentation. Admin tools are separate from public user flows. A narrowly scoped one-host emergency browser terminal is now in scope in a separate high-security dashboard area; it is not a general remote-shell product and remains disabled until its security prerequisites are met.
-- Product workbenches are specialized views for Mad Max, native Loo Cast, and an isolated developer Sandbox. Shared UI primitives are encouraged; product licenses, local source detection, and content policy remain separate.
+- Project workbenches are specialized views for Mad Max Modding, Loo Cast, and
+  other Projects. A developer Sandbox is a personal/developer workspace unless
+  it acquires a separately managed Project identity. Shared UI primitives are
+  encouraged; licenses, local source detection, and content policy remain
+  separate. Local game discovery, mounting, and launch stay in Vapor Client;
+  server workspaces manage only server-owned catalog, publication, account, and
+  release workflows.
 - The emergency browser terminal is equivalent to root SSH on the one Platform VPS. It requires root Identity authorization, a separate explicit short-lived session grant, a single connection, expiry and revocation, and lifecycle audit without transcript storage. This does not replace Strato VNC or owner SSH. The current shared public/admin origin remains a blocker: a same-origin script-injection flaw can issue requests as the root operator. Keep the host switch off until the admin origin/session boundary is isolated or Identity provides a verifiable step-up signal. Other privileged work remains bounded, named, and audited; do not turn this into arbitrary multi-host SSH, port forwarding, file transfer, or an always-on shell.
 
 ### Authority and identity
@@ -104,11 +163,13 @@ flowchart TB
 | Host provisioning, Caddy/systemd, whole-system export/import, fixed operations, deployment lifecycle | Platform Server | Identity/catalog/product business rules |
 | Accounts, login, linked providers, roles, grants, access policy, identity audit | Identity Server | Deployment queue or host filesystem |
 | Catalog, publication eligibility, source bindings | Registry Server | Steam app content or client-side publication claims |
+| Project identity, typed content relationships, releases and compositions | Registry Server (target) | Accounts/sessions/roles, acquisition-provider authority, or dashboard copies |
+| Project access and member grants | Identity Server (target) | Project/content records or service-owned business state |
 | Signed Vapor application releases | Artifact Server | Loo Cast/Mad Max game assets |
 | Signed Cargo target snapshots | Build Cache Server | Shared per-compile compiler cache, native-build job lifecycle, application releases, or generic user files |
 | Public homepage/docs service data and rendering | Homepage/Docs service repos | Platform composition and deployment policy |
 | Standalone install/update, local paths, product adapters, workbenches | Vapor Client and product adapter repos | VPS identity or host deploy authority |
-| Mad Max game integration | MM-Building-System | Vapor generic installer/update lifecycle |
+| Mad Max native integration and bridge source | MM-Building-System | Vapor generic installer/update lifecycle |
 | Native Loo Cast engine/game/packagepack source and depot packaging | Loo Cast repo | Vapor runtime or user's generic home |
 
 Registry and build terminology are further constrained by
@@ -118,6 +179,9 @@ Registry and build terminology are further constrained by
 
 - Do not distribute proprietary Loo Cast or Mad Max data through public Artifact, Registry, Build Cache, or diagnostics.
 - Do not use the editable client manifest as entitlement/publish authority.
+- Do not equate Project, composition, Game, Packagepack, Steam AppID, or
+  provider listing. Do not add redundant Product identity until a concrete
+  workflow requires a grouping distinct from Project and composition.
 - Do not let one server/service own every workflow or move service business logic into the Platform root.
 - Do not perform the production host wipe until a fresh-host restore drill and an owner-reviewed exact deletion inventory exist.
 - Do not indiscriminately clean dirty checkouts, Ghidra databases, source caches, or game directories. Provide a reviewed clean-room operation and classify each path first.
@@ -142,6 +206,10 @@ Registry and build terminology are further constrained by
 - Steam depot contains only the agreed Loo Cast content artifact/manifest/locator and no Vapor-managed runtime, toolchains, state, or caches.
 - Vapor uninstall and full clean-room purge report exact paths and have separately tested preserve/export and delete modes.
 - Public download/getting-started/docs links work; Platform admin pages are task-oriented, compact, accessible, and have real unavailable/failed/partial states.
+- Public, personal dashboard, Project workspace, and operator experiences have
+  distinct route/layout boundaries. Unauthenticated visitors cannot retrieve
+  admin chrome; signed-in non-operators cannot retrieve it either. Project
+  access is checked by Identity and by the owning service API.
 - A browser cannot obtain arbitrary shell access. Privileged operations are typed, owner-gated, audited, and attributable.
 - The emergency console stays inaccessible unless its host gate is explicitly enabled, root authorization succeeds, and the separate session grant is active. A clean security review records the admin-origin/step-up prerequisite before anyone enables it.
 - Recovery on a disposable fresh Ubuntu host verifies service-owned state,

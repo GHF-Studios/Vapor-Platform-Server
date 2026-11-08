@@ -5,18 +5,19 @@ shared compiler caching, and native build execution. This describes the intended
 system and calls out the parts that are not implemented. It does not make a
 future capability appear available merely because a service or admin tab exists.
 
-## The four different things called “content” or “build output”
+## Project workspaces, content, and build output
 
-Vapor needs distinct records and lifecycles for these concepts. They may refer to
-one another by stable IDs and digests, but one record must not impersonate
-another.
+Vapor separates the workspace people manage from the typed content and runnable
+setups inside it. These records may refer to one another by stable IDs and
+digests, but one record must not impersonate another.
 
 | Concept | Canonical meaning | Owner |
 | --- | --- | --- |
+| Project | Top-level workspace/access scope for a managed effort such as Loo Cast, Mad Max Modding, or a new game | Registry owns project metadata and content relationships (target); Identity owns membership/access grants (target) |
 | Ecosystem source topology | Repositories and checkout requirements used to develop or reconstruct an ecosystem | Registry (current implementation) |
 | Vapor content identity | A named, typed, versioned thing that can be installed, mounted, composed, or referenced | Registry (target; not implemented) |
 | Distribution/acquisition binding | Where a particular release is obtained: Vapor Artifact, Steam Workshop, a locally installed Steam depot, or another declared source | Registry records the binding and policy; the provider remains authoritative for acquisition |
-| Product composition | A compatible set of content releases and locally acquired prerequisites that form a runnable product | Registry (target; not implemented) |
+| Composition | A named runnable setup that selects compatible exact content releases and locally acquired prerequisites | Registry (target; not implemented) |
 | Application release | A signed Vapor executable/package release | Artifact Server |
 | Build snapshot | A signed Cargo target directory snapshot restored to accelerate a developer workspace | Build Cache service (currently implemented as snapshot storage/validation/promotion) |
 | Shared compiler cache | Reusable compiler results keyed by the full toolchain/target/flags/environment identity (for example, `sccache`) | Not selected or implemented |
@@ -48,7 +49,13 @@ compiler VMs. A separate measured worker is therefore an actual prerequisite
 for official VM-produced target snapshots; the admin tab or service health
 cannot make that capacity exist.
 
-## Content identity is not a repository or a Workshop item
+## Workspace identity, content identity, and acquisition are separate
+
+A Project is the workspace people manage. It is not a Steam AppID, source
+repository, single content entry, or runnable install. Registry is the target
+owner of Project metadata and links to content; Identity grants access to
+Projects. A dashboard may present these records together, but does not copy
+them into a second database.
 
 A content ID names a Vapor concept independently of its source repository or
 distribution provider. A source repository may contain many content items; one
@@ -58,7 +65,8 @@ carry a release without defining its Vapor type or permissions.
 The target Registry model therefore separates:
 
 1. **Content record:** stable namespaced ID, display metadata, explicit Vapor
-   type, owner/author identity, visibility, and lifecycle state.
+   role/type (for example Engine, Game, Packagepack, or Mod), owner/author
+   identity, visibility, and lifecycle state.
 2. **Source references:** zero or more pinned repository/revision/subpath
    references. Source is optional for locally acquired proprietary content.
 3. **Release:** immutable version identity plus a content digest and declared
@@ -66,25 +74,44 @@ The target Registry model therefore separates:
 4. **Acquisition binding:** provider and provider-native identifier for a
    particular release, with provenance and an explicit policy class such as
    public upload, first-party depot, Workshop, or external local source.
-5. **Composition:** a named product set that references exact releases and
-   prerequisites. Installation must resolve availability and compatibility
-   before mutating the live game directory.
+5. **Composition:** a named runnable setup inside a Project that references
+   exact releases and prerequisites. Installation must resolve availability
+   and compatibility before mutating a live application directory.
+
+An Engine is a reusable runtime/source layer; a Game is game-specific
+application content; a Packagepack is a packaging/integration content role; a
+Mod is an extension targeting an Engine, Game, or other content. These roles do
+not imply one another: a Packagepack is not inherently a Game or Project, and a
+Game need not be delivered as a Packagepack. A Packagepack archive may carry
+multiple typed content entries. Compositions select the needed entries and
+their sources. Do not introduce a separate Product identity until a concrete
+workflow needs a grouping different from Project and Composition.
 
 Steam Workshop is one possible distribution provider, not the content catalog
 and not the source of Vapor's type system. A Workshop item must resolve to a
 Vapor content ID and release before Vapor treats it as typed content. Steam
-depot files are locally acquired prerequisites: Vapor may index and mount them,
-but the server must never accept an upload or serve a download of those bytes.
+depots may provide locally acquired content entries and/or prerequisites;
+Vapor may index and mount them, but the server must never accept an upload or
+serve a download of proprietary depot bytes.
 First-party or licensed content must be authorized from server-owned policy,
 not from a client-supplied manifest assertion.
 
-For Mad Max, the intended mapping is expressed through typed content records:
-the game executable is an external engine prerequisite; the mod adapter and
-loader integration are package-pack content; mod scripts and mounted additions
-are game/mod content. Loo Cast can ship its first-party engine, game, and
-package-pack together through its own Steam depot and map those local files as
-depot-provided content. These examples are mappings, not implemented Registry
-records yet.
+For Mad Max Modding, the Project workspace manages the integration and modding
+ecosystem. The separately acquired Mad Max executable and original runtime
+files are an external Engine source. Vapor Client's Mad Max adapter is client
+software that detects and manages the installation; it is separate from the
+installable `MadMaxModding` Packagepack, which carries the reversible
+loader/bridge integration and configuration. Scripts and mounted additions
+are Game or Mod content as their actual role dictates. The composition
+references the required local Mad Max source without uploading it. For Loo
+Cast, the Loo Cast Project
+contains distinct Spacetime Engine (Engine), Loo Cast (Game), and Loo Cast
+Packagepack (Packagepack) content entries. Its Steam depot binding is the
+trusted local acquisition source for those entries; the depot/AppID does not
+define their Vapor identities. A new game built on Spacetime Engine is a
+separate Project and composition that can reference the shared Engine release.
+These mappings are the accepted target semantics; typed Registry records and
+project access grants are not implemented yet.
 
 ## Build lifecycle and authority
 

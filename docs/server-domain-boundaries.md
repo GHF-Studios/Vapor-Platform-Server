@@ -38,11 +38,15 @@ existing service just to avoid naming a new boundary.
 ## Accepted Vapor content catalog authority (target)
 
 The canonical, provider-neutral Vapor content catalog belongs to the Registry
-service. Registry owns typed content identity, immutable releases, acquisition
-bindings, discovery metadata, and product compositions. Steam Workshop is one
-provider that can carry a release; it does not define the Vapor content ID,
-content type, license, composition, or publication policy. Steam tags and
-descriptions are provider metadata and discovery hints only.
+service. Registry owns Project metadata, typed content identity, immutable
+releases, acquisition bindings, discovery metadata, and runnable compositions.
+Identity owns Project membership/access grants. A Project is the top-level
+workspace; a composition selects exact releases and prerequisites into a
+runnable setup within it. Engine, Game, Packagepack, and Mod are distinct
+content roles; a Packagepack is not itself a Project or necessarily a Game.
+Steam Workshop is one provider that can carry a release; it does not define the
+Vapor content ID, content type, license, composition, or publication policy.
+Steam tags and descriptions are provider metadata and discovery hints only.
 
 Identity remains the canonical source of people, linked Steam/GitHub accounts,
 roles, and authorization facts. Registry asks Identity (or consumes
@@ -80,6 +84,13 @@ is defined in [`vapor-content-and-build-domain-contract.md`](vapor-content-and-b
 | Cross-domain admin UI | Implemented shared shell | `/admin` navigation; owner-routed Approvals, Deployments, SSH Access, Hosting, and History pages; Identity, Registry, and Artifact own protected sections | Replacing domain services or storing canonical domain state |
 
 ## Admin authority, request lifecycle, and history
+
+The public site, signed-in personal dashboard, authorized Project workspaces,
+and private Platform operator shell are separate audience scopes. The admin
+shell must be authorized before its navigation or operator scripts are
+rendered; current `/admin` still exposes the shell before its protected data
+check, so this remains an implementation gap. Admin-origin isolation is an
+additional routing defense, not a substitute for shell authorization.
 
 The shared admin UI is a presentation and navigation layer. It does not decide
 who may perform an action, own another service's request state, or create a
