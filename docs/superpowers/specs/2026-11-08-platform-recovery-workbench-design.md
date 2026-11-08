@@ -43,6 +43,9 @@ host.” It does not launch restore, export, wipe, or shell operations.
 - Timer activity and its next scheduled time are shown as bounded display
   strings reported by systemd. Missing or unreadable state is “Unknown” or
   “Unavailable,” never “healthy.”
+- Archive-root state distinguishes a readable folder, a missing folder, and an
+  unavailable folder. A permission or I/O error must not be presented as “no
+  archive found.”
 - Owner USB synchronization is reported as “Not reported to Platform” until a
   separately designed authenticated local sync report exists.
 - Fresh-host restore is reported as “Not recorded” until a disposable-host

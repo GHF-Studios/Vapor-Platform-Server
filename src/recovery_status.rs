@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub(crate) struct RecoveryStatus {
     pub schema_version: u8,
+    pub archive_root_state: String,
     pub timer_state: String,
     pub next_run_display: Option<String>,
     pub archive_count: u32,
@@ -24,13 +25,15 @@ pub(crate) struct LatestArchive {
 impl RecoveryStatus {
     pub(crate) fn validate(&self) -> bool {
         self.schema_version == 1
+            && matches!(
+                self.archive_root_state.as_str(),
+                "available" | "missing" | "unavailable"
+            )
             && matches!(self.timer_state.as_str(), "active" | "inactive" | "unknown")
             && self
                 .next_run_display
                 .as_deref()
-                .is_none_or(|value| {
-                    value.len() <= 256 && !value.chars().any(char::is_control)
-                })
+                .is_none_or(|value| value.len() <= 256 && !value.chars().any(char::is_control))
             && self.archive_count <= 10_000
             && matches!(self.freshness.as_str(), "recent" | "stale" | "unknown")
             && self.latest_archive.as_ref().is_none_or(|archive| {
@@ -43,5 +46,11 @@ impl RecoveryStatus {
                         .all(|byte| byte.is_ascii_hexdigit())
             })
             && (self.latest_archive.is_some() || self.freshness == "unknown")
+            && (self.latest_archive.is_none()
+                || (self.archive_root_state == "available" && self.archive_count > 0))
+            && (self.archive_root_state == "available"
+                || (self.latest_archive.is_none()
+                    && self.archive_count == 0
+                    && self.freshness == "unknown"))
     }
 }

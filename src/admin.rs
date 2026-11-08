@@ -1676,19 +1676,20 @@ const JS: &str = r#"
         const response = await fetch('/api/admin/recovery/status', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
         if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Recovery status is unavailable (HTTP ${response.status}).`);
         const data = await response.json();
-        if (data?.schema_version !== 1 || !['active', 'inactive', 'unknown'].includes(data.timer_state) || !['recent', 'stale', 'unknown'].includes(data.freshness) || !Number.isInteger(data.archive_count) || data.archive_count < 0 || (data.latest_archive !== null && (!data.latest_archive || !Number.isFinite(data.latest_archive.modified_at_unix) || !Number.isFinite(data.latest_archive.size_bytes)))) throw new Error('The recovery service returned an invalid status.');
+        if (data?.schema_version !== 1 || !['available', 'missing', 'unavailable'].includes(data.archive_root_state) || !['active', 'inactive', 'unknown'].includes(data.timer_state) || !['recent', 'stale', 'unknown'].includes(data.freshness) || !Number.isInteger(data.archive_count) || data.archive_count < 0 || (data.latest_archive !== null && (!data.latest_archive || !Number.isFinite(data.latest_archive.modified_at_unix) || !Number.isFinite(data.latest_archive.size_bytes)))) throw new Error('The recovery service returned an invalid status.');
         const latest = data.latest_archive;
-        const freshnessText = data.freshness === 'recent' ? 'Recent archive found — validation not verified' : data.freshness === 'stale' ? 'Latest archive is stale' : latest || data.archive_count > 0 ? 'Archive time unknown' : 'No archive found';
+        const freshnessText = data.archive_root_state === 'missing' ? 'Archive folder has not been created' : data.archive_root_state === 'unavailable' ? 'Archive folder could not be read' : data.freshness === 'recent' ? 'Recent archive found — validation not verified' : data.freshness === 'stale' ? 'Latest archive is stale' : latest || data.archive_count > 0 ? 'Archive time unknown' : 'No archive found';
         const freshnessState = data.freshness === 'recent' ? 'warning' : 'danger';
         const modified = latest ? new Date(latest.modified_at_unix * 1000).toLocaleString() : 'Not available';
         recoveryFacts.replaceChildren(
+          fact('Archive folder', data.archive_root_state === 'available' ? 'Readable' : data.archive_root_state === 'missing' ? 'Missing' : 'Unavailable', data.archive_root_state === 'available' ? '' : 'danger'),
           fact('Archive evidence', freshnessText, freshnessState),
           fact('Latest snapshot', latest ? `${humanSize(latest.size_bytes)} · ${modified}` : 'Not available'),
           fact('Source revision', latest?.commit_short || 'Not available'),
           fact('Checksum sidecar', latest ? (latest.checksum_sidecar_present ? 'Present; not rechecked here' : 'Missing') : 'Not available', latest?.checksum_sidecar_present ? 'warning' : 'danger'),
           fact('Export timer', data.timer_state === 'active' ? 'Active' : data.timer_state === 'inactive' ? 'Inactive' : 'Unknown', data.timer_state === 'active' ? 'warning' : 'danger'),
           fact('Next scheduled run', typeof data.next_run_display === 'string' && data.next_run_display ? data.next_run_display : 'Not available'),
-          fact('Snapshots found', String(data.archive_count))
+          fact('Snapshots found', data.archive_root_state === 'available' ? String(data.archive_count) : data.archive_root_state === 'missing' ? '0' : 'Unknown')
         );
         recoveryFeedback.textContent = 'Status read from the VPS recovery helper. Archive recency is based on file time only.';
       } catch (error) {

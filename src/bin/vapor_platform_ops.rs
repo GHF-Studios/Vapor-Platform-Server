@@ -320,45 +320,55 @@ mod unix_impl {
         {
             return Err(());
         }
-        if std::fs::symlink_metadata(&root)
-            .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
-        {
-            return Err(());
-        }
+        let archive_root_state = match std::fs::symlink_metadata(&root) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(())
+            }
+            Ok(_) => "available",
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing",
+            Err(_) => "unavailable",
+        };
         let mut archive_count = 0u32;
         let mut latest: Option<(PathBuf, i64, u64)> = None;
-        if let Ok(entries) = std::fs::read_dir(root) {
-            for (index, entry) in entries.enumerate() {
-                if index >= MAX_ARCHIVES {
-                    return Err(());
-                }
-                let entry = entry.map_err(|_| ())?;
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if recovery_archive_commit(&name).is_none() {
-                    continue;
-                }
-                let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| ())?;
-                if !metadata.file_type().is_file() {
-                    continue;
-                }
-                if metadata.len() == 0 {
-                    continue;
-                }
-                archive_count = archive_count.saturating_add(1);
-                let modified_at_unix = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                    .and_then(|duration| i64::try_from(duration.as_secs()).ok());
-                let Some(modified_at_unix) = modified_at_unix.filter(|value| *value > 0) else {
-                    continue;
-                };
-                if latest
-                    .as_ref()
-                    .is_none_or(|(_, current, _)| modified_at_unix > *current)
-                {
-                    latest = Some((entry.path(), modified_at_unix, metadata.len()));
+        if archive_root_state == "available" {
+            let entries = match std::fs::read_dir(&root) {
+                Ok(entries) => Some(entries),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => return Err(()),
+            };
+            if let Some(entries) = entries {
+                for (index, entry) in entries.enumerate() {
+                    if index >= MAX_ARCHIVES {
+                        return Err(());
+                    }
+                    let entry = entry.map_err(|_| ())?;
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if recovery_archive_commit(&name).is_none() {
+                        continue;
+                    }
+                    let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| ())?;
+                    if !metadata.file_type().is_file() {
+                        continue;
+                    }
+                    if metadata.len() == 0 {
+                        continue;
+                    }
+                    archive_count = archive_count.saturating_add(1);
+                    let modified_at_unix = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                        .and_then(|duration| i64::try_from(duration.as_secs()).ok());
+                    let Some(modified_at_unix) = modified_at_unix.filter(|value| *value > 0) else {
+                        continue;
+                    };
+                    if latest
+                        .as_ref()
+                        .is_none_or(|(_, current, _)| modified_at_unix > *current)
+                    {
+                        latest = Some((entry.path(), modified_at_unix, metadata.len()));
+                    }
                 }
             }
         }
@@ -423,6 +433,7 @@ mod unix_impl {
 
         Ok(recovery_status::RecoveryStatus {
             schema_version: 1,
+            archive_root_state: archive_root_state.to_owned(),
             timer_state: timer_state.to_owned(),
             next_run_display,
             archive_count,

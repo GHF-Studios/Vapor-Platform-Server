@@ -39,7 +39,7 @@
 
 **Interfaces:**
 - Produces: exact helper invocation `/usr/local/libexec/vapor-platform-ops recovery-status`; no additional arguments are accepted.
-- JSON fields: `schema_version`, `timer_state`, bounded `next_run_display`, `archive_count`, `latest_archive` (`modified_at_unix`, `size_bytes`, `commit_short`, `checksum_sidecar_present`), and `freshness` (`recent`, `stale`, or `unknown`). A timestamp over five minutes in the future is unknown. Recent means recent by mtime only, not validated.
+- JSON fields: `schema_version`, `archive_root_state` (`available`, `missing`, or `unavailable`), `timer_state`, bounded `next_run_display`, `archive_count`, `latest_archive` (`modified_at_unix`, `size_bytes`, `commit_short`, `checksum_sidecar_present`), and `freshness` (`recent`, `stale`, or `unknown`). A timestamp over five minutes in the future is unknown. Recent means recent by mtime only, not validated.
 
 - [ ] Cover missing archive root, valid archive + sidecar, symlink exclusion, future/stale timestamps, malformed/missing metadata, and fixed-path command output.
 - [ ] Implement fixed-path, bounded archive enumeration and systemd timer observation; emit only the documented JSON fields.
