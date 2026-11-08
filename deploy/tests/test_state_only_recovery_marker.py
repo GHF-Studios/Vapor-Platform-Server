@@ -47,6 +47,11 @@ class StateOnlyRecoveryMarkerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def make_root(self) -> None:
+        self.root.mkdir()
+        if os.name == "posix":
+            self.root.chmod(0o700)
+
     def test_init_writes_a_small_secret_free_marker(self) -> None:
         result = self.run_tool(
             "init",
@@ -120,7 +125,7 @@ class StateOnlyRecoveryMarkerTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["phase"], "building")
 
     def test_prepare_cleans_interrupted_first_write_and_allows_init(self) -> None:
-        self.root.mkdir()
+        self.make_root()
         interrupted_write = self.root / ".state-only.abcd1234"
         interrupted_write.write_text('{"partial":', encoding="utf-8")
         prepared = self.run_tool(
@@ -146,7 +151,7 @@ class StateOnlyRecoveryMarkerTests(unittest.TestCase):
         self.assertEqual(initialized.returncode, 0, initialized.stderr)
 
     def test_prepare_rejects_unknown_or_symlink_entries(self) -> None:
-        self.root.mkdir()
+        self.make_root()
         unknown = self.root / ".state-only.not-a-temp"
         unknown.write_text("preserve", encoding="utf-8")
         result = self.run_tool(
@@ -219,7 +224,7 @@ class StateOnlyRecoveryMarkerTests(unittest.TestCase):
         self.assertFalse(self.root.exists())
 
     def test_init_refuses_to_adopt_an_unrelated_existing_directory(self) -> None:
-        self.root.mkdir()
+        self.make_root()
         unrelated = self.root / "operator-data"
         unrelated.write_text("preserve")
         result = self.run_tool(
