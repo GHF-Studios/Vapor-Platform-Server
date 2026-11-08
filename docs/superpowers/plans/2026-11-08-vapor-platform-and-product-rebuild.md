@@ -27,7 +27,7 @@
 - Separate current actionable queues from execution records and historical audit. A saved approval, queued operation, running operation, and terminal result must remain distinct with one visible correlated operation ID.
 - Keep the shared gateway shell/navigation; use service-owned fragments/APIs and owner-owned audits. Define a stable shared component contract only after the current fragment contract is documented and tested.
 - Replace giant catch-all pages with task workbenches: `Approvals`, `Deployments`, `Temporary Access`, `Identity`, `Services`, `Recovery`, and `History`. Keep only actionable summary cards on the landing page. Do not duplicate one request in several queues without clear links/state.
-- SSH UI requests public-key authorization from requester-side generated keys; show fingerprint, requested scope/duration, granted scope/duration, account, expiry, and audit. No private-key display and no web shell.
+- SSH UI requests public-key authorization from requester-side generated keys; show fingerprint, requested scope/duration, granted scope/duration, account, expiry, and audit. No private-key display. The one-host root emergency browser console is a separate high-security workbench with its own short-session and origin/step-up gates; it is not part of ordinary SSH requests and must stay disabled until those gates are satisfied.
 - Audit every button against API semantics, authorization, retries/idempotency, and visible result. Add keyboard, focus, narrow viewport, loading, empty, partial, forbidden, and service-down states.
 - **Exit:** end-to-end browser tests for each workflow and an adversarial security review of privilege boundaries.
 

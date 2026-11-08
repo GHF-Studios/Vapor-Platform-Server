@@ -75,7 +75,7 @@ flowchart TB
   direction, but hold account migration until the owner confirms the final
   model and the migration is designed. Provider linking must not silently
   create duplicate Vapor identities.
-- SSH access is requested by the machine/requester, with a public key generated and retained locally; the platform stores only the public key/fingerprint and bounded grant metadata. Submission authorization and actual host grant are distinct decisions. Do not display or transmit private keys. Root-level web terminal access is excluded.
+- SSH access is requested by the machine/requester, with a public key generated and retained locally; the platform stores only the public key/fingerprint and bounded grant metadata. Submission authorization and actual host grant are distinct decisions. Do not display or transmit private keys. The narrow one-host emergency browser console described above is the explicit root-terminal exception; it is not generic SSH access and must remain disabled until its security gate is satisfied.
 
 ### Recovery and worker model
 
