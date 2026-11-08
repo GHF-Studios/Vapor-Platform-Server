@@ -21,7 +21,12 @@ fi
 # Add an exact version only after reviewing a fixed upstream release and
 # recording that review in the emergency-console design document.
 APPROVED_TTYD_VERSIONS=()
-TTYD_VERSION="$(/usr/bin/ttyd --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+TTYD_VERSION="unknown"
+if TTYD_VERSION_OUTPUT="$(/usr/bin/ttyd --version 2>&1)"; then
+  if [[ "${TTYD_VERSION_OUTPUT}" =~ ^ttyd\ version\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    TTYD_VERSION="${BASH_REMATCH[1]}"
+  fi
+fi
 TTYD_VERSION_APPROVED=false
 for approved_version in "${APPROVED_TTYD_VERSIONS[@]}"; do
   if [ "${TTYD_VERSION}" = "${approved_version}" ]; then

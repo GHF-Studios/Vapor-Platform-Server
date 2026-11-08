@@ -1947,18 +1947,15 @@ mod unix_impl {
     }
 
     fn ttyd_version_is_approved(output: &str) -> bool {
-        output.split_whitespace().any(|token| {
-            let token = token.strip_prefix('v').unwrap_or(token);
-            let candidate = token.trim_matches(|character: char| {
-                matches!(character, ',' | ';' | '(' | ')')
-            });
-            let parts = candidate.split('.').collect::<Vec<_>>();
-            parts.len() == 3
-                && parts
-                    .iter()
-                    .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-                && APPROVED_TTYD_VERSIONS.contains(&candidate)
-        })
+        let Some(candidate) = output.strip_prefix("ttyd version ") else {
+            return false;
+        };
+        let parts = candidate.split('.').collect::<Vec<_>>();
+        parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            && APPROVED_TTYD_VERSIONS.contains(&candidate)
     }
 
     async fn expire(id: &str) -> Result<(), &'static str> {

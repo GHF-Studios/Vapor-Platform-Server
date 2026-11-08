@@ -1122,3 +1122,23 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   `admin.vapor.ghf-studios.site` currently has no DNS record; no DNS, Caddy, or
   Identity settings were changed. Origin isolation therefore remains planned,
   not implemented.
+
+## Root console version-parser review (2026-11-08)
+
+- The runtime helper and optional installer now accept only the exact upstream
+  `ttyd version <major>.<minor>.<patch>` output line. They do not search
+  arbitrary output for a semver token, so a linked-library version cannot be
+  mistaken for ttyd's version. The installer also requires the version command
+  to exit successfully before considering its output. Unknown or additional
+  output fails closed. Both approved-version lists remain empty.
+- The parser was checked against upstream `src/server.c`, which prints
+  `ttyd version %s` for `--version`. A read-only review found and prompted the
+  installer exit-status correction; no other concrete parser bypass was
+  identified.
+- No ttyd release has been approved or installed, and no production deploy,
+  service start, origin change, or Identity change was made. The emergency
+  console remains unavailable on the live host and must remain disabled until
+  the dependency, origin, and step-up gates are satisfied.
+- Branch CI was green through `f88576f` before this parser patch. Recheck the
+  current head's CI before merging; the documented compile and shell-syntax
+  checks are not runtime validation.
