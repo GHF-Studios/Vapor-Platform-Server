@@ -4,9 +4,10 @@ This folder is copied from one exact recovery archive and is matched to the
 source commit recorded by that archive. Keep the complete folder beside the
 archive and its .sha256 file when moving recovery data to a fresh Ubuntu host.
 
-1. Provision a fresh supported Ubuntu x86_64 host with Python 3.11 or newer,
-   then restore SSH access. Ubuntu 24.04 or newer supplies this preflight
-   runtime by default.
+1. Provision a fresh Ubuntu x86_64 host with Python 3.11 or newer, then
+   restore SSH access. The host must use the same Ubuntu release recorded in
+   the archive (the same major.minor VERSION_ID), and the recorded Rust host
+   triple must match. A newer Ubuntu release is not automatically compatible.
 2. Copy the selected vapor-platform-recovery-*.tar.gz archive, its matching
    .sha256 file, and this complete recovery-kit folder to the host. The
    sidecar must contain one SHA-256 entry naming that exact archive.

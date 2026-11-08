@@ -55,6 +55,16 @@ def make_bundle(path: pathlib.Path, *, mode: str = "services", source_commit: st
 
 
 class RecoveryBundleMetadataTests(unittest.TestCase):
+    def test_recovery_guide_requires_the_bundle_recorded_ubuntu_release(self) -> None:
+        guide = " ".join(
+            (REPO_ROOT / "deploy" / "scripts" / "README.txt")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+
+        self.assertIn("same Ubuntu release recorded in the archive", guide)
+        self.assertNotIn("Ubuntu 24.04 or newer", guide)
+
     def test_archive_checksum_requires_one_entry_naming_the_selected_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             bundle = pathlib.Path(temporary) / "recovery.tar.gz"
