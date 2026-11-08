@@ -40,7 +40,7 @@ exit 0
     & $git -C $sourceRoot config user.name 'Vapor USB fixture'
     & $git -C $sourceRoot config user.email 'fixture@example.invalid'
     $kitFiles = @(
-        'recover-state-only-host.sh', 'restore-state-only.sh', 'recovery_bundle_metadata.py',
+        'recover-state-only-host.sh', 'state_only_recovery_marker.py', 'restore-state-only.sh', 'recovery_bundle_metadata.py',
         'state-bundle-validate.py', 'deployed_source_manifest.py', 'service_deploy_map.py',
         'validate-state-databases.py', 'README-state-only-recovery.txt'
     )

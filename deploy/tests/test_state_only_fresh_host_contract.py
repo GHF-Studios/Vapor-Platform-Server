@@ -34,7 +34,7 @@ class StateOnlyFreshHostContractTests(unittest.TestCase):
 
     def test_source_is_checked_out_exactly_and_application_activation_follows_state_import(self) -> None:
         script = (REPO_ROOT / "deploy/scripts/recover-state-only-host.sh").read_text()
-        checkout = 'git -C "$TEMP_SOURCE" checkout --detach "$REVISION"'
+        checkout = 'git -C "$SOURCE_ROOT" checkout --detach "$REVISION"'
         bootstrap = 'bash "$DEPLOY_ROOT/deploy/scripts/bootstrap-ubuntu.sh"'
         staged_deploy = 'bash "$DEPLOY_ROOT/deploy/scripts/deploy.sh" --approved "$REVISION"'
         restore = 'restore-state-only.sh" --bundle "$BUNDLE" --yes --fresh-host'

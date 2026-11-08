@@ -174,6 +174,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $kitFiles = @(
     'recover-state-only-host.sh',
+    'state_only_recovery_marker.py',
     'restore-state-only.sh',
     'recovery_bundle_metadata.py',
     'state-bundle-validate.py',

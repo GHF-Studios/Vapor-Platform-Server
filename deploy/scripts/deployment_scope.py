@@ -24,6 +24,7 @@ IGNORED_ROOT_FILES = {
 OFFLINE_RECOVERY_PATHS = {
     "deploy/scripts/recover-fresh-host.sh",
     "deploy/scripts/recover-state-only-host.sh",
+    "deploy/scripts/state_only_recovery_marker.py",
     "deploy/scripts/backup-state-only-to-usb.ps1",
 }
 PLATFORM_SERVER_SOURCES = {

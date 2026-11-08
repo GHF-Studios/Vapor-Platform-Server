@@ -12,11 +12,17 @@ exact Platform source revision needed to rebuild the host.
 
    bash ./recover-state-only-host.sh --bundle /path/to/vapor-platform-state.tar.gz --yes
 
-The recovery validates the archive before installing packages or changing
-application paths. It rebuilds the pinned Platform checkout, asks for public and
-admin domains, and prompts for provider credentials without echoing them. It
-then imports only the archive's state. Host setup is recreated from source.
+The recovery kit and archive are checked before installing packages or changing
+application paths. The first run creates a root-owned, secret-free marker pinned
+to the archive digest and exact Platform revision, then rebuilds the matching
+checkout and imports only the archive's state. Provider credentials are entered
+without echoing. If setup is interrupted, rerun the same command with `--resume`
+and the same archive; the script validates the marker and staged checkout before
+continuing. It refuses to adopt unrelated host data.
 
-This is an initial one-shot fresh-host workflow. If it stops after setup begins,
-inspect the host and reinstall/clean it before starting again. Keep the existing
-USB archive and kit until a fresh-host restore has been completed and verified.
+After restore, complete browser sign-in and verify the owner dashboard, then run:
+
+   bash ./recover-state-only-host.sh --bundle /path/to/vapor-platform-state.tar.gz --yes --resume --confirm-provider-checks
+
+The marker is removed only after readiness checks and this explicit owner
+confirmation. Keep the USB archive and kit until this final step succeeds.
