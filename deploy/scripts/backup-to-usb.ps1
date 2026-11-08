@@ -553,32 +553,67 @@ if ($allArchiveBytes -gt $MaxStoredBytes) {
 $allArchives = @(Get-ChildItem -LiteralPath $destination -File -Filter 'vapor-platform-recovery-*.tar.gz' |
     Sort-Object Name)
 $unverifiedArchives = @($allArchives | Where-Object { $_.Name -notin $verifiedArchives.Name })
+$lastSuccessUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$retainedPayloadBytes = [long]((Get-ChildItem -LiteralPath $destination -File -Filter 'vapor-platform-recovery-*.tar.gz' |
+    Measure-Object -Property Length -Sum).Sum)
 
 $report = [ordered]@{
     schema_version = 1
     server = $Server
-    last_success_utc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    last_success_utc = [DateTimeOffset]::FromUnixTimeSeconds($lastSuccessUnix).UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ')
     latest_archive = $latestArchive
+    latest_archive_sha256 = [string]$latestPointer.sha256
     copied_this_run = $copied
     hash_checks_this_run = $hashChecks
     retained_archive_files = $allArchives.Count
     content_verified_this_run = $verifiedArchives.Count
-    retained_archive_payload_bytes = [long]((Get-ChildItem -LiteralPath $destination -File -Filter 'vapor-platform-recovery-*.tar.gz' |
-        Measure-Object -Property Length -Sum).Sum)
+    retained_archive_payload_bytes = $retainedPayloadBytes
     unverified_archives = $unverifiedArchives.Count
     latest_rehashed = $true
     recovery_kit_available = $recoveryKitAvailable
     recovery_kit_preflight_validation = $recoveryKitPreflightValidation
     recovery_kit_source_commit = $recoveryKitCommit
+    platform_reported = $false
     verification_policy = 'all indexed archives rehashed on every sync; pruning requires full verification'
 }
 $reportTemp = Join-Path $incoming 'last-sync.json.partial'
 $reportPath = Join-Path $destination 'last-sync.json'
 $report | ConvertTo-Json -Compress | Set-Content -LiteralPath $reportTemp -Encoding utf8
 Move-Item -LiteralPath $reportTemp -Destination $reportPath -Force
+
+# Report only a fixed allowlist after the USB copy and its hashes are verified.
+# SSH reporting is supplemental: transport failure must not undo the local sync.
+$ownerReport = [ordered]@{
+    schema_version = 1
+    last_success_unix = $lastSuccessUnix
+    latest_archive = $latestArchive
+    latest_archive_sha256 = [string]$latestPointer.sha256
+    verified_archive_count = [int]$verifiedArchives.Count
+    unverified_archive_count = [int]$unverifiedArchives.Count
+    retained_archive_payload_bytes = $retainedPayloadBytes
+    latest_rehashed = $true
+    recovery_kit_available = [bool]$recoveryKitAvailable
+    recovery_kit_preflight_validation = [bool]$recoveryKitPreflightValidation
+    recovery_kit_source_commit = $recoveryKitCommit
+}
+$ownerReportJson = $ownerReport | ConvertTo-Json -Compress
+$ownerReportBase64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ownerReportJson))
+$ownerRemoteCommand = "python3 /opt/vapor-platform-server/deploy/scripts/record_owner_usb_sync.py --base64 $ownerReportBase64"
+try {
+    & $ssh @sshOptions $target $ownerRemoteCommand | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "SSH exited with status $LASTEXITCODE" }
+    $report.platform_reported = $true
+} catch {
+    Write-Warning 'USB copy is verified locally, but its status could not be reported to Platform.'
+}
+$report | ConvertTo-Json -Compress | Set-Content -LiteralPath $reportTemp -Encoding utf8
+Move-Item -LiteralPath $reportTemp -Destination $reportPath -Force
 Remove-Item -LiteralPath $auditStatePath -Force -ErrorAction SilentlyContinue
 
 Write-Output "USB recovery sync complete: copied $copied archive(s); content-verified $($verifiedArchives.Count) generation(s) this run."
+if ($report.platform_reported) {
+    Write-Output 'Owner-reported USB sync status was recorded by Platform.'
+}
 } finally {
     if ($mutexAcquired) {
         $syncMutex.ReleaseMutex()

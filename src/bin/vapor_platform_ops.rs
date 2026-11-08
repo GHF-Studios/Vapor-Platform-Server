@@ -531,6 +531,7 @@ mod unix_impl {
             }
             Some(_) => "stale",
         };
+        let owner_usb_sync = recovery_status::load_owner_usb_sync(&root, now as i64);
         let timer_state = command_output_bounded(
             "/usr/bin/systemctl",
             &[
@@ -571,6 +572,7 @@ mod unix_impl {
             archive_count,
             latest_archive,
             freshness: freshness.to_owned(),
+            owner_usb_sync,
         })
     }
 

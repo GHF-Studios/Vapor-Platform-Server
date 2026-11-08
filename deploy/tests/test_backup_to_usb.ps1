@@ -122,6 +122,14 @@ if ($remoteCommand -eq 'cat /var/backups/vapor-server/latest.json') {
 } elseif ($remoteCommand -eq 'cat /var/backups/vapor-server/index.json') {
     Get-Content -LiteralPath (Join-Path $env:VAPOR_USB_TEST_REMOTE 'index.json') -Raw
     $global:LASTEXITCODE = 0
+} elseif ($remoteCommand -match '^python3 /opt/vapor-platform-server/deploy/scripts/record_owner_usb_sync\.py --base64 ([A-Za-z0-9+/=]+)$') {
+    if ($env:VAPOR_USB_TEST_REPORT_FAILURE -eq '1') {
+        $global:LASTEXITCODE = 23
+    } else {
+        $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1]))
+        Set-Content -LiteralPath (Join-Path $env:VAPOR_USB_TEST_REMOTE 'owner-usb-sync.json') -Value $json -NoNewline -Encoding utf8
+        $global:LASTEXITCODE = 0
+    }
 } else {
     [Console]::Error.WriteLine("unexpected fake ssh command: $remoteCommand")
     $global:LASTEXITCODE = 2
@@ -211,7 +219,14 @@ try {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $incoming 'old.partial'))) 'stale partial file was not cleaned'
     $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
     Assert-True ($report.copied_this_run -eq 2) 'first run should copy both indexed archives'
+    Assert-True ($report.platform_reported) 'successful USB sync was not reported to Platform'
+    Assert-True ($report.latest_archive_sha256 -ceq $fixture.LatestHash) 'USB report omitted the verified latest archive digest'
     Assert-True ($report.retained_archive_payload_bytes -eq ($fixture.OlderBytes.Length + $fixture.LatestBytes.Length)) 'sync report archive-payload byte count is inaccurate'
+    $ownerReport = Get-Content -LiteralPath (Join-Path $fixture.Remote 'owner-usb-sync.json') -Raw | ConvertFrom-Json
+    Assert-True ($ownerReport.latest_archive -ceq $fixture.LatestName) 'remote owner report points at the wrong archive'
+    Assert-True ($ownerReport.latest_archive_sha256 -ceq $fixture.LatestHash) 'remote owner report digest differs from the verified archive'
+    Assert-True ($ownerReport.unverified_archive_count -eq 0) 'remote owner report includes unverified archives'
+    Assert-True ($null -eq $ownerReport.PSObject.Properties['server']) 'remote owner report includes an unnecessary server identifier'
     Assert-True ($null -eq $report.PSObject.Properties['retained_bytes']) 'ambiguous total-byte field remains in sync report'
     $kitCommit = '0123456789abcdef0123456789abcdef01234567'
     $kitRoot = Join-Path $fixture.Destination (Join-Path 'Recovery-Kit' $kitCommit)
@@ -220,6 +235,14 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'state-bundle-validate.py') -PathType Leaf) 'matching archive validator was not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'deployed_source_manifest.py') -PathType Leaf) 'matching source-manifest validator dependency was not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'service_deploy_map.py') -PathType Leaf) 'matching deploy-map import dependency was not extracted'
+
+    $fixture = New-Fixture -Name 'report-transport-fails'
+    $env:VAPOR_USB_TEST_REPORT_FAILURE = '1'
+    try { Invoke-Sync $fixture | Out-Null } finally { Remove-Item Env:\VAPOR_USB_TEST_REPORT_FAILURE -ErrorAction SilentlyContinue }
+    $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
+    Assert-True (-not $report.platform_reported) 'failed report transport was falsely recorded as successful'
+    Assert-True (Test-Path -LiteralPath (Join-Path $fixture.Destination $fixture.LatestName) -PathType Leaf) 'report transport failure invalidated a verified local USB copy'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Remote 'owner-usb-sync.json'))) 'failed report transport unexpectedly created remote evidence'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'README.txt') -PathType Leaf) 'recovery instructions were not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'SHA256SUMS') -PathType Leaf) 'recovery-kit checksum file was not extracted'
     $kitPointer = Get-Content -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json') -Raw | ConvertFrom-Json

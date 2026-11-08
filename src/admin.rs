@@ -295,6 +295,8 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .recovery-fact dd { margin:4px 0 0; overflow-wrap:anywhere; font-weight:600; }
 .recovery-fact dd.state-warning { color:#e5cb78; }
 .recovery-fact dd.state-danger { color:#f08b92; }
+.recovery-fact dd.state-success { color:#93d9a7; }
+.recovery-fact dd { overflow-wrap:anywhere; }
 .approval-source { margin:10px 0; background:#182330; border:1px solid #2b3a4b; border-radius:7px; overflow:hidden; }
 .approval-source > summary { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 14px; cursor:pointer; list-style:none; font-weight:650; }
 .approval-source > summary::-webkit-details-marker { display:none; }
@@ -1687,11 +1689,14 @@ const JS: &str = r#"
         const response = await fetch('/api/admin/recovery/status', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
         if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Recovery status is unavailable (HTTP ${response.status}).`);
         const data = await response.json();
-        if (data?.schema_version !== 1 || !['available', 'missing', 'unavailable'].includes(data.archive_root_state) || !['active', 'inactive', 'unknown'].includes(data.timer_state) || !['recent', 'stale', 'unknown'].includes(data.freshness) || !Number.isInteger(data.archive_count) || data.archive_count < 0 || (data.latest_archive !== null && (!data.latest_archive || !Number.isFinite(data.latest_archive.modified_at_unix) || !Number.isFinite(data.latest_archive.size_bytes)))) throw new Error('The recovery service returned an invalid status.');
+        const usb = data?.owner_usb_sync;
+        if (data?.schema_version !== 1 || !['available', 'missing', 'unavailable'].includes(data.archive_root_state) || !['active', 'inactive', 'unknown'].includes(data.timer_state) || !['recent', 'stale', 'unknown'].includes(data.freshness) || !Number.isInteger(data.archive_count) || data.archive_count < 0 || (data.latest_archive !== null && (!data.latest_archive || !Number.isFinite(data.latest_archive.modified_at_unix) || !Number.isFinite(data.latest_archive.size_bytes))) || (usb !== null && usb !== undefined && (!['recent', 'stale'].includes(usb.freshness) || !Number.isFinite(usb.last_success_unix) || typeof usb.latest_archive !== 'string' || !/^[0-9a-f]{64}$/.test(usb.latest_archive_sha256) || !Number.isInteger(usb.verified_archive_count) || !Number.isInteger(usb.unverified_archive_count) || !Number.isFinite(usb.retained_archive_payload_bytes)))) throw new Error('The recovery service returned an invalid status.');
         const latest = data.latest_archive;
         const freshnessText = data.archive_root_state === 'missing' ? 'Archive folder has not been created' : data.archive_root_state === 'unavailable' ? 'Archive folder could not be read' : data.freshness === 'recent' ? 'Recent archive found — validation not verified' : data.freshness === 'stale' ? 'Latest archive is stale' : latest || data.archive_count > 0 ? 'Archive time unknown' : 'No archive found';
         const freshnessState = data.freshness === 'recent' ? 'warning' : 'danger';
         const modified = latest ? new Date(latest.modified_at_unix * 1000).toLocaleString() : 'Not available';
+        const usbSync = data.owner_usb_sync;
+        const usbState = usbSync?.freshness === 'recent' ? 'success' : 'danger';
         recoveryFacts.replaceChildren(
           fact('Archive folder', data.archive_root_state === 'available' ? 'Readable' : data.archive_root_state === 'missing' ? 'Missing' : 'Unavailable', data.archive_root_state === 'available' ? '' : 'danger'),
           fact('Archive evidence', freshnessText, freshnessState),
@@ -1700,9 +1705,14 @@ const JS: &str = r#"
           fact('Checksum sidecar', latest ? (latest.checksum_sidecar_present ? 'Present; not rechecked here' : 'Missing') : 'Not available', latest?.checksum_sidecar_present ? 'warning' : 'danger'),
           fact('Export timer', data.timer_state === 'active' ? 'Active' : data.timer_state === 'inactive' ? 'Inactive' : 'Unknown', data.timer_state === 'active' ? 'warning' : 'danger'),
           fact('Next scheduled run', typeof data.next_run_display === 'string' && data.next_run_display ? data.next_run_display : 'Not available'),
-          fact('Snapshots found', data.archive_root_state === 'available' ? String(data.archive_count) : data.archive_root_state === 'missing' ? '0' : 'Unknown')
+          fact('Snapshots found', data.archive_root_state === 'available' ? String(data.archive_count) : data.archive_root_state === 'missing' ? '0' : 'Unknown'),
+          fact('USB recovery copy', usbSync ? (usbSync.freshness === 'recent' ? 'Recently verified by owner task' : 'Owner report is stale') : 'No valid owner sync report', usbState),
+          fact('USB sync time', usbSync ? new Date(usbSync.last_success_unix * 1000).toLocaleString() : 'Not reported'),
+          fact('USB archive', usbSync ? `${usbSync.latest_archive} · SHA-256 ${usbSync.latest_archive_sha256}` : 'Not reported'),
+          fact('USB verification', usbSync ? `${usbSync.verified_archive_count} verified · ${usbSync.unverified_archive_count} unverified · ${humanSize(usbSync.retained_archive_payload_bytes)}` : 'Not reported'),
+          fact('USB recovery kit', usbSync?.recovery_kit_available ? `Preflight passed · ${usbSync.recovery_kit_source_commit}` : usbSync ? 'No validated recovery kit in reported sync' : 'Not reported')
         );
-        recoveryFeedback.textContent = 'Status read from the VPS recovery helper. Archive recency is based on file time only.';
+        recoveryFeedback.textContent = 'VPS archive status is based on server file evidence. USB status is reported by the owner sync task; the VPS cannot independently verify USB contents or possession.';
       } catch (error) {
         recoveryFacts.replaceChildren(); recoveryFeedback.textContent = error.message || 'Recovery status is unavailable.';
       }
@@ -2120,7 +2130,7 @@ async fn recovery_page(headers: axum::http::HeaderMap) -> Response {
         "<p class=\"eyebrow\">Emergency · Read only</p><h1>Recovery</h1>",
         "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>VPS recovery snapshot</h2><p class=\"muted\">Internet reachable, root sign-in required. This page reports evidence only; it cannot export, restore, wipe, or open a shell.</p></div><button id=\"recovery-refresh\" type=\"button\">Refresh</button></div>",
         "<p id=\"recovery-feedback\" role=\"status\" aria-live=\"polite\">Loading recovery status…</p><dl id=\"recovery-facts\" class=\"recovery-facts\"></dl></section>",
-        "<section class=\"card\"><h2>Evidence not connected</h2><p><strong>USB copy:</strong> Not reported to Platform.</p><p><strong>Fresh-host restore drill:</strong> Not recorded.</p><p class=\"muted\">A recent server archive does not prove that an offline copy exists or that a clean-host restore has succeeded.</p><a href=\"/docs\">Open recovery runbooks</a></section>"
+        "<section class=\"card\"><h2>Restore readiness</h2><p><strong>Fresh-host restore drill:</strong> Not recorded.</p><p class=\"muted\">A recent server archive or owner-reported USB sync does not prove that a clean-host restore has succeeded. The USB status is a report from the trusted owner task, not independent proof of USB possession.</p><a href=\"/docs\">Open recovery runbooks</a></section>"
     );
     admin_page_response(StatusCode::OK, fragment)
 }
