@@ -593,7 +593,8 @@ const JS: &str = r#"
     };
     const pageButtons = {
       deploy: document.querySelector('#approvals-more-deploy'),
-      ssh: document.querySelector('#approvals-more-ssh')
+      ssh: document.querySelector('#approvals-more-ssh'),
+      identity: document.querySelector('#approvals-more-identity')
     };
     const countBadges = {
       deploy: document.querySelector('#pending-deploy-count'),
@@ -603,7 +604,7 @@ const JS: &str = r#"
     const sourceDefinitions = [
       { key: 'deploy', url: '/api/admin/deploy-requests?limit=200', label: 'Platform deployment approvals' },
       { key: 'ssh', url: '/api/admin/ssh-access/requests?limit=200', label: 'Platform SSH access requests' },
-      { key: 'identity', url: '/api/identity/v1/admin/permission-requests', label: 'Identity permission requests' }
+      { key: 'identity', url: '/api/identity/v1/admin/permission-requests/page?limit=200', label: 'Identity permission requests' }
     ];
     const sourceState = Object.fromEntries(sourceDefinitions.map(source => [source.key, { records: [], cursor: null }]));
     const endpoint = (kind, id, action) => {
@@ -824,7 +825,9 @@ const JS: &str = r#"
       const state = sourceState[source.key];
       const records = state.records;
       const pending = records.filter(item => item && item.status === 'pending');
-      if (countBadges[source.key]) countBadges[source.key].textContent = `${pending.length} pending`;
+      if (countBadges[source.key]) countBadges[source.key].textContent = state.cursor
+        ? `${pending.length} pending · more available`
+        : `${pending.length} pending`;
       const expiredIdentity = source.key === 'identity' ? pending.filter(isExpiredByTime) : [];
       const actionable = source.key === 'identity'
         ? pending.filter(item => !isExpiredByTime(item))
@@ -907,6 +910,7 @@ const JS: &str = r#"
     refreshButton?.addEventListener('click', refreshInbox);
     pageButtons.deploy?.addEventListener('click', () => loadMoreSource(sourceDefinitions[0]));
     pageButtons.ssh?.addEventListener('click', () => loadMoreSource(sourceDefinitions[1]));
+    pageButtons.identity?.addEventListener('click', () => loadMoreSource(sourceDefinitions[2]));
     refreshInbox();
   }
 
@@ -1815,7 +1819,7 @@ fn approvals_page_content() -> &'static str {
         "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Decision inbox</h2><p class=\"muted\">Only unanswered requests appear here. Each decision is recorded by the service that owns it; deployment execution is tracked separately.</p></div><button id=\"approvals-refresh\" type=\"button\">Refresh</button></div><p id=\"approvals-feedback\" role=\"status\" aria-live=\"polite\"></p></section>",
         "<details class=\"approval-source\" open><summary>Deployments <span id=\"pending-deploy-count\" class=\"approval-source-count\">Loading…</span></summary><div class=\"approval-source-body\"><div id=\"pending-deploy-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading deployment approvals…</p></div><button id=\"approvals-more-deploy\" type=\"button\" hidden>Load older requests</button></div></details>",
         "<details class=\"approval-source\"><summary>SSH access <span id=\"pending-ssh-count\" class=\"approval-source-count\">Loading…</span></summary><div class=\"approval-source-body\"><div id=\"pending-ssh-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading SSH access requests…</p></div><button id=\"approvals-more-ssh\" type=\"button\" hidden>Load older requests</button></div></details>",
-        "<details class=\"approval-source\"><summary>Identity permissions <span id=\"pending-identity-count\" class=\"approval-source-count\">Loading…</span></summary><div class=\"approval-source-body\"><p class=\"muted\">Identity list is currently limited to the newest 200 requests.</p><div id=\"pending-identity-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading Identity permission requests…</p></div></div></details>"
+        "<details class=\"approval-source\"><summary>Identity permissions <span id=\"pending-identity-count\" class=\"approval-source-count\">Loading…</span></summary><div class=\"approval-source-body\"><div id=\"pending-identity-approvals\" aria-live=\"polite\"><p class=\"muted\">Loading Identity permission requests…</p></div><button id=\"approvals-more-identity\" type=\"button\" hidden>Load older requests</button></div></details>"
     )
 }
 
@@ -2886,7 +2890,7 @@ mod tests {
         assert!(html.contains("id=\"pending-identity-approvals\""));
         assert!(html.contains("id=\"approvals-more-deploy\""));
         assert!(html.contains("id=\"approvals-more-ssh\""));
-        assert!(html.contains("Identity list is currently limited to the newest 200 requests"));
+        assert!(html.contains("id=\"approvals-more-identity\""));
         assert!(html.contains("Each decision is recorded by the service that owns it"));
         assert!(html.contains("<h1>Approvals</h1>"));
         let nav = super::render_admin_navigation("/admin/approvals");
@@ -3152,6 +3156,8 @@ mod tests {
         assert!(page.contains("id=\"pending-deploy-count\""));
         assert!(page.contains("id=\"pending-ssh-count\""));
         assert!(page.contains("id=\"pending-identity-count\""));
+        assert!(page.contains("id=\"approvals-more-identity\""));
+        assert!(!page.contains("limited to the newest 200 requests"));
     }
 
     #[test]
@@ -3267,6 +3273,10 @@ mod tests {
         assert!(approvals.contains("Approve selected access"));
         assert!(approvals.contains("approvals-more-deploy"));
         assert!(approvals.contains("approvals-more-ssh"));
+        assert!(approvals.contains("approvals-more-identity"));
+        assert!(approvals.contains("permission-requests/page?limit=200"));
+        assert!(approvals.contains("pageButtons.identity?.addEventListener"));
+        assert!(approvals.contains("pending · more available"));
         assert!(approvals.contains("next_cursor"));
         assert!(approvals.contains("Confirm the review before approving this SSH request."));
         assert!(approvals.contains("review.required = false"));
