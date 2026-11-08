@@ -35,13 +35,14 @@ existing service just to avoid naming a new boundary.
 - MCP/ACP/capability work is future work and is not part of the initial server
   MVP.
 
-## Accepted Workshop catalog authority (target)
+## Accepted Vapor content catalog authority (target)
 
-The canonical Vapor catalog belongs to the future Registry service. Registry
-will own typed content identity and type, the binding between Vapor content
-IDs and Steam Workshop items, discoverability metadata, and version/channel
-records. Steam Workshop remains the transport and distribution provider; its
-tags and free-form descriptions are not authoritative Vapor content types.
+The canonical, provider-neutral Vapor content catalog belongs to the Registry
+service. Registry owns typed content identity, immutable releases, acquisition
+bindings, discovery metadata, and product compositions. Steam Workshop is one
+provider that can carry a release; it does not define the Vapor content ID,
+content type, license, composition, or publication policy. Steam tags and
+descriptions are provider metadata and discovery hints only.
 
 Identity remains the canonical source of people, linked Steam/GitHub accounts,
 roles, and authorization facts. Registry asks Identity (or consumes
@@ -52,10 +53,10 @@ does not copy or redefine user roles.
 Current implementation is narrower than this target. Registry stores provider
 accounts, repository records, ecosystem membership, source topology, and
 visibility policy. Its `/admin/registry` page is a bounded read-only source
-inventory. It does not yet store typed Vapor content entries, Workshop item
-bindings, discoverability metadata, release channels, or publish decisions.
-Client-side Workshop tags remain discovery hints rather than enforced Vapor
-semantics.
+inventory. It does not yet store typed Vapor content entries, provider
+acquisition bindings, immutable release records, compositions, or publication
+decisions. Client-side Workshop tags remain discovery hints rather than
+enforced Vapor semantics.
 
 The full target split between content identity, acquisition, composition,
 application releases, target snapshots, compiler caching, and build execution

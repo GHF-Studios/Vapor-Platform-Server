@@ -43,12 +43,13 @@ while the implementation is still moving quickly.
   systems. Registry's first protected ecosystem lookup now uses the internal
   Identity decision route; every future protected resource route must adopt the
   same service-owned-policy boundary.
-- Registry owns the canonical Vapor Workshop catalog: typed content identity,
-  content-to-Workshop bindings, discovery metadata, and version/channel records.
-  Steam tags are discovery hints, not enforced Vapor types. Identity supplies
-  verified author and role authorization facts; it does not own catalog data.
-  This is the accepted target boundary; current Registry storage still covers
-  provider/repository/ecosystem source topology only.
+- Registry is the target owner of Vapor's provider-neutral content catalog:
+  typed content identity, immutable releases, acquisition bindings, discovery,
+  and product compositions. Steam Workshop is one acquisition/distribution
+  provider; its IDs and tags do not define Vapor content types. Identity
+  supplies author and role authorization facts, not catalog records. Current
+  Registry storage is only provider/repository/ecosystem source topology; the
+  typed catalog and its read/write lifecycle do not exist yet.
 - Server state must be restorable service-by-service and as a composed whole:
   empty initialization, export, import, and rebuild-from-source are first-class
   operational goals.

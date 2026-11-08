@@ -66,7 +66,7 @@ service business logic unless a shared library is deliberately introduced.
 /api/admin/operations     root-authorized latest deploy/restore status record
 /api/identity/            identity service API
 /api/diagnostics/         diagnostics service API
-/api/registry/            Registry catalog API
+/api/registry/            Registry ecosystem/source-topology API (not the planned content catalog)
 /api/updates/v1/vapor/    immutable Artifact release API
 /api/build-cache/         current signed target snapshot API
 ```
