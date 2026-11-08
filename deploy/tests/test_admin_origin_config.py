@@ -34,25 +34,34 @@ class AdminOriginConfigTests(unittest.TestCase):
                 self.assertIn("/emergency-terminal/*", admin_routes)
 
     def test_configured_admin_host_removes_privileged_public_routes(self) -> None:
-        rendered = self.render("Caddyfile.services.template", ADMIN)
-        public_routes = rendered.split("(vapor_routes) {", 1)[1].split("(vapor_admin_routes)", 1)[0]
-        self.assertIn(f"redir https://{ADMIN}{{http.request.uri}} 308", public_routes)
-        self.assertIn('handle /api/admin* {\n\t\trespond "not found" 404', public_routes)
-        self.assertIn('handle /api/identity/v1/admin* {\n\t\trespond "not found" 404', public_routes)
-        self.assertIn('handle /api/identity/v1/internal/* {\n\t\trespond "not found" 404', public_routes)
-        self.assertIn('handle /emergency-terminal/* {\n\t\trespond "not found" 404', public_routes)
-        self.assertNotIn("handle /admin* {\n\t\treverse_proxy", public_routes)
-        for path in ("/admin*", "/login*", "/logout", "/cli/ssh/*"):
-            self.assertIn(f"handle {path} {{\n\t\tredir", public_routes)
-        self.assertIn("handle_path /api/identity/* {\n\t\treverse_proxy 127.0.0.1:7113", public_routes)
+        for template in ("Caddyfile.template", "Caddyfile.services.template"):
+            with self.subTest(template=template):
+                rendered = self.render(template, ADMIN)
+                public_routes = rendered.split("(vapor_routes) {", 1)[1].split("(vapor_admin_routes)", 1)[0]
+                identity = "127.0.0.1:7113" if "services" in template else "127.0.0.1:7110"
+                self.assertIn(f"redir https://{ADMIN}{{http.request.uri}} 308", public_routes)
+                self.assertIn(f"handle /login* {{\n\t\treverse_proxy {identity}", public_routes)
+                self.assertIn(f"handle /logout {{\n\t\treverse_proxy {identity}", public_routes)
+                self.assertIn(f"handle /operator/* {{\n\t\tredir https://{ADMIN}{{http.request.uri}} 308", public_routes)
+                self.assertIn('handle /api/admin* {\n\t\trespond "not found" 404', public_routes)
+                self.assertIn('handle /api/identity/v1/admin* {\n\t\trespond "not found" 404', public_routes)
+                self.assertIn('handle /api/identity/v1/internal/* {\n\t\trespond "not found" 404', public_routes)
+                self.assertIn('handle /emergency-terminal/* {\n\t\trespond "not found" 404', public_routes)
+                self.assertNotIn("handle /admin* {\n\t\treverse_proxy", public_routes)
+                for path in ("/admin*", "/operator/*", "/cli/ssh/*"):
+                    self.assertIn(f"handle {path} {{\n\t\tredir", public_routes)
+                if "services" in template:
+                    self.assertIn(f"handle_path /api/identity/* {{\n\t\treverse_proxy {identity}", public_routes)
 
     def test_admin_host_has_identity_and_platform_routes_in_both_modes(self) -> None:
         for template in ("Caddyfile.template", "Caddyfile.services.template"):
             with self.subTest(template=template):
                 rendered = self.render(template, ADMIN)
                 admin_site = rendered.split("(vapor_admin_routes) {", 1)[1].split("\n}\n", 1)[0]
-                for route in ("/admin*", "/api/admin*", "/login*", "/logout", "/cli/ssh/*"):
+                for route in ("/admin*", "/api/admin*", "/operator/*", "/cli/ssh/*"):
                     self.assertIn(f"handle {route} {{", admin_site)
+                self.assertNotIn("handle /login* {", admin_site)
+                self.assertNotIn("handle /logout {", admin_site)
                 self.assertIn("/api/identity/*", admin_site)
                 identity_upstream = "127.0.0.1:7113" if "services" in template else "127.0.0.1:7110"
                 self.assertIn(f"reverse_proxy {identity_upstream}", admin_site)
@@ -64,6 +73,16 @@ class AdminOriginConfigTests(unittest.TestCase):
         self.assertNotIn("admin.vapor.example.test {", rendered)
         self.assertIn("handle /admin* {\n\t\treverse_proxy 127.0.0.1:7110", rendered)
         self.assertIn("handle /login* {\n\t\treverse_proxy 127.0.0.1:7113", rendered)
+        self.assertIn("handle /operator/* {\n\t\treverse_proxy 127.0.0.1:7113", rendered)
+
+    def test_services_example_keeps_public_account_login_and_isolates_operator_login(self) -> None:
+        example = (ROOT / "deploy" / "caddy" / "Caddyfile.services.example").read_text(encoding="utf-8")
+        public_routes = example.split("(vapor_routes) {", 1)[1].split("(vapor_admin_routes)", 1)[0]
+        admin_routes = example.split("(vapor_admin_routes) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("handle /login* {\n\t\treverse_proxy 127.0.0.1:7113", public_routes)
+        self.assertIn("handle /operator/* {\n\t\tredir https://admin.example.test{http.request.uri} 308", public_routes)
+        self.assertIn("handle /operator/* {\n\t\treverse_proxy 127.0.0.1:7113", admin_routes)
+        self.assertNotIn("handle /login* {", admin_routes)
 
     def test_admin_domain_must_be_a_distinct_dns_hostname(self) -> None:
         for invalid in (PUBLIC, "admin.example.test\nrespond 200", "https://admin.example.test", "127.0.0.1"):

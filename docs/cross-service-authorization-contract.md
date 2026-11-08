@@ -14,6 +14,12 @@ Toolchain, MCP, or operations tooling from copying the identity database,
 inventing parallel roles, or treating a server-local admin token as normal user
 authority.
 
+Identity browser authentication now has explicit account and operator purposes:
+public account routes issue `vapor_user_session`; root operator routes issue
+`vapor_identity_session`. Existing protected source-topology APIs continue to
+require the operator session. Project workspaces require the public user
+session and explicit Identity-owned membership.
+
 ## Authority split
 
 ```text
@@ -36,7 +42,7 @@ The first implementation is an audience-bound authorization decision:
 
 ```text
 Registry receives request
-  -> Registry extracts the Vapor session cookie and loads its resource policy
+  -> Registry extracts the operator `vapor_identity_session` cookie and loads its resource policy
   -> Registry sends the session token and policy to loopback Identity
   -> Identity verifies the current session and evaluates permission requirements
   -> Registry returns the resource only when allowed
@@ -48,6 +54,16 @@ audience; Registry, Platform, and Artifact cannot present one another's tokens
 or ask for another service's admin decisions. Downstream services accept only
 a literal loopback Identity URL and never receive the Steam publisher key.
 Identity returns a minimal decision, not profile facts.
+
+Project membership is a separate Identity-owned fact, not a global role or an
+ecosystem access policy. Registry sends the authenticated session and stable
+Project ID through its dedicated audience token; Identity returns the active
+Project role, and Registry remains responsible for confirming that the Project
+exists and applying resource-specific policy. Project membership uses only a
+live `vapor_user_session` with purpose `user`; `vapor_identity_session` and
+global `root`/`content-developer` roles never substitute for membership. An
+invalid caller session returns 401; an invalid Registry audience credential
+returns 403 so Registry can fail closed as an upstream-service error.
 
 ## Authorization request
 

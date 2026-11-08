@@ -54,7 +54,21 @@ check_public_admin_isolation() {
     echo "error: public admin redirect does not target the configured admin host" >&2
     return 1
   }
-  for path in /login /logout /cli/ssh/authorize; do
+  status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
+    --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
+    --output /dev/null --write-out '%{http_code}' "https://${VAPOR_DOMAIN}/login")"
+  [ "${status}" = 200 ] || {
+    echo "error: public account login returned HTTP ${status}, expected 200" >&2
+    return 1
+  }
+  status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
+    --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
+    --output /dev/null --write-out '%{http_code}' "https://${VAPOR_DOMAIN}/logout")"
+  [ "${status}" = 303 ] || {
+    echo "error: public account logout returned HTTP ${status}, expected 303" >&2
+    return 1
+  }
+  for path in /operator/login /cli/ssh/authorize; do
     status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
       --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
       --output /dev/null --write-out '%{http_code}' "https://${VAPOR_DOMAIN}${path}")"
@@ -63,6 +77,13 @@ check_public_admin_isolation() {
       return 1
     }
   done
+  status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
+    --resolve "${VAPOR_ADMIN_DOMAIN}:443:127.0.0.1" \
+    --output /dev/null --write-out '%{http_code}' "https://${VAPOR_ADMIN_DOMAIN}/operator/login")"
+  [ "${status}" = 200 ] || {
+    echo "error: root operator login returned HTTP ${status}, expected 200" >&2
+    return 1
+  }
   for path in \
     /api/admin/platform-healthz \
     /api/identity/v1/admin/profiles \

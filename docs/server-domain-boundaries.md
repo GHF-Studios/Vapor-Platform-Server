@@ -77,7 +77,7 @@ is defined in [`vapor-content-and-build-domain-contract.md`](vapor-content-and-b
 | Publish/pipeline | Future real boundary | Protected publish requests, validation/promotion orchestration, publishing audit, controlled Steam/Workshop or server-publish authority | Identity source of truth, artifact blob semantics, public catalog reads |
 | Artifacts | Implemented release service | Immutable Vapor application archives, signed manifests, channel pointers, public downloads, root-gated read-only release inventory | Catalog metadata, publish approval, signing keys, docs bundles |
 | Build Cache | Implemented service; builder incomplete | Signed current target snapshots, candidate validation/promotion, read-only target inventory | Guest VM orchestration, Vapor Client restore/bootstrap, signing key custody |
-| Registry/source topology | Implemented foundation; catalog target incomplete | Provider/repository identity, ecosystem membership, visibility policy, root-gated source inventory | Typed content catalog, Workshop bindings, release channels, publish decisions, blobs, builds, Identity roles, deploy orchestration |
+| Registry/source topology | Implemented foundation; Project directory/workspace access now implemented; typed catalog remains incomplete | Provider/repository identity, ecosystem membership, Project metadata, membership-gated Project reads, visibility policy, root-gated source inventory | Typed content catalog, Workshop bindings, release channels, publish decisions, blobs, builds, Identity roles, deploy orchestration |
 | Toolchain/API UX | Future integration boundary | Stable CLI/Shell/launcher workflows over existing APIs | Canonical state, role decisions, publish execution |
 | MCP/capability surface | Future capability boundary | Machine/action capabilities, least-privilege grants, capability audit | Business state, bypassing service APIs |
 | Operations/recovery | Implemented root-owned workflow plus service contracts | Backups, restore/import composition, deploy health, latest deploy/restore status, emergency operator paths | Normal product workflows, service business decisions |
@@ -88,8 +88,8 @@ is defined in [`vapor-content-and-build-domain-contract.md`](vapor-content-and-b
 The public site, signed-in personal dashboard, authorized Project workspaces,
 and private Platform operator shell are separate audience scopes. The admin
 shell must be authorized before its navigation or operator scripts are
-rendered; current `/admin` still exposes the shell before its protected data
-check, so this remains an implementation gap. Admin-origin isolation is an
+rendered. Platform now checks root Identity authorization before serving any
+`/admin` page, fragment, style, or script. Admin-origin isolation is an
 additional routing defense, not a substitute for shell authorization.
 
 The shared admin UI is a presentation and navigation layer. It does not decide
@@ -144,8 +144,10 @@ Current route ownership remains:
 ```text
 /                         homepage
 /docs/                    docs
-/login                    identity
-/logout                   identity
+/login                    public Identity account flow
+/logout                   public Identity account session
+/operator/login           root Identity operator flow (admin host when configured)
+/operator/logout          root Identity operator session
 /admin                    shared Platform admin shell
 /admin/approvals          protected inbox for pending Platform and Identity decisions
 /admin/deployments        Platform-owned deployment requests and execution stages

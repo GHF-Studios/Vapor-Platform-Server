@@ -64,9 +64,9 @@ def terminal_route() -> str:
 
 def public_admin_entries(admin_domain: str | None, services: bool) -> str:
     platform = "127.0.0.1:7110"
+    identity = "127.0.0.1:7113" if services else platform
     if not admin_domain:
-        if services:
-            return f'''\thandle /admin* {{
+        return f'''\thandle /admin* {{
 	\treverse_proxy {platform}
 	}}
 
@@ -75,17 +75,20 @@ def public_admin_entries(admin_domain: str | None, services: bool) -> str:
 	}}
 
 	handle /login* {{
-	\treverse_proxy 127.0.0.1:7113
+	\treverse_proxy {identity}
 	}}
 
 	handle /logout {{
-	\treverse_proxy 127.0.0.1:7113
+	\treverse_proxy {identity}
+	}}
+
+	handle /operator/* {{
+	\treverse_proxy {identity}
 	}}
 
 	handle /cli/ssh/* {{
-	\treverse_proxy 127.0.0.1:7113
+	\treverse_proxy {identity}
 	}}'''
-        return ""
 
     redirect = f"https://{admin_domain}{{http.request.uri}} 308"
     return f'''\thandle /admin* {{
@@ -97,10 +100,14 @@ def public_admin_entries(admin_domain: str | None, services: bool) -> str:
 	}}
 
 	handle /login* {{
-	\tredir {redirect}
+	\treverse_proxy {identity}
 	}}
 
 	handle /logout {{
+	\treverse_proxy {identity}
+	}}
+
+	handle /operator/* {{
 	\tredir {redirect}
 	}}
 
@@ -146,11 +153,7 @@ def render(template_path: pathlib.Path, public_domain: str, admin_domain: str | 
 	\treverse_proxy 127.0.0.1:7113
 	}
 
-	handle /login* {
-	\treverse_proxy 127.0.0.1:7113
-	}
-
-	handle /logout {
+	handle /operator/* {
 	\treverse_proxy 127.0.0.1:7113
 	}
 
@@ -166,11 +169,7 @@ def render(template_path: pathlib.Path, public_domain: str, admin_domain: str | 
 	\treverse_proxy 127.0.0.1:7110
 	}
 
-	handle /login* {
-	\treverse_proxy 127.0.0.1:7110
-	}
-
-	handle /logout {
+	handle /operator/* {
 	\treverse_proxy 127.0.0.1:7110
 	}
 

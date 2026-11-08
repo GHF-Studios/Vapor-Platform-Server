@@ -20,7 +20,8 @@ Options:
   --github-client-secret-file PATH
                                   Read GitHub client secret from file.
   --prompt-github-client-secret   Prompt for GitHub client secret.
-  --public-origin URL             Set public origin used for browser redirects.
+  --public-origin URL             Set public account callback origin.
+  --operator-origin URL           Set root operator callback origin.
   --cookie-secure true|false      Set whether dashboard cookies use Secure.
   --cookie-path PATH              Set dashboard cookie path. Default: /.
   --restart                       Restart vapor-identity.service after changes.
@@ -44,6 +45,8 @@ github_client_secret=""
 github_client_secret_set=false
 public_origin=""
 public_origin_set=false
+operator_origin=""
+operator_origin_set=false
 cookie_secure=""
 cookie_secure_set=false
 cookie_path=""
@@ -106,18 +109,19 @@ validate_cookie_path() {
 }
 
 validate_public_origin() {
-  local value="$1"
+  local option="$1"
+  local value="$2"
   if [ "${value#http://}" = "$value" ] && [ "${value#https://}" = "$value" ]; then
-    echo "error: --public-origin must start with http:// or https://" >&2
+    echo "error: ${option} must start with http:// or https://" >&2
     exit 1
   fi
   if [ "${value%/}" != "$value" ]; then
-    echo "error: --public-origin must not end with /" >&2
+    echo "error: ${option} must not end with /" >&2
     exit 1
   fi
   case "$value" in
     *";"*|*$'\n'*|*$'\r'*)
-      echo "error: --public-origin must not contain semicolons or newlines" >&2
+      echo "error: ${option} must not contain semicolons or newlines" >&2
       exit 1
       ;;
   esac
@@ -231,6 +235,12 @@ while [ "$#" -gt 0 ]; do
       public_origin_set=true
       shift 2
       ;;
+    --operator-origin)
+      [ "$#" -ge 2 ] || { echo "error: missing value for $1" >&2; exit 1; }
+      operator_origin="$2"
+      operator_origin_set=true
+      shift 2
+      ;;
     --cookie-secure)
       [ "$#" -ge 2 ] || { echo "error: missing value for $1" >&2; exit 1; }
       cookie_secure="$2"
@@ -289,9 +299,15 @@ if [ "$github_client_secret_set" = true ]; then
 fi
 
 if [ "$public_origin_set" = true ]; then
-  validate_public_origin "$public_origin"
+  validate_public_origin "--public-origin" "$public_origin"
   set_env_var "VAPOR_IDENTITY_PUBLIC_ORIGIN" "$public_origin"
   echo "identity-auth: set VAPOR_IDENTITY_PUBLIC_ORIGIN=${public_origin}"
+fi
+
+if [ "$operator_origin_set" = true ]; then
+  validate_public_origin "--operator-origin" "$operator_origin"
+  set_env_var "VAPOR_IDENTITY_OPERATOR_ORIGIN" "$operator_origin"
+  echo "identity-auth: set VAPOR_IDENTITY_OPERATOR_ORIGIN=${operator_origin}"
 fi
 
 if [ "$cookie_secure_set" = true ]; then

@@ -55,15 +55,16 @@ The deploy validates the hostname, configures Identity's canonical browser
 origin to `https://<admin-host>`, and installs a Caddy config only after Caddy
 validates the candidate.
 
-With the setting present, public `/admin`, `/login`, `/logout`, and
-`/cli/ssh/*` entry points redirect to the admin hostname; Platform and Identity
-admin APIs and `/emergency-terminal*` return 404 on the public hostname. The
-admin hostname serves the dashboard, Identity browser/API routes, and its
-separate terminal route. Identity cookies remain host-only (no `Domain`
-attribute). Verify DNS, HTTPS certificate, login
-and provider callbacks, the admin pages, and rejected public privileged routes
-before enabling any emergency-console feature. The console remains separately
-disabled by default.
+With the setting present, public account routes (`/login`, `/logout`, and the
+Project dashboard) remain on the public hostname. Root operator sign-in moves
+to `/operator/login` on the admin hostname; public `/operator/*`, `/admin`,
+`/cli/ssh/*`, and privileged APIs are kept off the public host. The admin host
+serves the root dashboard, operator Identity routes, and its separate terminal
+route. Identity uses distinct host-only cookies and callback origins for public
+accounts and root operators; neither cookie has a `Domain` attribute. Verify
+DNS, HTTPS certificates, both login callbacks, Project pages, admin pages, and
+rejected cross-host routes before enabling any emergency-console feature. The
+console remains separately disabled by default.
 
 ## Scripts
 

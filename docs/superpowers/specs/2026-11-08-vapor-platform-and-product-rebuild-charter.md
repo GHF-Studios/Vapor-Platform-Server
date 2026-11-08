@@ -102,12 +102,10 @@ flowchart TB
   not merely before protected records or actions load. Project pages require
   project-scoped authorization, and owning services recheck it for every API
   read or mutation. A route being hidden is not an authorization check.
-- Current gap: `/admin` can return the Platform shell before Identity confirms
-  operator authorization; current page-data and action checks do not protect
-  that chrome. Shell authorization must be implemented before this target is
-  met. Optional admin-origin isolation is a separate routing defense: it does
-  not replace authorization, and while it is unconfigured the admin route may
-  still share the public origin.
+- Platform now checks root Identity authorization before serving any `/admin`
+  page, fragment, style, or script. Admin-origin isolation remains a separate
+  routing defense: it does not replace authorization, and while it is
+  unconfigured the admin route may still share the public origin.
 - The personal dashboard is account-scoped and lists only the current user's
   profile, installations/entitlements as provided by their owners, and Projects
   they can access. A Project workspace composes owner-service views for its
@@ -189,9 +187,10 @@ Registry and build terminology are further constrained by
 
 ## Open decisions that block only their dependent work
 
-1. Vapor login policy: Steam-required is the current preference, but confirm
-   against the earlier Vapor-native-account choice before changing account
-   identity. Provider-status UI can improve without changing identity.
+1. Steam-required public Vapor account sign-in remains the owner's current
+   policy. The Project workspace work adds a normal public session without
+   granting global roles and keeps root operator login as a separate session;
+   it does not change linked-provider or account-merge policy.
 2. Exact mechanism for Steam's optional Vapor tools launch action. The root
    contents are not open-ended: only `App.vapor.toml` and the final
    Packagepack artifact are allowed.

@@ -17,10 +17,14 @@
 	}
 
 	handle /login* {
-		redir https://admin.example.test{http.request.uri} 308
+		reverse_proxy 127.0.0.1:7113
 	}
 
 	handle /logout {
+		reverse_proxy 127.0.0.1:7113
+	}
+
+	handle /operator/* {
 		redir https://admin.example.test{http.request.uri} 308
 	}
 
@@ -127,11 +131,7 @@
 		reverse_proxy 127.0.0.1:7113
 	}
 
-	handle /login* {
-		reverse_proxy 127.0.0.1:7113
-	}
-
-	handle /logout {
+	handle /operator/* {
 		reverse_proxy 127.0.0.1:7113
 	}
 

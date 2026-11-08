@@ -197,8 +197,9 @@ VAPOR_IDENTITY_LOOCAST_APP_ID=2122620
 VAPOR_IDENTITY_STEAM_AUTH_IDENTITY=vapor-identity
 VAPOR_IDENTITY_COOKIE_PATH=/
 VAPOR_IDENTITY_COOKIE_SECURE=true
-# Browser identity uses the isolated HTTPS admin origin when configured.
-VAPOR_IDENTITY_PUBLIC_ORIGIN=${VAPOR_PLATFORM_ADMIN_ORIGIN}
+# Public accounts and root operators have distinct host-only browser sessions.
+VAPOR_IDENTITY_PUBLIC_ORIGIN=https://${VAPOR_DOMAIN}
+VAPOR_IDENTITY_OPERATOR_ORIGIN=${VAPOR_PLATFORM_ADMIN_ORIGIN}
 # Set on the server when available; never commit the value:
 VAPOR_IDENTITY_STEAM_WEB_API_KEY=
 # Set after creating the GitHub OAuth/GitHub App registration:

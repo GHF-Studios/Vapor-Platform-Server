@@ -82,6 +82,10 @@ ensure_env_assignment \
   "${VAPOR_ADMIN_DOMAIN}"
 ensure_env_assignment \
   "${VAPOR_CONFIG_DIR}/platform.env" \
+  VAPOR_PLATFORM_PUBLIC_ORIGIN \
+  "${VAPOR_PLATFORM_PUBLIC_ORIGIN}"
+ensure_env_assignment \
+  "${VAPOR_CONFIG_DIR}/platform.env" \
   VAPOR_PLATFORM_ADMIN_ORIGIN \
   "${VAPOR_PLATFORM_ADMIN_ORIGIN}"
 
@@ -206,10 +210,11 @@ VAPOR_DOCS_STATE=${VAPOR_STATE_ROOT}/docs
 VAPOR_DOCS_ADMIN_TOKEN=$(random_token)"
 fi
 
-# Browser identity has one canonical browser origin. When configured, this is
-# the isolated admin host; otherwise it preserves the current public origin.
+# Reconcile account and operator callbacks to their respective host-only
+# origins on every deployment; these are platform-managed routing settings.
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/configure-identity-auth.sh" \
-  --public-origin "${VAPOR_PLATFORM_ADMIN_ORIGIN}" \
+  --public-origin "${VAPOR_PLATFORM_PUBLIC_ORIGIN}" \
+  --operator-origin "${VAPOR_PLATFORM_ADMIN_ORIGIN}" \
   --cookie-secure true \
   --cookie-path /
 
