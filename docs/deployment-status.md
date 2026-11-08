@@ -1,6 +1,6 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-08 21:40 UTC)
+## Current verified state (2026-11-08 22:05 UTC)
 
 - The primary VPS is running the independently managed Platform, Homepage,
   Docs, Identity, Diagnostics, Registry, Artifact, and Build Cache services.
@@ -36,9 +36,19 @@
   worker. Build Cache reports `configured=false` and `current=false` for both
   supported targets; no promoted snapshots or optional worker are available.
   Local source builds remain the fallback.
-- Platform main is at `8c1cd265b93847238276d4c3c722672647c3cb9a`; its CI run
-  completed successfully. That commit only updates the Windows USB task and
-  does not require a VPS deployment.
+- Platform `main` is at
+  `e1e0c8a3782cf3b0ec2f5a0f56b6414574253b90`; both Windows recovery tests and
+  Linux composed CI passed. The live VPS remains on
+  `20d1d234b6b2886250fc2ade4c3d016aebbdf708`; the intervening changes are
+  deployment workflow and offline recovery tooling, so no service rollout was
+  needed. Fresh-host recovery now defaults Cargo to one build job, with an
+  explicit validated override for larger machines.
+- The workflow correctly skipped its deploy-request submission for that
+  recovery-only commit. One earlier docs-only request remains pending:
+  `bdf04e61-2fcd-45ec-a556-7ff061ca45ea`, for commit
+  `9a297fca6e9b2320c224ef9dd1f4d498c44af2bf`. It is not a live deployment;
+  reject it through Platform Approvals before reviewing later requests so it
+  cannot hold the approval-order queue open.
 
 ## Historical checkpoint (2026-11-08 11:09 UTC)
 
