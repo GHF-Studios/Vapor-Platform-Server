@@ -14,6 +14,14 @@ fn valid_deployment_target(value: Option<&str>) -> bool {
     matches!(value, Some("monolith" | "services"))
 }
 
+fn normalize_command_output(output: &str) -> Result<String, ()> {
+    let output = output.trim();
+    if output.chars().any(char::is_control) {
+        return Err(());
+    }
+    Ok(output.to_owned())
+}
+
 #[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Clone, Copy)]
 struct SshGrantHostState {
@@ -724,11 +732,7 @@ mod unix_impl {
         if !status.success() {
             return Err(());
         }
-        let output = String::from_utf8(bytes).map_err(|_| ())?;
-        if output.chars().any(char::is_control) {
-            return Err(());
-        }
-        Ok(output.trim().to_owned())
+        super::normalize_command_output(&String::from_utf8(bytes).map_err(|_| ())?)
     }
 
     async fn run_ssh_command(command: super::ssh_cli::SshCommand) -> Result<(), String> {
@@ -2469,11 +2473,26 @@ fn main() {
 #[cfg(test)]
 mod endpoint_tests {
     use super::{
-        active_ssh_grant_host_state_is_consistent, record_stopped_deploy_failure,
-        valid_deployment_target, valid_identity_authz_endpoint, SshGrantHostState,
+        active_ssh_grant_host_state_is_consistent, normalize_command_output,
+        record_stopped_deploy_failure, valid_deployment_target, valid_identity_authz_endpoint,
+        SshGrantHostState,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Row;
+
+    #[test]
+    fn command_output_trims_terminators_but_rejects_internal_controls() {
+        assert_eq!(
+            normalize_command_output("active\n"),
+            Ok("active".to_owned())
+        );
+        assert_eq!(
+            normalize_command_output("  active\r\n"),
+            Ok("active".to_owned())
+        );
+        assert!(normalize_command_output("active\nunknown").is_err());
+        assert!(normalize_command_output("active\0").is_err());
+    }
 
     #[test]
     fn active_ssh_grant_requires_all_host_artifacts_and_a_future_expiry() {
