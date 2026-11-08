@@ -18,9 +18,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $keyPath = (Resolve-Path -LiteralPath $SshKey).Path
 $sourceBackupScript = Join-Path $PSScriptRoot 'backup-to-usb.ps1'
+$triggerHelper = Join-Path $PSScriptRoot 'usb_backup_task.ps1'
 if (-not (Test-Path -LiteralPath $sourceBackupScript -PathType Leaf)) {
     throw 'The USB backup script is missing beside the task installer.'
 }
+if (-not (Test-Path -LiteralPath $triggerHelper -PathType Leaf)) {
+    throw 'The USB task trigger helper is missing beside the task installer.'
+}
+. $triggerHelper
 if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
     throw 'Run this installer as the Windows user who will own the scheduled task.'
 }
@@ -28,8 +33,7 @@ $localScriptDirectory = Join-Path $env:LOCALAPPDATA 'Vapor\Recovery'
 New-Item -ItemType Directory -Path $localScriptDirectory -Force | Out-Null
 $backupScript = Join-Path $localScriptDirectory 'backup-to-usb.ps1'
 Copy-Item -LiteralPath $sourceBackupScript -Destination $backupScript -Force
-$powershellName = if ($PSVersionTable.PSVersion.Major -ge 7) { 'pwsh.exe' } else { 'powershell.exe' }
-$powershellExe = Join-Path $PSHOME $powershellName
+$powershellExe = Get-VaporUsbTaskPowerShellPath
 function ConvertTo-WindowsCommandLineArgument {
     param([Parameter(Mandatory = $true)][string]$Value)
 
@@ -80,13 +84,10 @@ if ($AllowFixedDrive) {
 $action = New-ScheduledTaskAction -Execute $powershellExe -Argument $arguments
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-$hourly = New-ScheduledTaskTrigger -Daily -At '00:00' `
-    -RepetitionInterval (New-TimeSpan -Hours 1) `
-    -RepetitionDuration (New-TimeSpan -Days 1)
-$atLogon = New-ScheduledTaskTrigger -AtLogOn -User $user
+$triggers = New-VaporUsbRecoveryTriggers -User $user
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 
 Register-ScheduledTask -TaskName $TaskName -Action $action `
-    -Trigger @($hourly, $atLogon) -Principal $principal -Settings $settings -Force | Out-Null
+    -Trigger $triggers -Principal $principal -Settings $settings -Force | Out-Null
 Write-Output "Scheduled hourly recovery sync for $user. It will catch up when the USB drive is mounted and the user is signed in."

@@ -1031,3 +1031,28 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - The latest docs-only CI run `42401200728` completed successfully for both
   Linux and Windows. This records source/CI and host-health evidence only; no
   deployment request was approved, dispatched, or edited.
+
+## Owner USB recovery task verified (2026-11-08, 00:00 UTC)
+
+- The owner-formatted `E:` removable exFAT drive (`BACKUPS`) is mounted, with
+  recovery data under `E:\VaporRecovery`. Its current root export is the
+  2026-11-07 23:50:59 UTC Platform archive pinned to
+  `739debf5c136badc8e65e3fd681bea63a8bca77c`; the archive checksum and the
+  recovery-kit preflight record are present on the drive.
+- A real scheduled run of `Vapor USB Recovery Sync` returned Task Scheduler
+  result `0` at 01:00 local time / 00:00 UTC. The task is Ready and scheduled
+  for its next hourly run. Its action uses the inbox Windows PowerShell 5.1
+  path and invokes the user-local recovery copy with the root key by path; the
+  private key is not copied to USB or printed.
+- The run rehashed the current archive and one rotating historical archive.
+  The report lists 29 retained archives and 139,135,191 bytes of archive
+  payload, with 27 archives not verified during that run. This is scheduled
+  off-host backup evidence, not a restore drill and not proof every historical
+  archive is sound.
+- The full Platform test recipe passed locally on Windows after the trigger
+  fix: Atlas build, 105 Python tests (10 skipped), Platform/helper Rust tests,
+  and all checked-out service Rust tests. Existing dead-code warnings remain.
+  The scheduled-task helper test is also wired into the Windows CI job.
+- No production VPS reset, Steam migration, clean-room purge, or fresh-host
+  restore drill has been performed. The USB contents are plaintext and must be
+  treated as sensitive because the recovery bundle contains server credentials.

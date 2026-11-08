@@ -44,3 +44,7 @@ jobs:
       - name: Test owner-held USB recovery sync
         shell: pwsh
         run: ./deploy/tests/test_backup_to_usb.ps1
+
+      - name: Test USB recovery task triggers
+        shell: pwsh
+        run: ./deploy/tests/test_usb_backup_task.ps1

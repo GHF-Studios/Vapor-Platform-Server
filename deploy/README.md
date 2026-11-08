@@ -138,12 +138,16 @@ for smoke testing only; the intended public endpoint remains
   Task Scheduler job plus a logon catch-up trigger once the USB and SSH key
   paths are known. The job runs while that Windows account is signed in;
   missed hourly generations are fetched from the VPS index when the drive is
-  mounted.
+  mounted. The installer uses the inbox Windows PowerShell 5.1 executable,
+  not the transient PowerShell runtime that happened to launch the installer.
+  Its hourly repetition is attached to a daily trigger using the Task Scheduler
+  CIM schema because the Windows ScheduledTasks cmdlet on the supported host
+  does not expose repetition parameters on `New-ScheduledTaskTrigger`.
 - Example from a Windows checkout (use the actual drive letter and existing
   root SSH identity):
 
   ```powershell
-  .\deploy\scripts\install-usb-backup-task.ps1 -Server vapor.ghf-studios.site -SshKey "$HOME\.ssh\id_ed25519" -UsbPath 'E:\Vapor-Recovery'
+  .\deploy\scripts\install-usb-backup-task.ps1 -Server vapor.ghf-studios.site -SshKey "$HOME\.ssh\id_ed25519" -UsbPath 'E:\VaporRecovery'
   ```
 
   This copies the current sync script to `%LOCALAPPDATA%\Vapor\Recovery` and
@@ -152,7 +156,9 @@ for smoke testing only; the intended public endpoint remains
   requires a trusted OpenSSH `known_hosts` entry for the VPS and an SSH identity
   available without an interactive passphrase prompt. Run `backup-to-usb.ps1`
   directly with the same arguments for immediate or manual catch-up; the task
-  runs hourly while the account is signed in.
+  runs hourly while the account is signed in. `scripts/usb_backup_task.ps1`
+  contains the trigger and executable-path helpers and is tested by
+  `deploy/tests/test_usb_backup_task.ps1`.
 - `scripts/restore-state.sh`: restore a full-platform bundle onto a bootstrapped
   server with the exact clean Platform and submodule revisions recorded in the
   bundle and the service binaries already built from them; requires `--yes`,
