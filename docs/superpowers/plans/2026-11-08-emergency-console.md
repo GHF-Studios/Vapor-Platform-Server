@@ -32,6 +32,9 @@
 - Enable, disable, and end-session state transitions commit with their audit
   event in the same SQLite transaction. A missing audit write must not leave
   the console enabled or report a completed revocation.
+- Start, end, enable, and disable serialize through one process-wide lifecycle
+  lock that remains held across the matching systemd action, preventing an old
+  stop request from killing a newly granted terminal session.
 
 ## Work sequence
 

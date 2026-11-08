@@ -16,6 +16,7 @@ const COOKIE_NAME: &str = "vapor_emergency_console";
 const COOKIE_PATH: &str = "/emergency-terminal/";
 const HELPER: &str = "/usr/local/libexec/vapor-platform-ops";
 const GATEWAY_MARKER: &str = "CaddyEmergencyTerminalV1";
+static LIFECYCLE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Clone)]
 struct ConsoleState {
@@ -198,6 +199,7 @@ async fn status(state: axum::extract::State<ConsoleState>, headers: HeaderMap) -
     };
     let now = unix_now();
     if !configured_enabled() {
+        let _lifecycle = LIFECYCLE_LOCK.lock().await;
         // Stop even if the state write failed: the host flag already denies
         // authorization and this clears any orphaned backend process.
         let state_disabled = disable_internal(&state, &profile_id, now).await.is_ok();
@@ -293,6 +295,7 @@ async fn enable(
     if !same_origin(&state, &headers) || !request.confirmed {
         return error(StatusCode::FORBIDDEN, "same_origin_confirmation_required");
     }
+    let _lifecycle = LIFECYCLE_LOCK.lock().await;
     if !configured_enabled() {
         return error(StatusCode::CONFLICT, "console_not_enabled_in_host_config");
     }
@@ -336,6 +339,7 @@ async fn disable(
     if !same_origin(&state, &headers) || !request.confirmed {
         return error(StatusCode::FORBIDDEN, "same_origin_confirmation_required");
     }
+    let _lifecycle = LIFECYCLE_LOCK.lock().await;
     let now = unix_now();
     let state_disabled = disable_internal(&state, &profile_id, now).await.is_ok();
     let backend_stopped = helper_action("emergency-console-stop").await.is_ok();
@@ -363,6 +367,7 @@ async fn arm(
             "same_origin_root_shell_acknowledgement_required",
         );
     }
+    let _lifecycle = LIFECYCLE_LOCK.lock().await;
     if !configured_enabled() {
         return error(StatusCode::NOT_FOUND, "console_not_configured");
     }
@@ -522,6 +527,7 @@ async fn end_session(
     if !same_origin(&state, &headers) || !request.confirmed {
         return error(StatusCode::FORBIDDEN, "same_origin_confirmation_required");
     }
+    let _lifecycle = LIFECYCLE_LOCK.lock().await;
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable"),
