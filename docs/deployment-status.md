@@ -41,8 +41,11 @@
   Linux composed CI passed. The live VPS remains on
   `20d1d234b6b2886250fc2ade4c3d016aebbdf708`; the intervening changes are
   deployment workflow and offline recovery tooling, so no service rollout was
-  needed. Fresh-host recovery now defaults Cargo to one build job, with an
-  explicit validated override for larger machines.
+  needed. Platform main's fresh-host recovery entrypoints now default Cargo to
+  one build job, with an explicit validated override for larger machines. The
+  current owner-held state bundle and embedded recovery kit remain pinned to
+  `20d1d234...`, so they do not yet contain this adjustment; a newly
+  source-pinned bundle is needed before the USB recovery path benefits from it.
 - The workflow correctly skipped its deploy-request submission for that
   recovery-only commit. One earlier docs-only request remains pending:
   `bdf04e61-2fcd-45ec-a556-7ff061ca45ea`, for commit
