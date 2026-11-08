@@ -28,6 +28,26 @@ service can accept and promote a correctly signed snapshot candidate, but there
 is no production native builder submitting candidates, and Platform has no
 durable native-build job lifecycle yet.
 
+## Highest-impact gaps in implementation order
+
+This order follows what blocks real user workflows, not which page is easiest
+to polish:
+
+| Priority | Current gap | User-visible consequence | Owning next slice |
+| --- | --- | --- | --- |
+| 1 | Registry has source topology but no typed content/release records or composition resolver | Vapor cannot provide one authoritative browse/install/mount catalog across Workshop, local depots, Artifact, and source-backed developer content | Registry schema, migration, read API, and server-owned content/acquisition policy |
+| 2 | Build Cache has snapshots but Platform has no durable build-operation lifecycle | A candidate ID or current pointer cannot explain queued/running/failed/cancelled work, executor, inputs, or logs | Platform operation record/API and explicit state machine, correlated with Build Cache promotion |
+| 3 | No native-builder executor produces the supported snapshots; neither target is currently configured | The advertised Windows/Linux developer snapshot path does not exist yet | Provision and lock both VM images on a measured worker, then submit only operation-bound candidates |
+| 4 | Vapor Client snapshot restore/bootstrap is not implemented or proven | Even a promoted server snapshot would not yet guarantee a usable Developer install | Client verifies current target/lock/signature, stages atomically, and falls back to the canonical local build |
+| 5 | A shared compiler-result cache has not been selected | Builds may be slower, but correctness and availability are unaffected | Measure after the snapshot and builder path works; add a distinct optional `sccache` lane only if it wins |
+
+The latest verified primary VPS snapshot is 1 vCPU and 1.8 GiB RAM, and both
+target snapshots are unconfigured. That host is suitable for the present
+service-deployment fallback, not for hosting concurrent Linux and Windows
+compiler VMs. A separate measured worker is therefore an actual prerequisite
+for official VM-produced target snapshots; the admin tab or service health
+cannot make that capacity exist.
+
 ## Content identity is not a repository or a Workshop item
 
 A content ID names a Vapor concept independently of its source repository or
