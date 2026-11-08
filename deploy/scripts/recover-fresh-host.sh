@@ -375,7 +375,7 @@ actual_cargo="$(cargo --version | awk '{print $2}')"
 [ "${actual_rustc}" = "${RUSTC_VERSION}" ] || fail "installed rustc version does not match the recorded version"
 [ "${actual_cargo}" = "${RECORDED_CARGO_VERSION}" ] || fail "installed Cargo version does not match the recorded version"
 
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 [[ "${CARGO_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || fail "CARGO_BUILD_JOBS must be a positive integer"
 export VAPOR_PLATFORM_REVISION="${REVISION}"
 HOST_MUTATION_STARTED=true

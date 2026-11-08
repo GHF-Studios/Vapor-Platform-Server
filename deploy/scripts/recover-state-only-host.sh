@@ -124,7 +124,8 @@ export RUSTUP_HOME="${TOOLCHAIN_ROOT}/rustup"
 export PATH="${CARGO_HOME}/bin:${PATH}"
 rustup toolchain install stable --profile minimal
 rustup default stable
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+[[ "${CARGO_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || fail "CARGO_BUILD_JOBS must be a positive integer"
 VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_RECOVERY_STAGING=1 \
   bash "$DEPLOY_ROOT/deploy/scripts/deploy.sh" --approved "$REVISION"
 

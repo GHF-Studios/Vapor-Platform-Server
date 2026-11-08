@@ -31,6 +31,19 @@ class DeploymentScopeTests(unittest.TestCase):
             "none",
         )
 
+    def test_offline_recovery_tool_changes_do_not_deploy_live_services(self) -> None:
+        self.assertEqual(
+            SCOPE.classify_changed_paths(
+                [
+                    "deploy/scripts/recover-state-only-host.sh",
+                    "deploy/scripts/recover-fresh-host.sh",
+                    "deploy/scripts/backup-state-only-to-usb.ps1",
+                    "deploy/tests/test_state_only_fresh_host_contract.py",
+                ]
+            ),
+            "none",
+        )
+
     def test_one_service_submodule_change_selects_only_that_service(self) -> None:
         self.assertEqual(
             SCOPE.classify_changed_paths(["Vapor-Identity-Server"]),

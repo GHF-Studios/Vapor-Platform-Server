@@ -44,6 +44,15 @@ class StateOnlyFreshHostContractTests(unittest.TestCase):
         self.assertLess(script.index(bootstrap), script.index(staged_deploy))
         self.assertLess(script.index(staged_deploy), script.index(restore))
 
+    def test_fresh_host_build_defaults_to_one_job_and_validates_override(self) -> None:
+        for relative_path in (
+            "deploy/scripts/recover-fresh-host.sh",
+            "deploy/scripts/recover-state-only-host.sh",
+        ):
+            script = (REPO_ROOT / relative_path).read_text()
+            self.assertIn('CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"', script)
+            self.assertIn('[[ "${CARGO_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]', script)
+
     def test_usb_sync_stores_a_source_pinned_recovery_kit_next_to_state_snapshots(self) -> None:
         script = (REPO_ROOT / "deploy/scripts/backup-state-only-to-usb.ps1").read_text()
         self.assertIn("Recovery-Kit\\state-only", script)

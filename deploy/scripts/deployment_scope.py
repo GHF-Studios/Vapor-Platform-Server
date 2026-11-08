@@ -21,6 +21,11 @@ IGNORED_ROOT_FILES = {
     "LICENSE",
     "LICENSE.md",
 }
+OFFLINE_RECOVERY_PATHS = {
+    "deploy/scripts/recover-fresh-host.sh",
+    "deploy/scripts/recover-state-only-host.sh",
+    "deploy/scripts/backup-state-only-to-usb.ps1",
+}
 
 
 def _is_non_deploy_path(path: str) -> bool:
@@ -32,6 +37,7 @@ def _is_non_deploy_path(path: str) -> bool:
         or path.startswith(".github/")
         or path.startswith("deploy/tests/")
         or path == "deploy/scripts/deployment_scope.py"
+        or path in OFFLINE_RECOVERY_PATHS
         or path.lower().endswith(".md")
         or path in IGNORED_ROOT_FILES
     )
