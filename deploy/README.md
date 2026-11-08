@@ -10,7 +10,8 @@ Current baseline:
 - Caddy reverse proxy and HTTPS;
 - systemd service units;
 - SQLite-backed identity state;
-- human-approved, exact-revision deployment from `Vapor-Platform-Server`;
+- exact-revision deployment from `Vapor-Platform-Server`, approved through the
+  authenticated admin UI or the root-only operator command below;
 - state under `/var/lib/vapor-server`;
 - service env files under `/etc/vapor-server`;
 - source checkout under `/opt/vapor-platform-server`.
@@ -309,3 +310,30 @@ change. `verify` is read-only and compares an active grant with its managed
 account, authorized key, sudo policy, and expiry timer; it never prints key
 material. Local mutations appear as `local-root` in the SSH audit trail; web
 approvals remain attributed to the Identity profile.
+
+## Root-operated deployment approval
+
+During pre-alpha, an owner with an already trusted root SSH key can approve a
+specific CI deployment without routing the click through the web session. This
+does not enable automatic approval of pushes. It accepts only one unexpired
+pending request whose immutable body and indexed fields agree, whose source is
+the official Platform repository's `main` branch, and whose requested commit
+matches the full SHA supplied by the operator. The approval is recorded as a
+local root decision (`decided_by_profile_id` remains empty) with the supplied
+reason. Dispatch starts only the fixed request-scoped systemd worker; it does
+not accept a shell command, executable, or unit name from the caller.
+
+After deploying a revision containing this command, run it over root SSH:
+
+```bash
+python3 /opt/vapor-platform-server/deploy/scripts/deploy-request-queue.py \
+  --database /var/lib/vapor-server/platform/platform.sqlite3 \
+  approve-and-queue --id <request-uuid> --commit <full-40-character-sha> \
+  --reason "owner-authorized pre-alpha deploy"
+```
+
+The command is intentionally root-only and is not exposed to the Platform web
+process. A failed systemd queue attempt leaves the approval recorded and marks
+dispatch retryable; inspect the request and worker state before retrying. This
+is an explicit pre-alpha owner operation, not a substitute for user-facing
+authorization or future multi-operator policy.

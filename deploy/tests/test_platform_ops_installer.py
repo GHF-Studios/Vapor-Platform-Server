@@ -14,6 +14,7 @@ LEGACY_GROUP_RULE = (
     '/usr/local/sbin/vapor-ssh-deploy "", '
     '/usr/local/sbin/vapor-ssh-service-control'
 )
+LEGACY_PLATFORM_RULE = 'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""'
 
 
 class PlatformOpsInstallerTests(unittest.TestCase):
@@ -25,6 +26,13 @@ class PlatformOpsInstallerTests(unittest.TestCase):
         self.assertIn(f"grep -Fqx '{LEGACY_GROUP_RULE}'", source)
         self.assertIn("exact retired policy", retire)
         self.assertIn('rm -f -- "${platform_policy}" "${temporary_policy}"', retire)
+        # The live pre-broker installation has this one-line policy. Accept
+        # only that exact historical form as well as the newer reviewed policy,
+        # then retire either form after the replacement is healthy.
+        self.assertIn(LEGACY_PLATFORM_RULE, source)
+        self.assertIn(LEGACY_PLATFORM_RULE, retire)
+        self.assertGreaterEqual(source.count("cmp -s --"), 2)
+        self.assertGreaterEqual(retire.count("cmp -s --"), 2)
         self.assertNotIn('rm -- "${legacy_sudoers}"', source)
         self.assertEqual(retire.count(LEGACY_GROUP_RULE), 1)
         deploy = DEPLOY_SCRIPT.read_text(encoding="utf-8")

@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import subprocess
 import sqlite3
 import unittest
 from unittest import mock
@@ -20,13 +21,14 @@ SPEC.loader.exec_module(QUEUE)
 
 
 class DeployRequestQueueTests(unittest.TestCase):
-    def _database_with_request(self, request, status="approved", version=2):
+    def _database_with_request(self, request, status="approved", version=2, request_id="req"):
         db = sqlite3.connect(":memory:", isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute(
             "CREATE TABLE platform_deploy_requests ("
             "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, "
             "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
+            "decided_by_profile_id TEXT, decision_reason TEXT, "
             "dispatch_state TEXT NOT NULL, dispatch_attempts INTEGER NOT NULL DEFAULT 1, "
             "dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT, result_detail TEXT, "
             "body_hash TEXT NOT NULL, request_json TEXT NOT NULL, repository TEXT NOT NULL, "
@@ -41,7 +43,9 @@ class DeployRequestQueueTests(unittest.TestCase):
             "body_hash,request_json,repository,branch,commit_hash,tree_hash,workflow_url,summary,submodules_json) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                "req", status, version, 9999999999, None, "dispatching", 1, 100, None, None,
+                request_id, status, version, 9999999999, None,
+                "not_attempted" if status == "pending" else "dispatching",
+                0 if status == "pending" else 1, None if status == "pending" else 100, None, None,
                 hashlib.sha256(raw.encode()).hexdigest(), raw,
                 request["repository"], request["branch"], request["commit"], request["tree"],
                 request["workflow_url"], request["summary"],
@@ -90,6 +94,117 @@ class DeployRequestQueueTests(unittest.TestCase):
         self.assertEqual(row["status"], "succeeded")
         self.assertEqual(row["dispatch_state"], "completed")
         self.assertEqual(row["result_detail"], "deployment ok")
+        db.close()
+
+    def test_root_approval_records_reason_and_queues_only_the_fixed_request_unit(self) -> None:
+        request = self._request()
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        db = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+        run = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+
+        with mock.patch.object(QUEUE.time, "time", return_value=200), mock.patch.object(
+            QUEUE.subprocess, "run", run
+        ):
+            result = QUEUE.approve_and_queue(
+                db, request_id, request["commit"], "owner-authorized pre-alpha deploy", now=200
+            )
+
+        self.assertEqual(result, 0)
+        run.assert_called_once_with(
+            ["/usr/bin/systemctl", "start", "--no-block", f"vapor-deploy@{request_id}.service"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+        row = db.execute(
+            "SELECT status,version,decided_by_profile_id,decided_at_unix,decision_reason,"
+            "dispatch_state,dispatch_attempts,dispatch_attempted_at_unix "
+            "FROM platform_deploy_requests WHERE id=?", (request_id,)
+        ).fetchone()
+        self.assertEqual(row["status"], "approved")
+        self.assertEqual(row["version"], 2)
+        self.assertIsNone(row["decided_by_profile_id"])
+        self.assertEqual(row["decided_at_unix"], 200)
+        self.assertIn("local root operator", row["decision_reason"].lower())
+        self.assertIn("owner-authorized pre-alpha deploy", row["decision_reason"])
+        self.assertEqual(row["dispatch_state"], "dispatching")
+        self.assertEqual(row["dispatch_attempts"], 1)
+        self.assertEqual(row["dispatch_attempted_at_unix"], 200)
+        with self.assertRaisesRegex(ValueError, "only a pending"):
+            QUEUE.approve_and_queue(db, request_id, request["commit"], "repeat approval", now=201)
+        db.close()
+
+    def test_root_approval_rejects_wrong_commit_without_mutation(self) -> None:
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        db = self._database_with_request(self._request(), status="pending", version=1, request_id=request_id)
+        with self.assertRaisesRegex(ValueError, "commit"):
+            QUEUE.approve_and_queue(db, request_id, "f" * 40, "approved by owner")
+        row = db.execute(
+            "SELECT status,version,decision_reason FROM platform_deploy_requests WHERE id=?", (request_id,)
+        ).fetchone()
+        self.assertEqual(tuple(row), ("pending", 1, None))
+        db.close()
+
+    def test_root_approval_rejects_non_official_request_without_mutation(self) -> None:
+        request = self._request()
+        request["branch"] = "codex/unreviewed"
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        db = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+        with self.assertRaisesRegex(ValueError, "main branch"):
+            QUEUE.approve_and_queue(db, request_id, request["commit"], "approved by owner")
+        row = db.execute(
+            "SELECT status,version FROM platform_deploy_requests WHERE id=?", (request_id,)
+        ).fetchone()
+        self.assertEqual(tuple(row), ("pending", 1))
+        db.close()
+
+    def test_root_approval_rejects_expired_or_tampered_requests(self) -> None:
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        request = self._request()
+        expired = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+        expired.execute("UPDATE platform_deploy_requests SET expires_at_unix=199 WHERE id=?", (request_id,))
+        with self.assertRaisesRegex(ValueError, "expired"):
+            QUEUE.approve_and_queue(expired, request_id, request["commit"], "approved deploy", now=200)
+        self.assertEqual(
+            tuple(expired.execute("SELECT status,version FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()),
+            ("pending", 1),
+        )
+        expired.close()
+
+        tampered = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+        tampered.execute(
+            "UPDATE platform_deploy_requests SET request_json=request_json || ' ' WHERE id=?", (request_id,)
+        )
+        with self.assertRaisesRegex(ValueError, "digest"):
+            QUEUE.approve_and_queue(tampered, request_id, request["commit"], "approved deploy", now=200)
+        self.assertEqual(
+            tuple(tampered.execute("SELECT status,version FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()),
+            ("pending", 1),
+        )
+        tampered.close()
+
+    def test_root_approval_worker_failure_preserves_decision_as_retryable(self) -> None:
+        request = self._request()
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        db = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+        run = mock.Mock(return_value=subprocess.CompletedProcess([], 1))
+        with mock.patch.object(QUEUE.time, "time", return_value=200), mock.patch.object(
+            QUEUE.subprocess, "run", run
+        ), self.assertRaisesRegex(RuntimeError, "approval was recorded"):
+            QUEUE.approve_and_queue(
+                db, request_id, request["commit"], "owner-authorized pre-alpha deploy", now=200
+            )
+        row = db.execute(
+            "SELECT status,version,decision_reason,dispatch_state,dispatch_detail "
+            "FROM platform_deploy_requests WHERE id=?", (request_id,)
+        ).fetchone()
+        self.assertEqual(row["status"], "approved")
+        self.assertEqual(row["version"], 2)
+        self.assertIsNotNone(row["decision_reason"])
+        self.assertEqual(row["dispatch_state"], "failed")
+        self.assertIn("retry", row["dispatch_detail"].lower())
         db.close()
 
     def test_claim_preserves_service_scope_and_target(self) -> None:

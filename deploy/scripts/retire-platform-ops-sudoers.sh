@@ -8,8 +8,11 @@ require_root
 platform_policy=/etc/sudoers.d/vapor-platform-ops
 temporary_policy=/etc/sudoers.d/vapor-temporary-access
 expected_platform="$(mktemp /tmp/vapor-platform-sudoers.XXXXXX)"
+expected_legacy_platform="$(mktemp /tmp/vapor-platform-legacy-sudoers.XXXXXX)"
 expected_temporary="$(mktemp /tmp/vapor-temporary-sudoers.XXXXXX)"
-cleanup() { rm -f -- "${expected_platform}" "${expected_temporary}"; }
+cleanup() {
+  rm -f -- "${expected_platform}" "${expected_legacy_platform}" "${expected_temporary}"
+}
 trap cleanup EXIT
 
 printf '%s\n' \
@@ -18,6 +21,9 @@ printf '%s\n' \
   'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-start' \
   'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-stop' \
   > "${expected_platform}"
+printf '%s\n' \
+  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""' \
+  > "${expected_legacy_platform}"
 printf '%s\n' \
   '%vapor-temp-ssh ALL=(root) NOPASSWD: /usr/local/sbin/vapor-ssh-deploy "", /usr/local/sbin/vapor-ssh-service-control' \
   > "${expected_temporary}"
@@ -29,7 +35,9 @@ for path in "${platform_policy}" "${temporary_policy}"; do
     exit 1
   fi
 done
-if [ -e "${platform_policy}" ] && ! cmp -s -- "${expected_platform}" "${platform_policy}"; then
+if [ -e "${platform_policy}" ] && \
+  ! cmp -s -- "${expected_platform}" "${platform_policy}" && \
+  ! cmp -s -- "${expected_legacy_platform}" "${platform_policy}"; then
   echo "error: Platform sudoers file differs from the exact retired policy; preserving it" >&2
   exit 1
 fi

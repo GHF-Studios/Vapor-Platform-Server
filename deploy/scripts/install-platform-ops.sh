@@ -35,7 +35,13 @@ fi
 
 temporary_config="$(mktemp /etc/ssh/sshd_config.vapor.XXXXXX)"
 backup_config="$(mktemp /etc/ssh/sshd_config.vapor-backup.XXXXXX)"
-cleanup() { rm -f -- "${temporary_config}" "${backup_config}"; }
+expected_platform_sudoers=""
+expected_legacy_platform_sudoers=""
+cleanup() {
+  rm -f -- "${temporary_config}" "${backup_config}"
+  [ -z "${expected_platform_sudoers}" ] || rm -f -- "${expected_platform_sudoers}"
+  [ -z "${expected_legacy_platform_sudoers}" ] || rm -f -- "${expected_legacy_platform_sudoers}"
+}
 trap cleanup EXIT
 cp -a -- "${SSH_CONFIG}" "${backup_config}"
 awk -v begin="${begin}" -v end="${end}" '
@@ -78,21 +84,24 @@ install -m 0644 "${DEPLOY_DIR}/systemd/vapor-platform-ops@.service" \
 # Validate the exact prior Platform sudo policy now, but leave it in place until
 # the new Platform binary is running and has passed its health check.
 legacy_platform_sudoers=/etc/sudoers.d/vapor-platform-ops
-expected_platform_sudoers=""
 if [ -e "${legacy_platform_sudoers}" ] || [ -L "${legacy_platform_sudoers}" ]; then
   if [ ! -f "${legacy_platform_sudoers}" ] || [ -L "${legacy_platform_sudoers}" ]; then
     echo "error: unexpected Platform sudoers path; preserving it" >&2
     exit 1
   fi
   expected_platform_sudoers="$(mktemp /tmp/vapor-platform-sudoers.XXXXXX)"
-  trap 'rm -f -- "${expected_platform_sudoers}"; cleanup' EXIT
+  expected_legacy_platform_sudoers="$(mktemp /tmp/vapor-platform-legacy-sudoers.XXXXXX)"
   printf '%s\n' \
     'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""' \
     'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops recovery-status' \
     'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-start' \
     'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-stop' \
     > "${expected_platform_sudoers}"
-  if ! cmp -s -- "${expected_platform_sudoers}" "${legacy_platform_sudoers}"; then
+  printf '%s\n' \
+    'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""' \
+    > "${expected_legacy_platform_sudoers}"
+  if ! cmp -s -- "${expected_platform_sudoers}" "${legacy_platform_sudoers}" && \
+    ! cmp -s -- "${expected_legacy_platform_sudoers}" "${legacy_platform_sudoers}"; then
     echo "error: Platform sudoers file differs from the retired exact policy; preserving it" >&2
     exit 1
   fi
@@ -176,10 +185,6 @@ if [ "${VAPOR_RECOVERY_STAGING:-0}" != "1" ]; then
   chmod 0644 "${temporary_flag}"
   mv -f -- "${temporary_flag}" /etc/vapor-server/ssh-access-enabled
 
-fi
-if [ -n "${expected_platform_sudoers}" ]; then
-  rm -f -- "${expected_platform_sudoers}"
-  trap 'cleanup' EXIT
 fi
 visudo -c >/dev/null
 echo "platform-ops: fixed helper and temporary SSH access policy installed"
