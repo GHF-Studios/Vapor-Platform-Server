@@ -45,6 +45,7 @@ try {
     if ($arguments -notmatch 'backup-state-only-to-usb\.ps1' -or
         $arguments -notmatch '-RecoveryRepositoryPath\s+"[^"]+"' -or
         $arguments -notmatch '-WindowStyle\s+Hidden' -or
+        $arguments -notmatch '(?i)(^|\s)-NonInteractive(\s|$)' -or
         $arguments -match 'backup-to-usb\.ps1(?!\.)') {
         throw "The registered task does not use the hidden state-only sync and explicit source path: $arguments"
     }
