@@ -1,32 +1,43 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-07 22:21 UTC)
+## Current verified state (2026-11-08 10:19 UTC)
 
-- Platform `739debf5c136badc8e65e3fd681bea63a8bca77c` is live in `services`
-  mode. Caddy, the seven owner services, and the Platform admin gateway all
-  report active; `/healthz` returns HTTP 200. This snapshot was checked over
-  the designated root SSH identity after the deployment completed.
-- The latest live admin bundle contains the recent Operations changes: terminal
-  deployments are routed to History, pending requests are omitted from History,
-  and approved Identity requests and active SSH grants use owner-specific
-  status meanings. `/docs` redirects to `/docs/`, and both the redirect and
-  docs page return successfully.
-- The enabled `vapor-state-export.timer` is active. I also ran its existing
-  one-shot service after deployment so the current pointer now names
-  `vapor-platform-recovery-20261107T222127Z-739debf5c136.tar.gz` (4,878,515
-  bytes), pinned to this exact live Platform revision. Its SHA-256 matches the
-  pointer, the manifest declares services mode and includes the recovery kit,
-  and all nine Caddy/Platform/service units were active after the export.
-- The workstation still has no mounted removable drive, no
-  `%LOCALAPPDATA%\Vapor\Recovery` directory, and no Vapor recovery-sync task.
-  Its `D:` volume is a 1 GiB FAT32 fixed volume, so it is not being treated as
-  the owner's 128 GB USB drive. The owner-held USB copy and clean-host restore
-  remain unverified; VPS archive generation alone is not a completed recovery
-  path.
-- The Platform repo’s production-topology description is corrected in this
-  revision: independent service processes behind Caddy, with Platform as the
-  shared admin gateway and deployment/recovery coordinator. The monolith mode
-  remains an alternate topology.
+- Platform `12ab9d8d2f1b581bb728e60bcc5835e6d57a226d` is live in `services`
+  mode. Its approved request `dc62975c-86b6-4c41-8e4b-e7aed4f10bf8` completed
+  successfully at `2026-11-08T10:01:59Z`. The host's deployed-source map pins
+  all eight service targets to this composition revision and their exact source
+  commits.
+- Caddy and the Platform, Homepage, Docs, Identity, Diagnostics, Registry,
+  Artifact, and Build Cache services are active. Direct health checks on ports
+  7110–7117 returned HTTP 200. Public `/`, `/downloads`, `/docs/`, and
+  `/api/build-cache/v1/status` also returned HTTP 200.
+- The Build Cache status response currently reports both supported targets as
+  `configured=false` and `current=false`: `x86_64-unknown-linux-gnu` and
+  `x86_64-pc-windows-gnullvm`. The service is reachable, but there are no
+  promoted snapshots; the primary VPS remains the deployment-build fallback.
+- The latest host recovery archive is
+  `vapor-platform-recovery-20261108T100225Z-12ab9d8d2f1b.tar.gz` (4,828,556
+  bytes; SHA-256
+  `b02d04bde8b8267e2f0dc2442d3d4f69ad31cf7d1a4274ea9c1552318f1b9e48`). The
+  manifest includes the recovery kit and matches the latest pointer.
+- The owner-held `E:\VaporRecovery` sync completed successfully at
+  `2026-11-08T10:03:45Z`. It copied one archive, verified the latest and one
+  rotating historical archive, validated the embedded recovery kit against
+  source commit `12ab9d8d2f1b581bb728e60bcc5835e6d57a226d`, and reports 42
+  retained archives (about 192 MiB of archive payload). Forty older archives
+  have not yet been individually rehashed by the rotating sync policy. The
+  hourly task is registered and its last result was success; the next run was
+  scheduled for 12:00 local time.
+- A direct host snapshot reports about 39.4 GiB free on `/`, 1 vCPU, and 1.8
+  GiB RAM. The VPS remains suitable for its current deployment-build fallback,
+  not for a concurrent guest compiler worker.
+- The two newest deployment requests were both successful. Older approved
+  records with failed dispatch remain in the database as history; there is no
+  active request-specific deployment worker. Do not retry those stale records
+  as if they were pending work.
+- The owner-held archive copy is now verified, but a fresh-host restore drill
+  remains unproven. The optional worker node and configured target snapshots
+  are also not yet available.
 
 ## Public web surface spot-check (2026-11-07 17:06 UTC)
 
