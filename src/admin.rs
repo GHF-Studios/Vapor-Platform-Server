@@ -2150,7 +2150,7 @@ struct ServiceSummary {
     id: &'static str,
     name: &'static str,
     health: &'static str,
-    readiness: &'static str,
+    readiness: String,
     admin_url: Option<&'static str>,
 }
 
@@ -2457,7 +2457,17 @@ async fn probe_services_for_mode(
     services_mode: bool,
 ) -> Vec<ServiceSummary> {
     if services_mode {
-        let (platform, homepage, docs, identity, diagnostics, registry, artifacts, build_cache) = tokio::join!(
+        let (
+            platform,
+            homepage,
+            docs,
+            identity,
+            diagnostics,
+            registry,
+            artifacts,
+            build_cache,
+            build_cache_readiness,
+        ) = tokio::join!(
             probe_health(client, "http://127.0.0.1:7110", "/healthz"),
             probe_health(client, "http://127.0.0.1:7111", "/healthz"),
             probe_health(client, "http://127.0.0.1:7112", "/healthz"),
@@ -2466,6 +2476,7 @@ async fn probe_services_for_mode(
             probe_health(client, "http://127.0.0.1:7115", "/healthz"),
             probe_health(client, "http://127.0.0.1:7116", "/healthz"),
             probe_health(client, "http://127.0.0.1:7117", "/healthz"),
+            probe_build_cache_readiness(client, "http://127.0.0.1:7117", "/v1/status"),
         );
         return vec![
             service(
@@ -2509,13 +2520,23 @@ async fn probe_services_for_mode(
                 "build-cache",
                 "Build Cache",
                 build_cache,
-                "not reported",
+                build_cache_readiness,
                 Some("/admin/build-cache"),
             ),
         ];
     }
 
-    let (platform, homepage, docs, identity, diagnostics, registry, artifacts, build_cache) = tokio::join!(
+    let (
+        platform,
+        homepage,
+        docs,
+        identity,
+        diagnostics,
+        registry,
+        artifacts,
+        build_cache,
+        build_cache_readiness,
+    ) = tokio::join!(
         probe_health(client, origin, "/api/admin/platform-healthz"),
         probe_health(client, origin, "/healthz"),
         probe_health(client, origin, "/docs/healthz"),
@@ -2524,6 +2545,7 @@ async fn probe_services_for_mode(
         probe_health(client, origin, "/api/registry/healthz"),
         probe_health(client, origin, "/api/updates/healthz"),
         probe_health(client, origin, "/api/build-cache/healthz"),
+        probe_build_cache_readiness(client, origin, "/api/build-cache/v1/status"),
     );
     vec![
         service(
@@ -2567,7 +2589,7 @@ async fn probe_services_for_mode(
             "build-cache",
             "Build Cache",
             build_cache,
-            "not reported",
+            build_cache_readiness,
             Some("/admin/build-cache"),
         ),
     ]
@@ -2580,18 +2602,89 @@ async fn probe_health(client: &reqwest::Client, origin: &str, path: &str) -> &'s
     }
 }
 
+async fn probe_build_cache_readiness(client: &reqwest::Client, origin: &str, path: &str) -> String {
+    let mut response = match client.get(format!("{origin}{path}")).send().await {
+        Ok(response) if response.status().is_success() => response,
+        _ => return "unavailable".to_owned(),
+    };
+    const MAX_STATUS_BYTES: usize = 64 * 1024;
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if body.len().saturating_add(chunk.len()) <= MAX_STATUS_BYTES => {
+                body.extend_from_slice(&chunk);
+            }
+            Ok(Some(_)) => return "unknown".to_owned(),
+            Ok(None) => break,
+            Err(_) => return "unavailable".to_owned(),
+        }
+    }
+    let Ok(status) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return "unknown".to_owned();
+    };
+    build_cache_readiness(&status)
+}
+
+fn build_cache_readiness(status: &serde_json::Value) -> String {
+    const TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-gnullvm"];
+    let Some(targets) = status.get("targets").and_then(serde_json::Value::as_array) else {
+        return "unknown".to_owned();
+    };
+
+    let mut seen = [false; TARGETS.len()];
+    let mut configured = 0;
+    let mut current = 0;
+    for target in targets {
+        let Some(triple) = target
+            .get("target_triple")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(index) = TARGETS.iter().position(|supported| *supported == triple) else {
+            continue;
+        };
+        if seen[index] {
+            return "unknown".to_owned();
+        }
+        seen[index] = true;
+        let (Some(is_configured), Some(is_current)) = (
+            target
+                .get("configured")
+                .and_then(serde_json::Value::as_bool),
+            target.get("current").and_then(serde_json::Value::as_bool),
+        ) else {
+            return "unknown".to_owned();
+        };
+        if is_current && !is_configured {
+            return "unknown".to_owned();
+        }
+        configured += usize::from(is_configured);
+        current += usize::from(is_current);
+    }
+    if seen.iter().any(|found| !found) {
+        return "unknown".to_owned();
+    }
+
+    format!(
+        "{current}/{} snapshots current; {configured}/{} targets configured",
+        TARGETS.len(),
+        TARGETS.len()
+    )
+}
+
 fn service(
     id: &'static str,
     name: &'static str,
     health: &'static str,
-    readiness: &'static str,
+    readiness: impl Into<String>,
     admin_url: Option<&'static str>,
 ) -> ServiceSummary {
     ServiceSummary {
         id,
         name,
         health,
-        readiness,
+        readiness: readiness.into(),
         admin_url,
     }
 }
@@ -2712,6 +2805,15 @@ mod tests {
         uri: Uri,
     ) -> axum::response::Response {
         state.health_requests.fetch_add(1, Ordering::SeqCst);
+        if uri.path() == "/api/build-cache/v1/status" {
+            return Json(json!({
+                "targets": [
+                    {"target_triple":"x86_64-unknown-linux-gnu","configured":false,"current":false},
+                    {"target_triple":"x86_64-pc-windows-gnullvm","configured":false,"current":false}
+                ]
+            }))
+            .into_response();
+        }
         let status = if uri.path() == "/docs/healthz" {
             StatusCode::SERVICE_UNAVAILABLE
         } else {
@@ -2722,6 +2824,15 @@ mod tests {
     use tower::ServiceExt;
 
     async fn fake_health(uri: Uri) -> axum::response::Response {
+        if uri.path() == "/api/build-cache/v1/status" {
+            return Json(json!({
+                "targets": [
+                    {"target_triple":"x86_64-unknown-linux-gnu","configured":false,"current":false},
+                    {"target_triple":"x86_64-pc-windows-gnullvm","configured":false,"current":false}
+                ]
+            }))
+            .into_response();
+        }
         let status = if uri.path() == "/docs/healthz" {
             StatusCode::SERVICE_UNAVAILABLE
         } else {
@@ -3813,7 +3924,7 @@ mod tests {
             "private, no-store"
         );
         assert_eq!(authorization_requests.load(Ordering::SeqCst), 1);
-        assert_eq!(health_requests.load(Ordering::SeqCst), 8);
+        assert_eq!(health_requests.load(Ordering::SeqCst), 9);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let overview: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(overview["state"], "serving");
@@ -3831,6 +3942,16 @@ mod tests {
         assert_eq!(service_health("homepage"), "healthy");
         assert_eq!(service_health("docs"), "unavailable");
         assert_eq!(service_health("build-cache"), "healthy");
+        let build_cache = overview["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|service| service["id"] == "build-cache")
+            .unwrap();
+        assert_eq!(
+            build_cache["readiness"],
+            "0/2 snapshots current; 0/2 targets configured"
+        );
         assert_eq!(overview["services"][0]["readiness"], "not reported");
         assert!(!body
             .windows(b"private-probe-payload".len())
@@ -3872,9 +3993,60 @@ mod tests {
         assert_eq!(docs.health, "unavailable");
         assert_eq!(platform.health, "healthy");
         assert_eq!(build_cache.health, "healthy");
+        assert_eq!(
+            build_cache.readiness,
+            "0/2 snapshots current; 0/2 targets configured"
+        );
         let serialized = serde_json::to_string(&services).unwrap();
         assert!(!serialized.contains("private-probe-payload"));
         server.abort();
+    }
+
+    #[test]
+    fn build_cache_readiness_distinguishes_service_health_from_target_state() {
+        let status = json!({
+            "targets": [
+                {"target_triple":"x86_64-unknown-linux-gnu","configured":false,"current":false},
+                {"target_triple":"x86_64-pc-windows-gnullvm","configured":false,"current":false}
+            ]
+        });
+        assert_eq!(
+            super::build_cache_readiness(&status),
+            "0/2 snapshots current; 0/2 targets configured"
+        );
+    }
+
+    #[test]
+    fn build_cache_readiness_counts_only_current_configured_supported_targets() {
+        let status = json!({
+            "targets": [
+                {"target_triple":"x86_64-unknown-linux-gnu","configured":true,"current":true},
+                {"target_triple":"x86_64-pc-windows-gnullvm","configured":true,"current":false},
+                {"target_triple":"aarch64-unknown-linux-gnu","configured":true,"current":true}
+            ]
+        });
+        assert_eq!(
+            super::build_cache_readiness(&status),
+            "1/2 snapshots current; 2/2 targets configured"
+        );
+    }
+
+    #[test]
+    fn build_cache_readiness_marks_incomplete_or_duplicate_target_reports_unknown() {
+        let missing = json!({
+            "targets": [
+                {"target_triple":"x86_64-unknown-linux-gnu","configured":false,"current":false}
+            ]
+        });
+        let duplicate = json!({
+            "targets": [
+                {"target_triple":"x86_64-unknown-linux-gnu","configured":false,"current":false},
+                {"target_triple":"x86_64-unknown-linux-gnu","configured":false,"current":false},
+                {"target_triple":"x86_64-pc-windows-gnullvm","configured":false,"current":false}
+            ]
+        });
+        assert_eq!(super::build_cache_readiness(&missing), "unknown");
+        assert_eq!(super::build_cache_readiness(&duplicate), "unknown");
     }
 
     #[tokio::test]
