@@ -35,6 +35,7 @@ python3 -m py_compile \
   "${SCRIPT_DIR}/deployed_source_manifest.py" \
   "${SCRIPT_DIR}/operation_history.py" \
   "${SCRIPT_DIR}/record_owner_usb_sync.py" \
+  "${SCRIPT_DIR}/record_owner_state_usb_sync.py" \
   "${SCRIPT_DIR}/render-caddyfile.py" \
   "${SCRIPT_DIR}/deploy-service.py"
 rm -rf -- "${SCRIPT_DIR}/__pycache__"

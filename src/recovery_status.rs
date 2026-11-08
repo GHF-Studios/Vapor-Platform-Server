@@ -16,6 +16,8 @@ pub(crate) struct RecoveryStatus {
     pub state_only_latest_archive: Option<LatestStateOnlyArchive>,
     #[serde(default)]
     pub owner_usb_sync: Option<OwnerUsbSyncStatus>,
+    #[serde(default)]
+    pub owner_state_usb_sync: Option<OwnerStateUsbSyncStatus>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -50,6 +52,112 @@ pub(crate) struct OwnerUsbSyncStatus {
     pub recovery_kit_preflight_validation: bool,
     pub recovery_kit_source_commit: Option<String>,
     pub freshness: String,
+}
+
+/// Owner-reported verification for the state-only USB snapshot set.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OwnerStateUsbSyncStatus {
+    pub last_success_unix: i64,
+    pub latest_archive: String,
+    pub latest_archive_sha256: String,
+    pub verified_generation_count: u32,
+    pub retained_payload_bytes: u64,
+    pub source_commit: String,
+    pub latest_rehashed: bool,
+    pub recovery_kit_available: bool,
+    pub freshness: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnerStateUsbSyncRecord {
+    schema_version: u8,
+    last_success_unix: i64,
+    latest_archive: String,
+    latest_archive_sha256: String,
+    verified_generation_count: u32,
+    retained_payload_bytes: u64,
+    source_commit: String,
+    latest_rehashed: bool,
+    recovery_kit_available: bool,
+}
+
+pub(crate) fn load_owner_state_usb_sync(
+    root: &std::path::Path,
+    now_unix: i64,
+) -> Option<OwnerStateUsbSyncStatus> {
+    let root_metadata = std::fs::symlink_metadata(root).ok()?;
+    if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
+        return None;
+    }
+    let path = root.join("owner-usb-sync.json");
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() || metadata.len() > 4096
+    {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() > 4096 {
+        return None;
+    }
+    let record: OwnerStateUsbSyncRecord = serde_json::from_slice(&bytes).ok()?;
+    let archive_name_valid = record
+        .latest_archive
+        .strip_prefix("vapor-platform-state-")
+        .and_then(|value| value.strip_suffix(".tar.gz"))
+        .and_then(|value| value.rsplit_once('-'))
+        .is_some_and(|(timestamp, nonce)| {
+            let bytes = timestamp.as_bytes();
+            bytes.len() == 16
+                && bytes[8] == b'T'
+                && bytes[15] == b'Z'
+                && bytes[..8].iter().all(u8::is_ascii_digit)
+                && bytes[9..15].iter().all(u8::is_ascii_digit)
+                && nonce.len() == 12
+                && nonce
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        });
+    if record.schema_version != 1
+        || record.last_success_unix <= 0
+        || record.last_success_unix > now_unix.saturating_add(300)
+        || !archive_name_valid
+        || record.latest_archive_sha256.len() != 64
+        || !record
+            .latest_archive_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || record.verified_generation_count == 0
+        || record.verified_generation_count > 10_000
+        || record.retained_payload_bytes == 0
+        || record.retained_payload_bytes > (1_u64 << 40)
+        || record.source_commit.len() != 40
+        || !record
+            .source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || !record.latest_rehashed
+        || !record.recovery_kit_available
+    {
+        return None;
+    }
+    let freshness = if now_unix.saturating_sub(record.last_success_unix) <= 26 * 60 * 60 {
+        "recent"
+    } else {
+        "stale"
+    };
+    Some(OwnerStateUsbSyncStatus {
+        last_success_unix: record.last_success_unix,
+        latest_archive: record.latest_archive,
+        latest_archive_sha256: record.latest_archive_sha256,
+        verified_generation_count: record.verified_generation_count,
+        retained_payload_bytes: record.retained_payload_bytes,
+        source_commit: record.source_commit,
+        latest_rehashed: record.latest_rehashed,
+        recovery_kit_available: record.recovery_kit_available,
+        freshness: freshness.to_owned(),
+    })
 }
 
 impl OwnerUsbSyncStatus {
@@ -254,12 +362,23 @@ impl RecoveryStatus {
                     .and_then(|duration| i64::try_from(duration.as_secs()).ok())
                     .is_some_and(|now| report.validate_at(now))
             })
+            && self.owner_state_usb_sync.as_ref().is_none_or(|report| {
+                report.last_success_unix > 0
+                    && report.latest_archive.len() <= 128
+                    && report.verified_generation_count > 0
+                    && report.verified_generation_count <= 10_000
+                    && report.retained_payload_bytes > 0
+                    && report.retained_payload_bytes <= (1_u64 << 40)
+                    && report.latest_rehashed
+                    && report.recovery_kit_available
+                    && matches!(report.freshness.as_str(), "recent" | "stale")
+            })
     }
 }
 
 #[cfg(test)]
 mod owner_usb_tests {
-    use super::load_owner_usb_sync;
+    use super::{load_owner_state_usb_sync, load_owner_usb_sync};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temporary_root() -> std::path::PathBuf {
@@ -322,6 +441,24 @@ mod owner_usb_tests {
         if std::os::windows::fs::symlink_file(&target, &path).is_ok() {
             assert!(load_owner_usb_sync(&root, 2_000).is_none());
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loads_state_only_usb_report_and_rejects_invalid_digest() {
+        let root = temporary_root();
+        let path = root.join("owner-usb-sync.json");
+        let valid = format!(
+            r#"{{"schema_version":1,"last_success_unix":1000,"latest_archive":"vapor-platform-state-20261108T120000Z-012345abcdef.tar.gz","latest_archive_sha256":"{}","verified_generation_count":12,"retained_payload_bytes":4096,"source_commit":"0123456789abcdef0123456789abcdef01234567","latest_rehashed":true,"recovery_kit_available":true}}"#,
+            "a".repeat(64)
+        );
+        std::fs::write(&path, &valid).unwrap();
+        let status = load_owner_state_usb_sync(&root, 2_000).unwrap();
+        assert_eq!(status.freshness, "recent");
+        assert_eq!(status.verified_generation_count, 12);
+        let malformed = valid.replace(&"a".repeat(64), "z");
+        std::fs::write(&path, malformed).unwrap();
+        assert!(load_owner_state_usb_sync(&root, 2_000).is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

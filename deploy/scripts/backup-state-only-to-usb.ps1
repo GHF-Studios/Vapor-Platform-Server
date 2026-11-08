@@ -261,4 +261,46 @@ $kitPointer = [ordered]@{
     [System.Text.UTF8Encoding]::new($false)
 )
 Move-Item -LiteralPath $kitPointerTemp -Destination (Join-Path $kitPointerRoot 'latest.json') -Force
-Write-Output "state-usb-sync: verified $(@($index.archives).Count) generations; copied $copied; $verifiedBytes bytes; recovery kit $sourceCommit"
+$lastSuccessUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$ownerReport = [ordered]@{
+    schema_version = 1
+    last_success_unix = $lastSuccessUnix
+    latest_archive = [string]$latest.archive
+    latest_archive_sha256 = [string]$latest.sha256
+    verified_generation_count = [int]@($index.archives).Count
+    retained_payload_bytes = [long]$verifiedBytes
+    source_commit = [string]$sourceCommit
+    latest_rehashed = $true
+    recovery_kit_available = $true
+}
+$reportJson = $ownerReport | ConvertTo-Json -Depth 4 -Compress
+$reportEncoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($reportJson))
+$platformReported = $false
+try {
+    $remoteReportCommand = "python3 /opt/vapor-platform-server/deploy/scripts/record_owner_state_usb_sync.py --base64 $reportEncoded"
+    & $ssh @sshOptions $target $remoteReportCommand | Out-Null
+    $platformReported = $LASTEXITCODE -eq 0
+} catch {
+    $platformReported = $false
+}
+$localReport = [ordered]@{
+    schema_version = 1
+    last_success_unix = $lastSuccessUnix
+    latest_archive = [string]$latest.archive
+    latest_archive_sha256 = [string]$latest.sha256
+    verified_generation_count = [int]@($index.archives).Count
+    retained_payload_bytes = [long]$verifiedBytes
+    source_commit = [string]$sourceCommit
+    recovery_kit_available = $true
+    platform_reported = $platformReported
+}
+$localReportPath = Join-Path $snapshotRoot 'last-sync.json'
+$localReportTemp = Join-Path $incoming 'last-sync.json.partial'
+Assert-NoReparsePathComponents $localReportPath
+Assert-NoReparsePathComponents $localReportTemp
+[System.IO.File]::WriteAllText($localReportTemp, ($localReport | ConvertTo-Json -Depth 4 -Compress) + "`n", [System.Text.UTF8Encoding]::new($false))
+Move-Item -LiteralPath $localReportTemp -Destination $localReportPath -Force
+if (-not $platformReported) {
+    Write-Warning 'USB snapshot and recovery kit verified locally, but the server status report could not be updated.'
+}
+Write-Output "state-usb-sync: verified $(@($index.archives).Count) generations; copied $copied; $verifiedBytes bytes; recovery kit $sourceCommit; platform report $(if ($platformReported) { 'updated' } else { 'unavailable' })"

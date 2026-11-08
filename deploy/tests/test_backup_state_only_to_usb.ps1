@@ -19,6 +19,12 @@ param([Parameter(ValueFromRemainingArguments=$true)][string[]]$CallArgs)
 $command = $CallArgs[-1]
 if ($command -like 'cat */latest.json') { Get-Content -LiteralPath (Join-Path $env:VAPOR_USB_TEST_REMOTE_ROOT 'latest.json') -Raw; exit 0 }
 if ($command -like 'cat */index.json') { Get-Content -LiteralPath (Join-Path $env:VAPOR_USB_TEST_REMOTE_ROOT 'index.json') -Raw; exit 0 }
+if ($command -match '^python3 /opt/vapor-platform-server/deploy/scripts/record_owner_state_usb_sync\.py --base64 ([A-Za-z0-9+/=]+)$') {
+    $bytes = [Convert]::FromBase64String($Matches[1])
+    $json = [System.Text.Encoding]::UTF8.GetString($bytes)
+    Set-Content -LiteralPath (Join-Path $env:VAPOR_USB_TEST_REMOTE_ROOT 'owner-usb-sync.json') -Value $json -NoNewline -Encoding utf8
+    exit 0
+}
 exit 2
 '@ | Set-Content -LiteralPath $sshShim -Encoding utf8
     @'
@@ -98,6 +104,11 @@ with tarfile.open(root / sys.argv[3], "w:gz") as archive:
     Assert-True ($pointer.source_commit -ceq $sourceCommit) 'recovery-kit pointer has the wrong source revision'
     Assert-True ($pointer.archive_sha256 -ceq $archiveHash) 'recovery-kit pointer does not bind the snapshot checksum'
     Assert-True ($pointer.files.'recover-state-only-host.sh' -ceq (Get-FileHash -LiteralPath (Join-Path $kitRoot 'recover-state-only-host.sh') -Algorithm SHA256).Hash.ToLowerInvariant()) 'recovery-kit file digest is incorrect'
+    $syncReport = Get-Content -LiteralPath (Join-Path $usbRoot 'State-Snapshots\last-sync.json') -Raw | ConvertFrom-Json
+    Assert-True ($syncReport.platform_reported -eq $true) 'local sync report does not show the Platform status update'
+    $serverReport = Get-Content -LiteralPath (Join-Path $remoteRoot 'owner-usb-sync.json') -Raw | ConvertFrom-Json
+    Assert-True ($serverReport.source_commit -ceq $sourceCommit) 'Platform report has the wrong source-pinned recovery-kit revision'
+    Assert-True ($serverReport.latest_archive_sha256 -ceq $archiveHash) 'Platform report does not bind the latest archive checksum'
 
     & $sync -Server fixture -SshKey $sshKey -UsbPath $usbRoot -AllowFixedDrive -RecoveryRepositoryPath $sourceRoot | Out-Null
     $damagePath = Join-Path $kitRoot 'recover-state-only-host.sh'

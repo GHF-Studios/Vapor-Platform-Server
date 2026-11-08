@@ -89,6 +89,8 @@ function ConvertTo-WindowsCommandLineArgument {
 
 $arguments = @(
     '-NoProfile'
+    '-WindowStyle'
+    'Hidden'
     '-ExecutionPolicy'
     'Bypass'
     '-File'

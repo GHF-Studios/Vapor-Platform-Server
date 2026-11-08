@@ -44,8 +44,9 @@ try {
     $arguments = [string]$global:VaporUsbTestRegisteredTask.Action.Arguments
     if ($arguments -notmatch 'backup-state-only-to-usb\.ps1' -or
         $arguments -notmatch '-RecoveryRepositoryPath\s+"[^"]+"' -or
+        $arguments -notmatch '-WindowStyle\s+Hidden' -or
         $arguments -match 'backup-to-usb\.ps1(?!\.)') {
-        throw "The registered task does not use the state-only sync and explicit source path: $arguments"
+        throw "The registered task does not use the hidden state-only sync and explicit source path: $arguments"
     }
     if ($arguments -notmatch [regex]::Escape($repoRoot)) {
         throw 'The task did not preserve the configured recovery source path.'
