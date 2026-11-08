@@ -26,7 +26,9 @@ STATE_ROOT="${VAPOR_STATE_ROOT:-/var/lib/vapor-server}"
 BACKUP_ROOT="${VAPOR_BACKUP_ROOT:-/var/backups/vapor-server}"
 [[ "${STATE_ROOT}" = /* && "${BACKUP_ROOT}" = /* ]] || { echo "error: state and backup roots must be absolute" >&2; exit 1; }
 [ -d "${STATE_ROOT}" ] && [ ! -L "${STATE_ROOT}" ] || { echo "error: configured Vapor state root is not a real directory" >&2; exit 1; }
-[ -f "${VAPOR_CONFIG_DIR}/platform.env" ] && [ ! -L "${VAPOR_CONFIG_DIR}/platform.env" ] || {
+[ -d "${VAPOR_CONFIG_DIR}" ] && [ ! -L "${VAPOR_CONFIG_DIR}" ] && \
+  [ -f "${VAPOR_CONFIG_DIR}/platform.env" ] && [ ! -L "${VAPOR_CONFIG_DIR}/platform.env" ] && \
+  [ "$(stat -c '%u' -- "${VAPOR_CONFIG_DIR}/platform.env")" = 0 ] || {
   echo "error: host setup is incomplete; the root-owned Platform configuration is missing" >&2
   exit 1
 }
