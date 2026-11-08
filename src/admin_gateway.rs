@@ -23,7 +23,7 @@ const OWNER_ROUTES: &[OwnerRoute] = &[
         origin: "http://127.0.0.1:7113",
     },
     OwnerRoute {
-        prefix: "/admin/workshop",
+        prefix: "/admin/registry",
         origin: "http://127.0.0.1:7115",
     },
     OwnerRoute {
@@ -167,7 +167,7 @@ mod tests {
         let cases = [
             ("/admin/identity", "http://127.0.0.1:7113"),
             ("/admin/identity/roles/grant", "http://127.0.0.1:7113"),
-            ("/admin/workshop", "http://127.0.0.1:7115"),
+            ("/admin/registry", "http://127.0.0.1:7115"),
             ("/admin/artifacts", "http://127.0.0.1:7116"),
             ("/admin/build-cache", "http://127.0.0.1:7117"),
         ];
@@ -184,7 +184,7 @@ mod tests {
             "/admin/operations",
             "/admin/identity-elsewhere",
             "/api/identity",
-            "/admin/workshop-extra",
+            "/admin/registry-extra",
             "/admin/artifacts-v2",
             "/admin/build-cache-v2",
         ] {

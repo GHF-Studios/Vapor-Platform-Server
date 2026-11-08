@@ -126,6 +126,7 @@ fi
 python3 - "${SITE}" "${BOOKS_ROOT}" "${VAPOR_CLIENT}/Vapor-CLI/crates/vapor_cli/docs" <<'PYINDEX'
 from html import escape
 from pathlib import Path
+import re
 import sys
 import tomllib
 from urllib.parse import quote
@@ -161,14 +162,25 @@ if guides_root.is_dir():
             ),
             guide.stem.replace("-", " ").replace("_", " "),
         )
-        guides.append((title, "shell/" + quote(relative, safe="/")))
+        summary = ""
+        for line in lines:
+            text = line.strip()
+            if not text or text.startswith("#") or text.startswith("```"):
+                continue
+            text = re.sub(r"!?(\[([^]]+)\])\([^)]+\)", r"\2", text)
+            text = re.sub(r"[`*_~]", "", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            if text:
+                summary = text[:180] + ("…" if len(text) > 180 else "")
+                break
+        guides.append((title, summary, "shell/" + quote(relative, safe="/")))
 
 book_links = "\n".join(
-    f'<li><a href="{escape(path, quote=True)}">{escape(title)}</a>{f"<p>{escape(description)}</p>" if description else ""}</li>'
+    f'<a class="card" href="{escape(path, quote=True)}"><strong>{escape(title)}</strong>{f"<p>{escape(description)}</p>" if description else ""}<span class="open-label">Open book →</span></a>'
     for title, description, path in books
 )
 guide_links = "\n".join(
-    f'<li><a href="{escape(path, quote=True)}">{escape(title)}</a></li>' for title, path in guides
+    f'<a class="card" href="{escape(path, quote=True)}"><strong>{escape(title)}</strong>{f"<p>{escape(summary)}</p>" if summary else ""}<span class="open-label">Open guide →</span></a>' for title, summary, path in guides
 )
 client_links = []
 for relative, label in (
@@ -178,24 +190,58 @@ for relative, label in (
     ("vapor/roadmap/README.md", "Roadmap"),
 ):
     if (site / relative).is_file():
-        client_links.append(f'<li><a href="{escape(relative, quote=True)}">{escape(label)}</a></li>')
+        client_links.append(f'<a class="card" href="{escape(relative, quote=True)}"><strong>{escape(label)}</strong><p>Vapor runtime reference</p><span class="open-label">Open reference →</span></a>')
 
 contents = f"""<!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
-<title>Vapor Documentation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#10161d">
+<meta name="description" content="Guides and references for the Vapor platform and its tools.">
+<title>Documentation · Vapor</title>
 <style>
-body {{ max-width: 960px; margin: 3rem auto; padding: 0 1.5rem; font: 16px/1.5 system-ui, sans-serif; }}
-code {{ background: #f4f4f4; padding: .1rem .25rem; border-radius: .2rem; }}
-li {{ margin: .25rem 0; }}
+:root {{ color-scheme: dark; font: 16px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; background: #10161d; color: #eef3f7; font-synthesis: none; }}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 50% -24%, #294346 0, #10161d 58%); }}
+a {{ color: #a9d8cb; }}
+a:focus-visible {{ outline: 2px solid #9fe1ce; outline-offset: 4px; border-radius: 3px; }}
+main {{ width: min(1040px, calc(100% - 36px)); margin: 0 auto; padding: 28px 0 64px; }}
+.topbar {{ display: flex; align-items: center; gap: 22px; padding-bottom: 58px; }}
+.brand {{ margin-right: auto; color: #eef3f7; font-weight: 780; letter-spacing: .04em; text-decoration: none; }}
+.topbar a:not(.brand) {{ color: #bac7ce; text-decoration: none; font-size: .92rem; }}
+.eyebrow {{ margin: 0; color: #9fe1ce; font-size: .76rem; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }}
+h1 {{ margin: 10px 0 14px; font-size: clamp(2.7rem, 7vw, 4.5rem); letter-spacing: -.065em; line-height: .98; }}
+.lead {{ max-width: 720px; margin: 0; color: #c3cfd4; font-size: 1.08rem; line-height: 1.65; }}
+.freshness {{ margin: 18px 0 0; color: #90a3aa; font-size: .86rem; }}
+.catalog {{ margin-top: 42px; }}
+.catalog-head {{ display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 14px; }}
+h2 {{ margin: 0; font-size: 1.12rem; letter-spacing: -.02em; }}
+.catalog-head p {{ margin: 0; color: #91a1a8; font-size: .86rem; }}
+.cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }}
+.card {{ min-height: 132px; padding: 19px; border: 1px solid #34434a; border-radius: 10px; background: rgba(20, 29, 35, .9); text-decoration: none; transition: border-color .15s, transform .15s; }}
+.card:hover {{ border-color: #64877f; transform: translateY(-2px); }}
+.card strong {{ display: block; color: #eef3f7; font-size: 1rem; }}
+.card p {{ margin: 8px 0 0; color: #aebdc3; font-size: .88rem; line-height: 1.55; }}
+.card .open-label {{ display: inline-block; margin-top: 15px; color: #9fe1ce; font-size: .8rem; font-weight: 700; }}
+.empty {{ margin: 0; padding: 17px; border: 1px dashed #405056; border-radius: 8px; color: #9eacba; }}
+footer {{ display: flex; flex-wrap: wrap; gap: 18px; margin-top: 52px; padding-top: 18px; border-top: 1px solid #2d3a40; color: #82939a; font-size: .86rem; }}
+footer span {{ margin-right: auto; }}
+@media (max-width: 620px) {{ .topbar {{ padding-bottom: 45px; }} .catalog-head {{ align-items: start; flex-direction: column; }} .card {{ min-height: 0; }} }}
+@media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ transition-duration: .01ms !important; scroll-behavior: auto !important; }} }}
 </style>
-<h1>Vapor Documentation</h1>
-<p>This is the current deployed Vapor documentation bundle.</p>
-<h2>Product books</h2>
-<ul>{book_links}</ul>
-<h2>Shell guides</h2>
-<ul>{guide_links}</ul>
-<h2>Client context</h2>
-<ul>{''.join(client_links)}</ul>
+</head>
+<body>
+<main>
+<nav class="topbar" aria-label="Main navigation"><a class="brand" href="/">VAPOR</a><a href="/downloads">Get Vapor</a><a href="/license">License</a></nav>
+<header><p class="eyebrow">Vapor library</p><h1>Documentation</h1><p class="lead">Books, guides, and reference material for working with Vapor and its tools.</p><p class="freshness">This catalog is generated from the current published documentation bundle.</p></header>
+<section class="catalog" aria-labelledby="books-title"><div class="catalog-head"><h2 id="books-title">Product books</h2><p>Guides organized by product area</p></div><div class="cards">{book_links or '<p class="empty">No product books are published yet.</p>'}</div></section>
+<section class="catalog" aria-labelledby="guides-title"><div class="catalog-head"><h2 id="guides-title">Shell guides</h2><p>Commands and runtime references</p></div><div class="cards">{guide_links or '<p class="empty">No shell guides are published yet.</p>'}</div></section>
+<section class="catalog" aria-labelledby="reference-title"><div class="catalog-head"><h2 id="reference-title">Runtime references</h2><p>Manifests and project context</p></div><div class="cards">{''.join(client_links) or '<p class="empty">No runtime references are published yet.</p>'}</div></section>
+<footer><span>Vapor documentation</span><a href="/">Home</a><a href="/downloads">Get Vapor</a><a href="/login">Sign in</a></footer>
+</main>
+</body>
+</html>
 """
 (site / "index.html").write_text(contents, encoding="utf-8")
 PYINDEX

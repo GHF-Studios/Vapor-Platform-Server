@@ -27,13 +27,15 @@ existing service just to avoid naming a new boundary.
   diagnostics storage/indexes, retention direction, list/download/export, and
   diagnostics restore/import.
 - `Vapor-Build-Cache-Server` owns signed current Cargo target snapshots,
-  candidate validation/promotion, and target snapshot status. Platform owns
-  deployment and recovery composition; target VM orchestration remains pending.
+  candidate validation/promotion, and target snapshot status. These are Cargo
+  target-directory restores, not per-compile cache entries. Platform owns
+  deployment and recovery composition; durable build-operation history,
+  native-builder orchestration, and shared compiler caching remain unimplemented.
 - One public origin with path routing remains the preferred shape.
 - MCP/ACP/capability work is future work and is not part of the initial server
   MVP.
 
-## Accepted Workshop catalog authority
+## Accepted Workshop catalog authority (target)
 
 The canonical Vapor catalog belongs to the future Registry service. Registry
 will own typed content identity and type, the binding between Vapor content
@@ -47,9 +49,17 @@ Identity-issued authorization) when a catalog write requires a verified
 author or elevated role. Identity does not own catalog records, and Registry
 does not copy or redefine user roles.
 
-The Registry API and persistent catalog are implemented. Its Workshop admin
-section currently provides a bounded, read-only inventory; client-side
-Workshop tags remain discovery hints and are not enforced Vapor semantics.
+Current implementation is narrower than this target. Registry stores provider
+accounts, repository records, ecosystem membership, source topology, and
+visibility policy. Its `/admin/registry` page is a bounded read-only source
+inventory. It does not yet store typed Vapor content entries, Workshop item
+bindings, discoverability metadata, release channels, or publish decisions.
+Client-side Workshop tags remain discovery hints rather than enforced Vapor
+semantics.
+
+The full target split between content identity, acquisition, composition,
+application releases, target snapshots, compiler caching, and build execution
+is defined in [`vapor-content-and-build-domain-contract.md`](vapor-content-and-build-domain-contract.md).
 
 ## Boundary map
 
@@ -62,7 +72,7 @@ Workshop tags remain discovery hints and are not enforced Vapor semantics.
 | Publish/pipeline | Future real boundary | Protected publish requests, validation/promotion orchestration, publishing audit, controlled Steam/Workshop or server-publish authority | Identity source of truth, artifact blob semantics, public catalog reads |
 | Artifacts | Implemented release service | Immutable Vapor application archives, signed manifests, channel pointers, public downloads, root-gated read-only release inventory | Catalog metadata, publish approval, signing keys, docs bundles |
 | Build Cache | Implemented service; builder incomplete | Signed current target snapshots, candidate validation/promotion, read-only target inventory | Guest VM orchestration, Vapor Client restore/bootstrap, signing key custody |
-| Registry/catalog | Implemented service | Public ecosystem metadata, source topology, visibility policy, root-gated read-only Workshop inventory | Blob storage, builds, Identity roles, deploy orchestration |
+| Registry/source topology | Implemented foundation; catalog target incomplete | Provider/repository identity, ecosystem membership, visibility policy, root-gated source inventory | Typed content catalog, Workshop bindings, release channels, publish decisions, blobs, builds, Identity roles, deploy orchestration |
 | Toolchain/API UX | Future integration boundary | Stable CLI/Shell/launcher workflows over existing APIs | Canonical state, role decisions, publish execution |
 | MCP/capability surface | Future capability boundary | Machine/action capabilities, least-privilege grants, capability audit | Business state, bypassing service APIs |
 | Operations/recovery | Implemented root-owned workflow plus service contracts | Backups, restore/import composition, deploy health, latest deploy/restore status, emergency operator paths | Normal product workflows, service business decisions |
@@ -132,7 +142,7 @@ Current route ownership remains:
 /admin/history            bounded owner-sourced request and operation history
 /admin/operations         Platform operations page with view query routing
 /admin/identity           Identity-owned admin section
-/admin/workshop           Registry-owned catalog inventory
+/admin/registry           Registry-owned ecosystem and source topology inventory
 /admin/artifacts          Artifact-owned release inventory
 /admin/build-cache        Build Cache-owned target snapshot inventory
 /api/admin/overview       root-authorized service health summary

@@ -1,5 +1,11 @@
 # Vapor Platform Admin Toolbench Implementation Plan
 
+> **Historical execution plan:** The implementation evolved after this plan.
+> In particular, `/admin/workshop` was replaced by `/admin/registry`, whose
+> current page is only an ecosystem/source inventory. The typed content catalog
+> is still missing; see the [current domain map](../../server-domain-boundaries.md)
+> and [content/build contract](../../vapor-content-and-build-domain-contract.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the Identity-only `/admin` page with one consistent, safe toolbench whose sections remain owned by Identity, Registry/Workshop, Artifact, the future Build Cache service, and Platform operations.

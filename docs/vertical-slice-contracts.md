@@ -59,7 +59,7 @@ service business logic unless a shared library is deliberately introduced.
 /admin/identity           Identity-owned dashboard; root session only
 /admin/identity/roles/grant browser role-grant form; root session only
 /admin/identity/roles/revoke browser role-revoke form; root session only
-/admin/workshop           Registry-owned read-only catalog; root session only
+/admin/registry           Registry-owned ecosystem/source inventory; root session only
 /admin/artifacts          Artifact-owned read-only release inventory; root session only
 /admin/build-cache        Build Cache-owned read-only target inventory; root session only
 /api/admin/overview       root-authorized, secret-free service health summary

@@ -3,6 +3,12 @@
 **Status:** Approved by owner on 2026-11-02
 **Date:** 2026-11-02
 
+> **Historical snapshot:** This design still names `/admin/workshop` and
+> describes a catalog view that was never implemented. The current route is
+> `/admin/registry` and shows ecosystem/source topology only. Current boundaries
+> are in the [domain map](../../server-domain-boundaries.md) and
+> [content/build contract](../../vapor-content-and-build-domain-contract.md).
+
 ## Intent
 
 Turn Vapor's server administration from a collection of CLI-only workflows and

@@ -51,8 +51,11 @@
 ### 5. Optional worker and build cache (Platform + Build Cache)
 
 - Measure the proposed second node and decide whether builds, replication, or both belong there. Do not require it for deploy.
-- Define one locked toolchain and a separate signed cache snapshot per supported target. Local build fallback must follow the same locked manifest and signing/promotion contract.
+- Keep the service concept precise: Build Cache stores signed Cargo target-directory snapshots, not `sccache` compiler entries and not build-job state. Platform owns durable build-operation records and executor lifecycle; Artifact owns signed application releases.
+- Define one locked toolchain and a separate signed snapshot per supported target. Local build fallback must remain available and use the same canonical lock/recipe inputs; it does not implicitly publish a snapshot.
+- Define the second node as an optional executor/cache accelerator only after measuring it. A missing worker must not block local source builds, service deploys, or host recovery. Keep any shared compiler-result cache separately keyed and optional.
 - Test interrupted uploads, stale snapshots, node loss, and local fallback.
+- Record build attempts, executor assignment, state transitions, cancellation, bounded logs, returned candidate identity, and cleanup under a durable Platform operation ID; Build Cache's current pointer is only the latest successful promotion, not job history.
 - **Exit:** worker failure drill proves local build and deploy still work; cache is reproducible and target-specific.
 
 ## Required gates before production reset or migration

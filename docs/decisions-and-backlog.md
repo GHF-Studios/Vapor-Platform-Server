@@ -47,6 +47,8 @@ while the implementation is still moving quickly.
   content-to-Workshop bindings, discovery metadata, and version/channel records.
   Steam tags are discovery hints, not enforced Vapor types. Identity supplies
   verified author and role authorization facts; it does not own catalog data.
+  This is the accepted target boundary; current Registry storage still covers
+  provider/repository/ecosystem source topology only.
 - Server state must be restorable service-by-service and as a composed whole:
   empty initialization, export, import, and rebuild-from-source are first-class
   operational goals.
@@ -114,12 +116,12 @@ while the implementation is still moving quickly.
   section for deployment and temporary SSH requests;
   Identity, Registry, and Artifact own their protected sections and data.
   Build Cache now exists as a separate service and its state is composed into
-  deploy/recovery. VPS-hosted Linux/Windows guest builders and Vapor Client
-  snapshot bootstrap remain unimplemented; do not advertise usable snapshots
-  until those pieces and exact target lock identities are configured. The next
-  sequence is: recover and verify the approval dashboard, confirm per-target
-  snapshot availability, then probe whether the single VPS can host both pinned
-  build guests before implementing that builder lane.
+  deploy/recovery. Native build operations, optional worker execution, and
+  Vapor Client snapshot bootstrap remain unimplemented; do not advertise usable snapshots
+  until those pieces and exact target lock identities are configured. The
+  current accepted contract allows local builds as the correctness fallback and
+  an optional second worker as an accelerator. Do not treat the superseded plan
+  to host both target VMs on the primary VPS as active work.
 - Domain-independent pre-DNS work is allowed through temporary HTTP fallback
   routing, SSH/UFW hardening, and local/IP smoke checks. The fallback is not the
   final public product URL.
@@ -168,8 +170,11 @@ while the implementation is still moving quickly.
   certificate issuance are live.
 - Improve dashboard role-management UX beyond the first functional grant/revoke
   forms and audit table.
-- Implement the Build Cache service and VPS-hosted target VM builders before
-  exposing its planned admin section.
+- Implement durable Platform build-operation records and the optional worker
+  lifecycle only after the canonical lock/recipe inputs are available. Keep
+  local source builds usable without the worker; keep shared `sccache` data
+  separate from Build Cache target snapshots. The Build Cache service/admin
+  section already exists, but neither is evidence that a native builder exists.
 - Decide how Vapor Shell should wrap server REST APIs without making raw HTTP
   details the normal user workflow.
 - Configure GitHub branch protection once the exact protected-branch policy is

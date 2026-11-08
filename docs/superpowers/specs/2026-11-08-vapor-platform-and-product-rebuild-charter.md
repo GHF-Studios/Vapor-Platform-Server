@@ -105,11 +105,14 @@ flowchart TB
 | Accounts, login, linked providers, roles, grants, access policy, identity audit | Identity Server | Deployment queue or host filesystem |
 | Catalog, publication eligibility, source bindings | Registry Server | Steam app content or client-side publication claims |
 | Signed Vapor application releases | Artifact Server | Loo Cast/Mad Max game assets |
-| Toolchain snapshot cache | Build Cache Server | Artifact releases or generic user files |
+| Signed Cargo target snapshots | Build Cache Server | Shared per-compile compiler cache, native-build job lifecycle, application releases, or generic user files |
 | Public homepage/docs service data and rendering | Homepage/Docs service repos | Platform composition and deployment policy |
 | Standalone install/update, local paths, product adapters, workbenches | Vapor Client and product adapter repos | VPS identity or host deploy authority |
 | Mad Max game integration | MM-Building-System | Vapor generic installer/update lifecycle |
 | Native Loo Cast engine/game/packagepack source and depot packaging | Loo Cast repo | Vapor runtime or user's generic home |
+
+Registry and build terminology are further constrained by
+[`../../vapor-content-and-build-domain-contract.md`](../../vapor-content-and-build-domain-contract.md): source topology is not a typed content catalog, a Workshop binding is not a content identity, and a restorable Cargo target snapshot is not a shared compiler cache or native-build job.
 
 ## Explicit exclusions
 

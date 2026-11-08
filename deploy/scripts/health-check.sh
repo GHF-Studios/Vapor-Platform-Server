@@ -121,13 +121,13 @@ else
   # results are valid responses, while 404/5xx indicate a broken mapping.
   if [ -n "${VAPOR_ADMIN_DOMAIN}" ]; then
     check_admin_gateway_route /admin/identity
-    check_admin_gateway_route /admin/workshop
+    check_admin_gateway_route /admin/registry
     check_admin_gateway_route /admin/artifacts
     check_admin_gateway_route /admin/build-cache
     check_public_admin_isolation
   else
     check_admin_gateway_route /admin/identity
-    check_admin_gateway_route /admin/workshop
+    check_admin_gateway_route /admin/registry
     check_admin_gateway_route /admin/artifacts
     check_admin_gateway_route /admin/build-cache
   fi
