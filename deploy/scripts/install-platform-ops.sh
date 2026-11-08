@@ -75,8 +75,8 @@ install -m 0644 "${DEPLOY_DIR}/systemd/vapor-platform-ops.socket" \
 install -m 0644 "${DEPLOY_DIR}/systemd/vapor-platform-ops@.service" \
   /etc/systemd/system/vapor-platform-ops@.service
 
-# Remove the exact prior Platform sudo policy. Do not guess at or overwrite an
-# administrator-edited policy file.
+# Validate the exact prior Platform sudo policy now, but leave it in place until
+# the new Platform binary is running and has passed its health check.
 legacy_platform_sudoers=/etc/sudoers.d/vapor-platform-ops
 expected_platform_sudoers=""
 if [ -e "${legacy_platform_sudoers}" ] || [ -L "${legacy_platform_sudoers}" ]; then
@@ -106,7 +106,6 @@ install -o root -g root -m 0750 "${DEPLOY_DIR}/scripts/vapor-ssh-service-control
 # are granted by each request's own sudoers file; a group-wide rule would let
 # every temporary account exceed its approved capability set.
 legacy_sudoers=/etc/sudoers.d/vapor-temporary-access
-retire_legacy_sudoers=0
 if [ -e "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ]; then
   if [ ! -f "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ] || \
     [ "$(wc -l < "${legacy_sudoers}")" -ne 1 ] || \
@@ -114,7 +113,6 @@ if [ -e "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ]; then
     echo "error: unexpected legacy temporary-access sudoers file; preserving it" >&2
     exit 1
   fi
-  retire_legacy_sudoers=1
 fi
 if include_directives="$(grep -RInE '^[[:space:]]*(@include(dir)?|#include(dir)?)[[:space:]]+' \
   /etc/sudoers /etc/sudoers.d 2>/dev/null)"; then
@@ -178,15 +176,6 @@ if [ "${VAPOR_RECOVERY_STAGING:-0}" != "1" ]; then
   chmod 0644 "${temporary_flag}"
   mv -f -- "${temporary_flag}" /etc/vapor-server/ssh-access-enabled
 
-  # Retire the previous sudo entry points only after the replacement socket is
-  # active and the SSH policy has been installed. Until this point, any failure
-  # leaves the old Platform path available for recovery.
-  if [ -e "${legacy_platform_sudoers}" ]; then
-    rm -- "${legacy_platform_sudoers}"
-  fi
-  if [ "${retire_legacy_sudoers}" = "1" ]; then
-    rm -- "${legacy_sudoers}"
-  fi
 fi
 if [ -n "${expected_platform_sudoers}" ]; then
   rm -f -- "${expected_platform_sudoers}"

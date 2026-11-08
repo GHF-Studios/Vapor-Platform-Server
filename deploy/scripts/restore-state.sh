@@ -502,5 +502,6 @@ systemctl enable --now vapor-state-export.timer
 systemctl reload caddy.service
 
 "${SCRIPT_DIR}/health-check.sh"
+"${SCRIPT_DIR}/retire-platform-ops-sudoers.sh"
 echo "recovery-restore: restored validated full-platform bundle"
 echo "recovery-restore: previous state/configuration retained at ${PRE_RESTORE_PATH}"

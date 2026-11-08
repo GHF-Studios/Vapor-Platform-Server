@@ -284,6 +284,7 @@ fi
 systemctl restart caddy.service
 
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/health-check.sh"
+"${VAPOR_DEPLOY_ROOT}/deploy/scripts/retire-platform-ops-sudoers.sh"
 
 retire_service_unit() {
   local unit="$1"
