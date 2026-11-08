@@ -66,6 +66,26 @@ recovery path or OpenSSH.
   `HttpOnly` cookie do not defend against that same-origin attacker. Keep the
   host switch off until either the admin surface has its own origin and
   Identity session boundary, or Identity provides a verified step-up claim.
+- The preferred origin-isolation path is a dedicated admin hostname that serves
+  the privileged dashboard, its Identity browser flow, and its admin APIs while
+  the public hostname stops serving those privileged pages. A read-only check
+  on 2026-11-08 found that the candidate `admin.vapor.ghf-studios.site` has no
+  DNS record, so this boundary is not yet provisioned. Because a subdomain is
+  still same-site with `vapor.ghf-studios.site`, this must not be treated as a
+  defense against all sibling-origin request forgery: every state-changing
+  admin endpoint still needs exact Origin validation, strict request types,
+  and no permissive credentialed CORS. Terminal WebSocket Origin validation
+  remains mandatory. Configure Identity's canonical browser origin and
+  host-only session cookie on the admin hostname before enabling the console.
+- A code audit found that current Platform deployment, temporary-SSH, and
+  emergency-console mutations compare the request `Origin` with the configured
+  Platform origin; Identity's browser mutation handlers use its
+  `same_origin_browser_request` guard. This is a useful starting boundary, not
+  a substitute for route-by-route verification after hostname routing changes.
+  The admin-host rollout must also cover redirects, Steam/OpenID callback
+  origin, cookies, CLI authorization links, API routing, and host-specific
+  health checks. Never point `VAPOR_PLATFORM_PUBLIC_ORIGIN` or Identity's
+  public origin at the new host until Caddy and DNS serve the matching host.
 - Terminal transport is isolated from the Platform web process, but a
   vulnerability in ttyd, Caddy, Identity, or the browser route can still expose
   root access. The deployment has a global enable/disable switch and the

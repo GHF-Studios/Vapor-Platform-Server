@@ -1116,3 +1116,9 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   merging the branch.
 - The shared public/admin origin and lack of verified step-up remain separate
   blockers to enabling a browser root shell, even after ttyd becomes approved.
+- Read-only production checks still return HTTP 200 for `/docs/` with the
+  `Vapor Documentation` page, while `/admin/recovery` is 404 on the live
+  revision as expected. The candidate separate origin
+  `admin.vapor.ghf-studios.site` currently has no DNS record; no DNS, Caddy, or
+  Identity settings were changed. Origin isolation therefore remains planned,
+  not implemented.
