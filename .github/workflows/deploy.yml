@@ -51,12 +51,12 @@ jobs:
         id: request-secrets
         env:
           VAPOR_DEPLOY_REQUEST_TOKEN: ${{ secrets.VAPOR_DEPLOY_REQUEST_TOKEN }}
-          VAPOR_DEPLOY_PUBLIC_BASE: ${{ vars.VAPOR_DEPLOY_PUBLIC_BASE }}
+          VAPOR_DEPLOY_PUBLIC_BASE: https://vapor.ghf-studios.site
         run: |
           set -euo pipefail
-          if [[ -z "${VAPOR_DEPLOY_REQUEST_TOKEN}" || -z "${VAPOR_DEPLOY_PUBLIC_BASE}" ]]; then
+          if [[ -z "${VAPOR_DEPLOY_REQUEST_TOKEN}" ]]; then
             echo "configured=false" >> "${GITHUB_OUTPUT}"
-            echo "::notice::CI passed; pending deploy request skipped because VAPOR_DEPLOY_REQUEST_TOKEN or VAPOR_DEPLOY_PUBLIC_BASE is missing"
+            echo "::notice::CI passed; pending deploy request skipped because VAPOR_DEPLOY_REQUEST_TOKEN is missing"
           else
             echo "configured=true" >> "${GITHUB_OUTPUT}"
           fi
@@ -65,7 +65,7 @@ jobs:
         if: steps.request-secrets.outputs.configured == 'true'
         env:
           VAPOR_DEPLOY_REQUEST_TOKEN: ${{ secrets.VAPOR_DEPLOY_REQUEST_TOKEN }}
-          VAPOR_DEPLOY_PUBLIC_BASE: ${{ vars.VAPOR_DEPLOY_PUBLIC_BASE }}
+          VAPOR_DEPLOY_PUBLIC_BASE: https://vapor.ghf-studios.site
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_SHA: ${{ github.sha }}
