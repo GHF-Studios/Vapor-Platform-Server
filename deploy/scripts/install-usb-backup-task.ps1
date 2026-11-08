@@ -17,10 +17,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $keyPath = (Resolve-Path -LiteralPath $SshKey).Path
-$sourceBackupScript = Join-Path $PSScriptRoot 'backup-to-usb.ps1'
+$sourceBackupScript = Join-Path $PSScriptRoot 'backup-state-only-to-usb.ps1'
+$sourceMetadataHelper = Join-Path $PSScriptRoot 'recovery_bundle_metadata.py'
+$sourceRepositoryPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $triggerHelper = Join-Path $PSScriptRoot 'usb_backup_task.ps1'
 if (-not (Test-Path -LiteralPath $sourceBackupScript -PathType Leaf)) {
-    throw 'The USB backup script is missing beside the task installer.'
+    throw 'The state-only USB sync script is missing beside the task installer.'
+}
+if (-not (Test-Path -LiteralPath $sourceMetadataHelper -PathType Leaf)) {
+    throw 'The recovery metadata helper is missing beside the task installer.'
 }
 if (-not (Test-Path -LiteralPath $triggerHelper -PathType Leaf)) {
     throw 'The USB task trigger helper is missing beside the task installer.'
@@ -31,8 +36,9 @@ if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
 }
 $localScriptDirectory = Join-Path $env:LOCALAPPDATA 'Vapor\Recovery'
 New-Item -ItemType Directory -Path $localScriptDirectory -Force | Out-Null
-$backupScript = Join-Path $localScriptDirectory 'backup-to-usb.ps1'
+$backupScript = Join-Path $localScriptDirectory 'backup-state-only-to-usb.ps1'
 Copy-Item -LiteralPath $sourceBackupScript -Destination $backupScript -Force
+Copy-Item -LiteralPath $sourceMetadataHelper -Destination (Join-Path $localScriptDirectory 'recovery_bundle_metadata.py') -Force
 $powershellExe = Get-VaporUsbTaskPowerShellPath
 function ConvertTo-WindowsCommandLineArgument {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -76,6 +82,8 @@ $arguments = @(
     (ConvertTo-WindowsCommandLineArgument $keyPath)
     '-UsbPath'
     (ConvertTo-WindowsCommandLineArgument $UsbPath)
+    '-RecoveryRepositoryPath'
+    (ConvertTo-WindowsCommandLineArgument $sourceRepositoryPath)
 ) -join ' '
 if ($AllowFixedDrive) {
     $arguments += ' -AllowFixedDrive'
@@ -90,4 +98,4 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
 
 Register-ScheduledTask -TaskName $TaskName -Action $action `
     -Trigger $triggers -Principal $principal -Settings $settings -Force | Out-Null
-Write-Output "Scheduled hourly recovery sync for $user. It will catch up when the USB drive is mounted and the user is signed in."
+Write-Output "Scheduled hourly state-only recovery sync for $user. It will catch up when the USB drive is mounted and the user is signed in."
