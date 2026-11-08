@@ -631,7 +631,7 @@ const JS: &str = r#"
       { key: 'ssh', url: '/api/admin/ssh-access/requests?limit=200', label: 'Platform SSH access requests' },
       { key: 'identity', url: '/api/identity/v1/admin/permission-requests/page?limit=200', label: 'Identity permission requests' }
     ];
-    const sourceState = Object.fromEntries(sourceDefinitions.map(source => [source.key, { records: [], cursor: null }]));
+    const sourceState = Object.fromEntries(sourceDefinitions.map(source => [source.key, { records: [], cursor: null, generation: 0 }]));
     const endpoint = (kind, id, action) => {
       const encodedId = encodeURIComponent(id);
       if (kind === 'deploy') return `/api/admin/deploy-requests/${encodedId}/${action}`;
@@ -889,7 +889,7 @@ const JS: &str = r#"
         pageButtons[source.key].textContent = 'Load older requests';
       }
     };
-    const readSourcePage = async (source, cursor) => {
+    const readSourcePage = async (source, cursor, generation) => {
       const state = sourceState[source.key];
       const url = new URL(source.url, window.location.href);
       if (cursor) {
@@ -898,6 +898,7 @@ const JS: &str = r#"
       }
       const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
       const body = await response.json().catch(() => null);
+      if (state.generation !== generation) return false;
       if (!response.ok) {
         state.error = response.status === 401 ? 'Sign in required.' : response.status === 403 ? 'Root access required.' : `Unavailable (HTTP ${response.status}).`;
         throw new Error(state.error);
@@ -907,17 +908,21 @@ const JS: &str = r#"
       state.records.push(...items);
       state.cursor = Array.isArray(body) ? null : (typeof body.next_cursor === 'string' ? body.next_cursor : null);
       state.error = null;
+      return true;
     };
     const refreshSource = async source => {
       const container = containers[source.key];
       const state = sourceState[source.key];
+      const generation = ++state.generation;
       state.records = [];
       state.cursor = null;
       container.textContent = 'Loading…';
       try {
-        await readSourcePage(source, null);
+        await readSourcePage(source, null, generation);
+        if (state.generation !== generation) return;
         renderSource(source);
       } catch (_) {
+        if (state.generation !== generation) return;
         container.replaceChildren();
         if (countBadges[source.key]) countBadges[source.key].textContent = 'Unavailable';
         appendText(container, 'p', 'This request source is temporarily unavailable or returned an invalid response.', 'error');
@@ -927,12 +932,15 @@ const JS: &str = r#"
       const button = pageButtons[source.key];
       const state = sourceState[source.key];
       if (!button || button.disabled || !state.cursor) return;
+      const generation = state.generation;
       button.disabled = true;
       button.textContent = 'Loading…';
       try {
-        await readSourcePage(source, state.cursor);
+        await readSourcePage(source, state.cursor, generation);
+        if (state.generation !== generation) return;
         renderSource(source);
       } catch (_) {
+        if (state.generation !== generation) return;
         button.disabled = false;
         button.textContent = 'Retry loading older requests';
         feedback.textContent = `${source.label} could not load another page. Existing requests remain visible.`;
