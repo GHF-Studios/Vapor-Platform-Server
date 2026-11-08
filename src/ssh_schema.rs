@@ -1,36 +1,52 @@
+use sqlx::sqlite::SqliteConnection;
 use sqlx::{Row, SqlitePool};
 
 pub async fn ensure_audit_actor_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    ensure_column(
-        pool,
-        "platform_ssh_access_requests",
-        "decided_by_actor_kind",
-        "TEXT NOT NULL DEFAULT 'identity_profile'",
-    )
-    .await?;
-    ensure_column(
-        pool,
-        "platform_ssh_access_requests",
-        "decided_by_actor_label",
-        "TEXT",
-    )
-    .await?;
-    ensure_column(
-        pool,
-        "platform_ssh_access_events",
-        "actor_kind",
-        "TEXT NOT NULL DEFAULT 'identity_profile'",
-    )
-    .await?;
-    ensure_column(pool, "platform_ssh_access_events", "actor_label", "TEXT").await?;
+    // Startup can overlap briefly during a service restart or rollback. Take
+    // SQLite's write reservation before inspecting schema so two processes
+    // cannot both observe a missing column/trigger and race the same DDL.
+    let mut connection = pool.acquire().await?;
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *connection)
+        .await?;
 
-    sqlx::query("DROP TRIGGER IF EXISTS platform_ssh_access_insert_audit")
-        .execute(pool)
+    let migration = async {
+        ensure_column(
+            &mut connection,
+            "platform_ssh_access_requests",
+            "decided_by_actor_kind",
+            "TEXT NOT NULL DEFAULT 'identity_profile'",
+        )
         .await?;
-    sqlx::query("DROP TRIGGER IF EXISTS platform_ssh_access_update_audit")
-        .execute(pool)
+        ensure_column(
+            &mut connection,
+            "platform_ssh_access_requests",
+            "decided_by_actor_label",
+            "TEXT",
+        )
         .await?;
-    sqlx::query(
+        ensure_column(
+            &mut connection,
+            "platform_ssh_access_events",
+            "actor_kind",
+            "TEXT NOT NULL DEFAULT 'identity_profile'",
+        )
+        .await?;
+        ensure_column(
+            &mut connection,
+            "platform_ssh_access_events",
+            "actor_label",
+            "TEXT",
+        )
+        .await?;
+
+        sqlx::query("DROP TRIGGER IF EXISTS platform_ssh_access_insert_audit")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query("DROP TRIGGER IF EXISTS platform_ssh_access_update_audit")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query(
         "CREATE TRIGGER IF NOT EXISTS platform_ssh_access_insert_audit
          AFTER INSERT ON platform_ssh_access_requests
          BEGIN
@@ -40,11 +56,11 @@ pub async fn ensure_audit_actor_columns(pool: &SqlitePool) -> Result<(), sqlx::E
              NEW.id, NULL, NEW.status, NEW.requester_profile_id, 'identity_profile', NULL, NEW.created_at_unix
            );
          END",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query(
-        "CREATE TRIGGER IF NOT EXISTS platform_ssh_access_update_audit
+        )
+        .execute(&mut *connection)
+        .await?;
+        sqlx::query(
+            "CREATE TRIGGER IF NOT EXISTS platform_ssh_access_update_audit
          AFTER UPDATE OF status ON platform_ssh_access_requests
          WHEN OLD.status != NEW.status
          BEGIN
@@ -55,20 +71,36 @@ pub async fn ensure_audit_actor_columns(pool: &SqlitePool) -> Result<(), sqlx::E
              NEW.decided_by_actor_kind, NEW.decided_by_actor_label, CAST(strftime('%s','now') AS INTEGER)
            );
          END",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
+        )
+        .execute(&mut *connection)
+        .await?;
+        Ok::<(), sqlx::Error>(())
+    }
+    .await;
+
+    match migration {
+        Ok(()) => match sqlx::query("COMMIT").execute(&mut *connection).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
+                Err(error)
+            }
+        },
+        Err(error) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
+            Err(error)
+        }
+    }
 }
 
 async fn ensure_column(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     table: &'static str,
     column: &'static str,
     definition: &'static str,
 ) -> Result<(), sqlx::Error> {
     let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await?;
     if rows.iter().any(|row| {
         row.try_get::<String, _>("name")
@@ -79,7 +111,7 @@ async fn ensure_column(
     sqlx::query(&format!(
         "ALTER TABLE {table} ADD COLUMN {column} {definition}"
     ))
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     Ok(())
 }

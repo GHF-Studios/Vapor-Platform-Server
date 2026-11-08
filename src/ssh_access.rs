@@ -222,27 +222,8 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     )
     .execute(&pool)
     .await?;
-    sqlx::query(
-        "CREATE TRIGGER IF NOT EXISTS platform_ssh_access_insert_audit
-         AFTER INSERT ON platform_ssh_access_requests
-         BEGIN
-           INSERT INTO platform_ssh_access_events(request_id, from_status, to_status, actor_profile_id, at_unix)
-           VALUES (NEW.id, NULL, NEW.status, NEW.requester_profile_id, NEW.created_at_unix);
-         END",
-    )
-    .execute(&pool)
-    .await?;
-    sqlx::query(
-        "CREATE TRIGGER IF NOT EXISTS platform_ssh_access_update_audit
-         AFTER UPDATE OF status ON platform_ssh_access_requests
-         WHEN OLD.status != NEW.status
-         BEGIN
-           INSERT INTO platform_ssh_access_events(request_id, from_status, to_status, actor_profile_id, at_unix)
-           VALUES (NEW.id, OLD.status, NEW.status, NEW.decided_by_profile_id, CAST(strftime('%s','now') AS INTEGER));
-         END",
-    )
-    .execute(&pool)
-    .await?;
+    // ssh_schema owns the authoritative audit trigger definitions and applies
+    // their column migration plus replacement atomically.
     crate::ssh_schema::ensure_audit_actor_columns(&pool).await?;
     Ok(())
 }
