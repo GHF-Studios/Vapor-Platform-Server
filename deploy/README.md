@@ -43,6 +43,28 @@ Before DNS is active, a temporary HTTP-only fallback can be rendered by setting
 for smoke testing only; the intended public endpoint remains
 `https://vapor.ghf-studios.site/` after DNS and certificate issuance work.
 
+## Optional dedicated admin hostname
+
+`VAPOR_ADMIN_DOMAIN` is an optional, distinct HTTPS hostname for the shared
+admin workbench and Identity browser session. Leave it unset to keep the
+current single-host routes. To enable isolation, first create an `A`/`AAAA`
+record for the admin hostname pointing to this VPS, then set
+`VAPOR_ADMIN_DOMAIN=admin.vapor.ghf-studios.site` in the root-owned
+`/etc/vapor-server/platform.env` and run the normal approved Platform deploy.
+The deploy validates the hostname, configures Identity's canonical browser
+origin to `https://<admin-host>`, and installs a Caddy config only after Caddy
+validates the candidate.
+
+With the setting present, public `/admin`, `/login`, `/logout`, and
+`/cli/ssh/*` entry points redirect to the admin hostname; Platform and Identity
+admin APIs and `/emergency-terminal*` return 404 on the public hostname. The
+admin hostname serves the dashboard, Identity browser/API routes, and its
+separate terminal route. Identity cookies remain host-only (no `Domain`
+attribute). Verify DNS, HTTPS certificate, login
+and provider callbacks, the admin pages, and rejected public privileged routes
+before enabling any emergency-console feature. The console remains separately
+disabled by default.
+
 ## Scripts
 
 - `scripts/bootstrap-ubuntu.sh`: install OS packages, create users/directories,

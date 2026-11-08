@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 require_root
+validate_vapor_host_config
 
 CADDY_TEMPLATE="${VAPOR_CADDY_TEMPLATE:-${DEPLOY_DIR}/caddy/Caddyfile.template}"
 
@@ -14,24 +15,20 @@ if ! command -v caddy >/dev/null 2>&1; then
   exit 1
 fi
 
-fallback_block="$(mktemp)"
 candidate_caddyfile="$(mktemp /etc/caddy/Caddyfile.XXXXXX)"
-trap 'rm -f "${fallback_block}" "${candidate_caddyfile}"' EXIT
+trap 'rm -f "${candidate_caddyfile}"' EXIT
 
-if [ -n "${VAPOR_HTTP_FALLBACK_HOST}" ]; then
-  cat > "${fallback_block}" <<EOF
-http://${VAPOR_HTTP_FALLBACK_HOST} {
-	redir https://${VAPOR_DOMAIN}{uri} permanent
-}
-EOF
+render_args=(
+  --template "${CADDY_TEMPLATE}"
+  --public-domain "${VAPOR_DOMAIN}"
+)
+if [ -n "${VAPOR_ADMIN_DOMAIN:-}" ]; then
+  render_args+=(--admin-domain "${VAPOR_ADMIN_DOMAIN}")
 fi
-
-sed "s/{{VAPOR_DOMAIN}}/${VAPOR_DOMAIN}/g" \
-  "${CADDY_TEMPLATE}" \
-  | sed \
-    -e "/{{VAPOR_HTTP_FALLBACK_BLOCK}}/r ${fallback_block}" \
-    -e "/{{VAPOR_HTTP_FALLBACK_BLOCK}}/d" \
-  > "${candidate_caddyfile}"
+if [ -n "${VAPOR_HTTP_FALLBACK_HOST}" ]; then
+  render_args+=(--http-fallback-host "${VAPOR_HTTP_FALLBACK_HOST}")
+fi
+python3 "${DEPLOY_DIR}/scripts/render-caddyfile.py" "${render_args[@]}" > "${candidate_caddyfile}"
 
 caddy fmt --overwrite "${candidate_caddyfile}"
 caddy validate --config "${candidate_caddyfile}"
@@ -46,6 +43,9 @@ if [ "${VAPOR_RECOVERY_STAGING:-0}" != "1" ]; then
 fi
 
 echo "caddy: installed config for ${VAPOR_DOMAIN}"
+if [ -n "${VAPOR_ADMIN_DOMAIN:-}" ]; then
+  echo "caddy: privileged dashboard routes isolated on ${VAPOR_ADMIN_DOMAIN}"
+fi
 if [ -n "${VAPOR_HTTP_FALLBACK_HOST}" ]; then
   echo "caddy: installed canonical HTTP redirect for ${VAPOR_HTTP_FALLBACK_HOST}"
 fi

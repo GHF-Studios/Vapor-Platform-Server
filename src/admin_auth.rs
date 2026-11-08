@@ -9,6 +9,79 @@ use std::time::Duration;
 const SESSION_COOKIE: &str = "vapor_identity_session";
 const MAX_IDENTITY_RESPONSE_BYTES: usize = 4096;
 
+pub(crate) fn browser_admin_origin() -> String {
+    resolve_browser_admin_origin(
+        std::env::var("VAPOR_PLATFORM_ADMIN_ORIGIN").ok().as_deref(),
+        std::env::var("VAPOR_PLATFORM_PUBLIC_ORIGIN")
+            .ok()
+            .as_deref(),
+        std::env::var("VAPOR_DOMAIN").ok().as_deref(),
+    )
+}
+
+fn resolve_browser_admin_origin(
+    admin_origin: Option<&str>,
+    public_origin: Option<&str>,
+    domain: Option<&str>,
+) -> String {
+    admin_origin
+        .filter(|value| !value.is_empty())
+        .or_else(|| public_origin.filter(|value| !value.is_empty()))
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("https://{}", domain.unwrap_or("vapor.ghf-studios.site")))
+}
+
+fn valid_dns_name(value: &str) -> bool {
+    if value.is_empty() || value.len() > 253 || value.ends_with('.') {
+        return false;
+    }
+    let labels: Vec<_> = value.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|label| {
+            let bytes = label.as_bytes();
+            !bytes.is_empty()
+                && bytes.len() <= 63
+                && (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
+                && (bytes[bytes.len() - 1].is_ascii_lowercase()
+                    || bytes[bytes.len() - 1].is_ascii_digit())
+                && bytes
+                    .iter()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        })
+}
+
+pub(crate) fn isolated_admin_origin(
+    admin_domain: Option<&str>,
+    public_domain: Option<&str>,
+    admin_origin: Option<&str>,
+) -> bool {
+    let (Some(admin_domain), Some(public_domain), Some(admin_origin)) =
+        (admin_domain, public_domain, admin_origin)
+    else {
+        return false;
+    };
+    if !valid_dns_name(admin_domain)
+        || !valid_dns_name(public_domain)
+        || admin_domain.eq_ignore_ascii_case(public_domain)
+    {
+        return false;
+    }
+    let expected = format!("https://{admin_domain}");
+    if admin_origin != expected {
+        return false;
+    }
+    let Ok(url) = Url::parse(admin_origin) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.host_str() == Some(admin_domain)
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuthFailure {
     Unauthorized,
@@ -198,7 +271,10 @@ pub(crate) fn valid_loopback_endpoint(endpoint: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{authorize_root, authorize_root_with_client, valid_loopback_endpoint, AuthFailure};
+    use super::{
+        AuthFailure, authorize_root, authorize_root_with_client, isolated_admin_origin,
+        resolve_browser_admin_origin, valid_loopback_endpoint,
+    };
     use axum::extract::State;
     use axum::http::{HeaderMap, HeaderValue, StatusCode};
     use axum::routing::post;
@@ -398,5 +474,77 @@ mod tests {
         assert!(!valid_loopback_endpoint("http://localhost/authorize"));
         assert!(!valid_loopback_endpoint("http://example.com/authorize"));
         assert!(!valid_loopback_endpoint("http://127.0.0.1/authorize?url=x"));
+    }
+
+    #[test]
+    fn emergency_console_requires_distinct_canonical_https_admin_origin() {
+        assert!(isolated_admin_origin(
+            Some("admin.vapor.example"),
+            Some("vapor.example"),
+            Some("https://admin.vapor.example")
+        ));
+        for (admin, public, origin) in [
+            (
+                None,
+                Some("vapor.example"),
+                Some("https://admin.vapor.example"),
+            ),
+            (
+                Some("vapor.example"),
+                Some("vapor.example"),
+                Some("https://vapor.example"),
+            ),
+            (
+                Some("admin.vapor.example"),
+                Some("vapor.example"),
+                Some("http://admin.vapor.example"),
+            ),
+            (
+                Some("admin.vapor.example"),
+                Some("vapor.example"),
+                Some("https://admin.vapor.example/extra"),
+            ),
+            (
+                Some("admin.vapor.example\nrespond 200"),
+                Some("vapor.example"),
+                Some("https://admin.vapor.example\nrespond 200"),
+            ),
+            (
+                Some("-admin.vapor.example"),
+                Some("vapor.example"),
+                Some("https://-admin.vapor.example"),
+            ),
+            (
+                Some("admin..vapor.example"),
+                Some("vapor.example"),
+                Some("https://admin..vapor.example"),
+            ),
+        ] {
+            assert!(!isolated_admin_origin(admin, public, origin));
+        }
+    }
+
+    #[test]
+    fn browser_admin_origin_prefers_isolated_origin_and_has_public_fallback() {
+        assert_eq!(
+            resolve_browser_admin_origin(
+                Some("https://admin.example.test"),
+                Some("https://public.example.test"),
+                Some("fallback.example.test")
+            ),
+            "https://admin.example.test"
+        );
+        assert_eq!(
+            resolve_browser_admin_origin(
+                None,
+                Some("https://public.example.test"),
+                Some("fallback.example.test")
+            ),
+            "https://public.example.test"
+        );
+        assert_eq!(
+            resolve_browser_admin_origin(None, None, None),
+            "https://vapor.ghf-studios.site"
+        );
     }
 }

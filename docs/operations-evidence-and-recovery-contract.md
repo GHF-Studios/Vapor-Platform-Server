@@ -67,6 +67,14 @@ secrets_included = true
 archive_encryption = "none"
 ```
 
+If `VAPOR_ADMIN_DOMAIN` is configured, the recovery archive preserves that
+hostname and the matching Caddy/Identity settings. A fresh-host activation then
+depends on the admin DNS record and the provider callback configuration being
+ready for that hostname (including the exact GitHub OAuth callback, if enabled).
+Do not bring the restored dashboard online on the public hostname while its
+Identity canonical origin points at the isolated admin host; complete the DNS,
+HTTPS, and login checks first.
+
 The manifest lists included categories, runtime mode, source and recursive
 submodule pins, the exporting host's detected OS/architecture, stable Rust/Cargo
 versions and compiler host triple observed when the export ran, creation time,

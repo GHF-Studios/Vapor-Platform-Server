@@ -71,10 +71,19 @@ case "${VAPOR_SERVER_MODE}" in
     exit 1
     ;;
 esac
+validate_vapor_host_config
 ensure_env_assignment \
   "${VAPOR_CONFIG_DIR}/platform.env" \
   VAPOR_SERVER_MODE \
   "${VAPOR_SERVER_MODE}"
+ensure_env_assignment \
+  "${VAPOR_CONFIG_DIR}/platform.env" \
+  VAPOR_ADMIN_DOMAIN \
+  "${VAPOR_ADMIN_DOMAIN}"
+ensure_env_assignment \
+  "${VAPOR_CONFIG_DIR}/platform.env" \
+  VAPOR_PLATFORM_ADMIN_ORIGIN \
+  "${VAPOR_PLATFORM_ADMIN_ORIGIN}"
 
 DEPLOY_OPERATION_STARTED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DEPLOY_OPERATION_REVISION="unknown"
@@ -197,10 +206,10 @@ VAPOR_DOCS_STATE=${VAPOR_STATE_ROOT}/docs
 VAPOR_DOCS_ADMIN_TOKEN=$(random_token)"
 fi
 
-# Browser identity has exactly one canonical public origin. This deliberately
-# updates only non-secret settings; provider credentials remain untouched.
+# Browser identity has one canonical browser origin. When configured, this is
+# the isolated admin host; otherwise it preserves the current public origin.
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/configure-identity-auth.sh" \
-  --public-origin "https://${VAPOR_DOMAIN}" \
+  --public-origin "${VAPOR_PLATFORM_ADMIN_ORIGIN}" \
   --cookie-secure true \
   --cookie-path /
 

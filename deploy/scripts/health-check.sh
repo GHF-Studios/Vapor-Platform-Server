@@ -24,10 +24,11 @@ source "${SCRIPT_DIR}/http-contract-checks.sh"
 
 check_admin_gateway_route() {
   local path="$1"
+  local host="${VAPOR_ADMIN_DOMAIN:-${VAPOR_DOMAIN}}"
   local status
   status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
-    --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
-    --output /dev/null --write-out '%{http_code}' "https://${VAPOR_DOMAIN}${path}")"
+    --resolve "${host}:443:127.0.0.1" \
+    --output /dev/null --write-out '%{http_code}' "https://${host}${path}")"
   case "${status}" in
     2??|3??|401|403) ;;
     *)
@@ -35,6 +36,46 @@ check_admin_gateway_route() {
       return 1
       ;;
   esac
+}
+
+check_public_admin_isolation() {
+  local status redirect
+  status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
+    --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
+    --output /dev/null --write-out '%{http_code}' "https://${VAPOR_DOMAIN}/admin")"
+  [ "${status}" = 308 ] || {
+    echo "error: public admin entry returned HTTP ${status}, expected 308" >&2
+    return 1
+  }
+  redirect="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
+    --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
+    --output /dev/null --write-out '%{redirect_url}' "https://${VAPOR_DOMAIN}/admin")"
+  [ "${redirect}" = "https://${VAPOR_ADMIN_DOMAIN}/admin" ] || {
+    echo "error: public admin redirect does not target the configured admin host" >&2
+    return 1
+  }
+  for path in /login /logout /cli/ssh/authorize; do
+    status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
+      --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
+      --output /dev/null --write-out '%{http_code}' "https://${VAPOR_DOMAIN}${path}")"
+    [ "${status}" = 308 ] || {
+      echo "error: public browser route ${path} returned HTTP ${status}, expected 308" >&2
+      return 1
+    }
+  done
+  for path in \
+    /api/admin/platform-healthz \
+    /api/identity/v1/admin/profiles \
+    /api/identity/v1/internal/authorization/check \
+    /emergency-terminal/; do
+    status="$(curl --silent --show-error --connect-timeout 1 --max-time 3 \
+      --resolve "${VAPOR_DOMAIN}:443:127.0.0.1" \
+      --output /dev/null --write-out '%{http_code}' "https://${VAPOR_DOMAIN}${path}")"
+    [ "${status}" = 404 ] || {
+      echo "error: public privileged route ${path} returned HTTP ${status}, expected 404" >&2
+      return 1
+    }
+  done
 }
 
 if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
@@ -78,10 +119,18 @@ else
   # each owner page. Check the fixed routes end-to-end through local Caddy after
   # all owner services are ready; login redirects and normal authorization
   # results are valid responses, while 404/5xx indicate a broken mapping.
-  check_admin_gateway_route /admin/identity
-  check_admin_gateway_route /admin/workshop
-  check_admin_gateway_route /admin/artifacts
-  check_admin_gateway_route /admin/build-cache
+  if [ -n "${VAPOR_ADMIN_DOMAIN}" ]; then
+    check_admin_gateway_route /admin/identity
+    check_admin_gateway_route /admin/workshop
+    check_admin_gateway_route /admin/artifacts
+    check_admin_gateway_route /admin/build-cache
+    check_public_admin_isolation
+  else
+    check_admin_gateway_route /admin/identity
+    check_admin_gateway_route /admin/workshop
+    check_admin_gateway_route /admin/artifacts
+    check_admin_gateway_route /admin/build-cache
+  fi
 
   check_unauthenticated_http_contracts \
     --homepage-base http://127.0.0.1:7111 \

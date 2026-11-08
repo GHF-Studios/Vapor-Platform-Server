@@ -21,6 +21,12 @@ if [ -r "${VAPOR_CONFIG_DIR}/platform.env" ]; then
   source "${VAPOR_CONFIG_DIR}/platform.env"
   set +a
 fi
+VAPOR_ADMIN_DOMAIN="${VAPOR_ADMIN_DOMAIN:-}"
+if [ -n "${VAPOR_ADMIN_DOMAIN}" ]; then
+  VAPOR_PLATFORM_ADMIN_ORIGIN="https://${VAPOR_ADMIN_DOMAIN}"
+else
+  VAPOR_PLATFORM_ADMIN_ORIGIN="${VAPOR_PLATFORM_PUBLIC_ORIGIN:-https://${VAPOR_DOMAIN}}"
+fi
 if [ -n "${__VAPOR_APPROVED_REQUEST_ID}" ]; then
   case "${__VAPOR_APPROVED_REQUEST_MODE}" in
     monolith|services) VAPOR_SERVER_MODE="${__VAPOR_APPROVED_REQUEST_MODE}" ;;
@@ -151,6 +157,26 @@ write_operation_record() {
     echo "warning: operation history could not be appended" >&2
     return 1
   fi
+}
+
+validate_vapor_host_config() {
+  local template="${DEPLOY_DIR}/caddy/Caddyfile.template"
+  local -a args
+
+  if [ "${VAPOR_SERVER_MODE}" = "services" ]; then
+    template="${DEPLOY_DIR}/caddy/Caddyfile.services.template"
+  fi
+  args=(
+    --template "${template}"
+    --public-domain "${VAPOR_DOMAIN}"
+  )
+  if [ -n "${VAPOR_ADMIN_DOMAIN}" ]; then
+    args+=(--admin-domain "${VAPOR_ADMIN_DOMAIN}")
+  fi
+  if [ -n "${VAPOR_HTTP_FALLBACK_HOST}" ]; then
+    args+=(--http-fallback-host "${VAPOR_HTTP_FALLBACK_HOST}")
+  fi
+  python3 "${DEPLOY_DIR}/scripts/render-caddyfile.py" "${args[@]}" >/dev/null
 }
 
 wait_for_http() {

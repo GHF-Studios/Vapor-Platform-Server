@@ -265,8 +265,7 @@ fn state() -> SshAccessState {
             |_| "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check".to_string(),
         ),
         identity_root_authz_token: std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok(),
-        public_origin: std::env::var("VAPOR_PLATFORM_PUBLIC_ORIGIN")
-            .unwrap_or_else(|_| format!("https://{domain}")),
+        public_origin: crate::admin_auth::browser_admin_origin(),
         ssh_host: std::env::var("VAPOR_SSH_ACCESS_HOST").unwrap_or(domain),
     }
 }

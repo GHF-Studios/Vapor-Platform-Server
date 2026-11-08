@@ -172,8 +172,6 @@ fn create_pool() -> SqlitePool {
 }
 
 fn state() -> ConsoleState {
-    let domain =
-        std::env::var("VAPOR_DOMAIN").unwrap_or_else(|_| "vapor.ghf-studios.site".to_owned());
     ConsoleState {
         pool: create_pool(),
         client: reqwest::Client::builder()
@@ -186,8 +184,7 @@ fn state() -> ConsoleState {
             |_| "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check".to_owned(),
         ),
         identity_authz_token: std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok(),
-        public_origin: std::env::var("VAPOR_PLATFORM_PUBLIC_ORIGIN")
-            .unwrap_or_else(|_| format!("https://{domain}")),
+        public_origin: crate::admin_auth::browser_admin_origin(),
     }
 }
 
@@ -965,6 +962,10 @@ fn configured_enabled() -> bool {
     matches!(
         std::env::var("VAPOR_EMERGENCY_CONSOLE_ENABLED").as_deref(),
         Ok("1" | "true")
+    ) && crate::admin_auth::isolated_admin_origin(
+        std::env::var("VAPOR_ADMIN_DOMAIN").ok().as_deref(),
+        std::env::var("VAPOR_DOMAIN").ok().as_deref(),
+        std::env::var("VAPOR_PLATFORM_ADMIN_ORIGIN").ok().as_deref(),
     )
 }
 

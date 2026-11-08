@@ -75,8 +75,10 @@ recovery path or OpenSSH.
   defense against all sibling-origin request forgery: every state-changing
   admin endpoint still needs exact Origin validation, strict request types,
   and no permissive credentialed CORS. Terminal WebSocket Origin validation
-  remains mandatory. Configure Identity's canonical browser origin and
-  host-only session cookie on the admin hostname before enabling the console.
+  remains mandatory. The optional `VAPOR_ADMIN_DOMAIN` rollout in
+  `2026-11-08-admin-origin-isolation-design.md` moves Identity's canonical
+  browser origin and host-only session cookie onto a distinct admin hostname;
+  configure and verify that boundary before enabling the console.
 - A code audit found that current Platform deployment, temporary-SSH, and
   emergency-console mutations compare the request `Origin` with the configured
   Platform origin; Identity's browser mutation handlers use its
@@ -84,8 +86,9 @@ recovery path or OpenSSH.
   a substitute for route-by-route verification after hostname routing changes.
   The admin-host rollout must also cover redirects, Steam/OpenID callback
   origin, cookies, CLI authorization links, API routing, and host-specific
-  health checks. Never point `VAPOR_PLATFORM_PUBLIC_ORIGIN` or Identity's
-  public origin at the new host until Caddy and DNS serve the matching host.
+  health checks. Do not switch Platform or Identity to a new browser origin
+  until Caddy and DNS serve that exact host; deployment derives it from
+  `VAPOR_ADMIN_DOMAIN` and records it as `VAPOR_PLATFORM_ADMIN_ORIGIN`.
 - Terminal transport is isolated from the Platform web process, but a
   vulnerability in ttyd, Caddy, Identity, or the browser route can still expose
   root access. The deployment has a global enable/disable switch and the

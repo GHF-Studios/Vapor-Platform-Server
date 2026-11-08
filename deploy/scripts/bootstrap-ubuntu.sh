@@ -80,6 +80,10 @@ apt-get install --yes \
   python3 \
   sqlite3
 
+# Reject malformed host configuration before any app or Caddy configuration
+# is written. Python is installed as a required Platform operator tool above.
+validate_vapor_host_config
+
 # Install Caddy from its official Debian/Ubuntu package repository.
 curl --fail --silent --show-error --location \
   'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
@@ -141,8 +145,10 @@ find "${VAPOR_STATE_ROOT}" -type f -exec chmod 0640 {} +
 
 install_secret_env "${VAPOR_CONFIG_DIR}/platform.env" \
 "VAPOR_DOMAIN=${VAPOR_DOMAIN}
+VAPOR_ADMIN_DOMAIN=${VAPOR_ADMIN_DOMAIN}
 VAPOR_PLATFORM_BIND=127.0.0.1:7110
 VAPOR_SERVER_MODE=${VAPOR_SERVER_MODE}
+VAPOR_PLATFORM_ADMIN_ORIGIN=${VAPOR_PLATFORM_ADMIN_ORIGIN}
 VAPOR_PLATFORM_PROBE_ORIGIN=http://127.0.0.1:7110
 VAPOR_PLATFORM_IDENTITY_AUTHZ_URL=http://127.0.0.1:7110/api/identity/v1/internal/authorization/check
 VAPOR_BRANCH=${VAPOR_BRANCH}
@@ -191,9 +197,8 @@ VAPOR_IDENTITY_LOOCAST_APP_ID=2122620
 VAPOR_IDENTITY_STEAM_AUTH_IDENTITY=vapor-identity
 VAPOR_IDENTITY_COOKIE_PATH=/
 VAPOR_IDENTITY_COOKIE_SECURE=true
-# Browser identity is canonical on the HTTPS Vapor domain. Override manually
-# only for an intentional non-production deployment.
-VAPOR_IDENTITY_PUBLIC_ORIGIN=https://${VAPOR_DOMAIN}
+# Browser identity uses the isolated HTTPS admin origin when configured.
+VAPOR_IDENTITY_PUBLIC_ORIGIN=${VAPOR_PLATFORM_ADMIN_ORIGIN}
 # Set on the server when available; never commit the value:
 VAPOR_IDENTITY_STEAM_WEB_API_KEY=
 # Set after creating the GitHub OAuth/GitHub App registration:
