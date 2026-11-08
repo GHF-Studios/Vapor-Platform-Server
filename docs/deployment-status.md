@@ -1163,6 +1163,10 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   `/admin/recovery` and `/admin/emergency-console` return 404 on the older live
   revision, as expected. No production files, services, DNS, or Identity
   settings were changed.
+- The live deployment queue currently has one pending, unattempted request and
+  three older approved requests whose dispatch state is failed. No deployment
+  worker is active and no deployment timer is listed. These records were only
+  read; none was retried or modified.
 - The root-terminal feature is still not deployable for use: ttyd `1.7.7` is
   still the latest release, issue `#1546` remains open and proposed PR `#1574`
   remains unmerged. The exact-version allowlists remain empty. Separately, the
