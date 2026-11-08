@@ -239,10 +239,21 @@ mod unix_impl {
     }
 
     async fn recovery_status() -> Result<recovery_status::RecoveryStatus, ()> {
+        use std::path::Component;
         use std::time::{SystemTime, UNIX_EPOCH};
 
         const MAX_ARCHIVES: usize = 10_000;
-        let root = PathBuf::from("/var/backups/vapor-server");
+        let root = configured_value("VAPOR_BACKUP_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/var/backups/vapor-server"));
+        if !root.is_absolute()
+            || root.as_os_str().len() > 1024
+            || root
+                .components()
+                .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        {
+            return Err(());
+        }
         if std::fs::symlink_metadata(&root)
             .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
         {

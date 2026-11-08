@@ -28,7 +28,9 @@ impl RecoveryStatus {
             && self
                 .next_run_display
                 .as_deref()
-                .is_none_or(|value| value.len() <= 256 && !value.chars().any(char::is_control))
+                .is_none_or(|value| {
+                    value.len() <= 256 && !value.chars().any(char::is_control)
+                })
             && self.archive_count <= 10_000
             && matches!(self.freshness.as_str(), "recent" | "stale" | "unknown")
             && self.latest_archive.as_ref().is_none_or(|archive| {
