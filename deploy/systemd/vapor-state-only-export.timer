@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Vapor state-only snapshot
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=1h
+RandomizedDelaySec=7min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

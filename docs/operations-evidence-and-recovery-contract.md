@@ -1,7 +1,10 @@
 # Operations evidence and recovery contract
 
-Status: source-level contract. Live restore exercises require separate explicit
-authorization.
+Status: legacy schema-v2 implementation record. For the current target for new
+backups, see `docs/superpowers/specs/2026-11-08-state-only-owner-recovery.md`.
+The hourly full-host/plaintext-secret design below is superseded and must not be
+used as the specification for new archives. Existing v2 archives remain
+untouched until a state-only copy and restore have been validated.
 
 ## Purpose
 

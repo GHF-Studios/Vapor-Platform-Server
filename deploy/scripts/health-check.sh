@@ -168,7 +168,11 @@ wait_for_http \
   "https://${VAPOR_DOMAIN}/atlas/" \
   --resolve "${VAPOR_DOMAIN}:443:127.0.0.1"
 
-systemctl is-enabled --quiet vapor-state-export.timer
-systemctl is-active --quiet vapor-state-export.timer
+if systemctl is-enabled --quiet vapor-state-export.timer || systemctl is-active --quiet vapor-state-export.timer; then
+  echo "health: legacy full-host export timer must be disabled" >&2
+  exit 1
+fi
+systemctl is-enabled --quiet vapor-state-only-export.timer
+systemctl is-active --quiet vapor-state-only-export.timer
 
 echo "health: Vapor server endpoints responded locally (${VAPOR_SERVER_MODE} mode)"

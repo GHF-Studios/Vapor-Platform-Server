@@ -1,0 +1,6 @@
+[Unit]
+Description=Export classified Vapor service state only
+
+[Service]
+Type=oneshot
+ExecStart=/opt/vapor-platform-server/deploy/scripts/export-state-only.sh

@@ -90,7 +90,7 @@ class RecoveryActivationOrderTests(unittest.TestCase):
         self.assertLess(pause_at, move_state_at)
         self.assertIn("ssh-expiry-quiescence.sh", restore)
         self.assertIn("restored_ssh_expiry_units.py", restore)
-        self.assertLess(restore.index('activate_restored_ssh_expiry\nfi'), restore.index('systemctl enable --now vapor-state-export.timer'))
+        self.assertLess(restore.index('activate_restored_ssh_expiry\nfi'), restore.index('systemctl enable --now vapor-state-only-export.timer'))
 
     def test_recovery_staging_does_not_enable_units_or_start_package_services(self) -> None:
         bootstrap = (REPO_ROOT / "deploy/scripts/bootstrap-ubuntu.sh").read_text()
@@ -105,7 +105,7 @@ class RecoveryActivationOrderTests(unittest.TestCase):
             ("deploy/scripts/install-systemd.sh", "systemctl enable vapor-platform-server.service"),
             ("deploy/scripts/install-services-systemd.sh", 'systemctl enable "vapor-${service}.service"'),
             ("deploy/scripts/install-caddy.sh", "systemctl enable caddy.service"),
-            ("deploy/scripts/install-state-backup.sh", "systemctl enable --now vapor-state-export.timer"),
+            ("deploy/scripts/install-state-backup.sh", "systemctl enable --now vapor-state-only-export.timer"),
         ]:
             with self.subTest(path=relative):
                 text = (REPO_ROOT / relative).read_text()

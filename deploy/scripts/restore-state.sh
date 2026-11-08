@@ -37,6 +37,8 @@ CADDY_WAS_ACTIVE="false"
 CADDY_WAS_ENABLED="false"
 TIMER_WAS_ENABLED="false"
 TIMER_WAS_ACTIVE="false"
+STATE_ONLY_TIMER_WAS_ENABLED="false"
+STATE_ONLY_TIMER_WAS_ACTIVE="false"
 DEPLOY_TIMER_WAS_ACTIVE="false"
 DEPLOY_TIMER_WAS_ENABLED="false"
 DEPLOY_SERVICE_WAS_ACTIVE="false"
@@ -292,6 +294,8 @@ if systemctl is-enabled --quiet vapor-state-export.timer; then TIMER_WAS_ENABLED
 if systemctl is-active --quiet vapor-state-export.timer; then
   TIMER_WAS_ACTIVE="true"
 fi
+if systemctl is-enabled --quiet vapor-state-only-export.timer; then STATE_ONLY_TIMER_WAS_ENABLED="true"; fi
+if systemctl is-active --quiet vapor-state-only-export.timer; then STATE_ONLY_TIMER_WAS_ACTIVE="true"; fi
 if systemctl is-enabled --quiet vapor-deploy.timer; then DEPLOY_TIMER_WAS_ENABLED="true"; fi
 if systemctl is-active --quiet vapor-deploy.timer; then DEPLOY_TIMER_WAS_ACTIVE="true"; fi
 if systemctl is-enabled --quiet vapor-deploy.service; then DEPLOY_SERVICE_WAS_ENABLED="true"; fi
@@ -373,6 +377,10 @@ rollback() {
   if [ "${TIMER_WAS_ACTIVE}" = "true" ]; then
     systemctl start vapor-state-export.timer || rollback_failed=1
   fi
+  restore_enabled_state_if_loaded vapor-state-only-export.timer "${STATE_ONLY_TIMER_WAS_ENABLED}" || rollback_failed=1
+  if [ "${STATE_ONLY_TIMER_WAS_ACTIVE}" = "true" ]; then
+    systemctl start vapor-state-only-export.timer || rollback_failed=1
+  fi
   restore_enabled_state_if_loaded vapor-deploy.timer "${DEPLOY_TIMER_WAS_ENABLED}" || rollback_failed=1
   if [ "${DEPLOY_TIMER_WAS_ACTIVE}" = "true" ]; then
     systemctl start vapor-deploy.timer || rollback_failed=1
@@ -426,6 +434,8 @@ fi
 systemctl disable vapor-deploy.timer >/dev/null 2>&1 || true
 stop_if_loaded vapor-deploy.service
 stop_if_loaded vapor-state-export.timer
+stop_if_loaded vapor-state-only-export.timer
+systemctl disable vapor-state-only-export.timer >/dev/null 2>&1 || true
 for service in "${STATEFUL_SERVICES[@]}"; do stop_if_loaded "${service}"; done
 pause_temporary_ssh_expiry
 PRE_RESTORE_ACTIVE_SSH_EXPIRY_TIMERS=("${ACTIVE_SSH_EXPIRY_TIMERS[@]}")
@@ -478,6 +488,15 @@ for unit in "${BUNDLE_ROOT}"/host/systemd/vapor-*; do
   fi
   install -D -o root -g root -m 0644 "${unit}" "/etc/systemd/system/$(basename -- "${unit}")"
 done
+# Legacy schema-v2 archives predate the separately indexed state-only timer.
+# Reinstall the current setup-owned unit definitions instead of restoring
+# obsolete host setup from the archive.
+for unit in vapor-state-only-export.service vapor-state-only-export.timer; do
+  if [ -f "${VAPOR_DEPLOY_ROOT}/deploy/systemd/${unit}" ]; then
+    install -D -o root -g root -m 0644 \
+      "${VAPOR_DEPLOY_ROOT}/deploy/systemd/${unit}" "/etc/systemd/system/${unit}"
+  fi
+done
 for link in /etc/systemd/system/timers.target.wants/vapor-ssh-expire-*.timer; do
   [ -L "${link}" ] || continue
   rm -- "${link}"
@@ -498,7 +517,8 @@ done
 if [ "${FRESH_HOST_RESTORE}" != "true" ]; then
   activate_restored_ssh_expiry
 fi
-systemctl enable --now vapor-state-export.timer
+systemctl disable --now vapor-state-export.timer >/dev/null 2>&1 || true
+systemctl enable --now vapor-state-only-export.timer
 systemctl reload caddy.service
 
 "${SCRIPT_DIR}/health-check.sh"

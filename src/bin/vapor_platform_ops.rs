@@ -523,6 +523,60 @@ mod unix_impl {
                 checksum_sidecar_present,
             })
         });
+        let state_root = root.join("state-only");
+        let state_root_metadata = std::fs::symlink_metadata(&state_root);
+        if state_root_metadata
+            .as_ref()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
+        {
+            return Err(());
+        }
+        let mut state_only_archive_count = 0u32;
+        let mut state_only_latest: Option<(PathBuf, i64, u64)> = None;
+        if let Ok(entries) = std::fs::read_dir(&state_root) {
+            for (index, entry) in entries.enumerate() {
+                if index >= MAX_ARCHIVES {
+                    return Err(());
+                }
+                let entry = entry.map_err(|_| ())?;
+                let name = entry.file_name();
+                if !state_only_archive_name(&name.to_string_lossy()) {
+                    continue;
+                }
+                let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| ())?;
+                if !metadata.file_type().is_file() || metadata.len() == 0 {
+                    continue;
+                }
+                state_only_archive_count = state_only_archive_count.saturating_add(1);
+                let modified_at_unix = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                    .and_then(|duration| i64::try_from(duration.as_secs()).ok());
+                let Some(modified_at_unix) = modified_at_unix.filter(|value| *value > 0) else {
+                    continue;
+                };
+                if state_only_latest
+                    .as_ref()
+                    .is_none_or(|(_, current, _)| modified_at_unix > *current)
+                {
+                    state_only_latest = Some((entry.path(), modified_at_unix, metadata.len()));
+                }
+            }
+        }
+        let state_only_latest_archive =
+            state_only_latest.and_then(|(path, modified_at_unix, size_bytes)| {
+                let sidecar = PathBuf::from(format!("{}.sha256", path.display()));
+                let checksum_sidecar_present =
+                    std::fs::symlink_metadata(sidecar).is_ok_and(|metadata| {
+                        metadata.file_type().is_file() && !metadata.file_type().is_symlink()
+                    });
+                Some(recovery_status::LatestStateOnlyArchive {
+                    modified_at_unix,
+                    size_bytes,
+                    checksum_sidecar_present,
+                })
+            });
         let freshness = match latest_archive.as_ref() {
             None => "unknown",
             Some(archive) if archive.modified_at_unix as u64 > now.saturating_add(300) => "unknown",
@@ -539,6 +593,23 @@ mod unix_impl {
                 "--property=ActiveState",
                 "--value",
                 "vapor-state-export.timer",
+            ],
+            64,
+        )
+        .await
+        .map(|value| match value.as_str() {
+            "active" => "active",
+            "inactive" => "inactive",
+            _ => "unknown",
+        })
+        .unwrap_or("unknown");
+        let state_only_timer_state = command_output_bounded(
+            "/usr/bin/systemctl",
+            &[
+                "show",
+                "--property=ActiveState",
+                "--value",
+                "vapor-state-only-export.timer",
             ],
             64,
         )
@@ -572,8 +643,33 @@ mod unix_impl {
             archive_count,
             latest_archive,
             freshness: freshness.to_owned(),
+            state_only_timer_state: state_only_timer_state.to_owned(),
+            state_only_archive_count,
+            state_only_latest_archive,
             owner_usb_sync,
         })
+    }
+
+    fn state_only_archive_name(name: &str) -> bool {
+        let Some(value) = name
+            .strip_prefix("vapor-platform-state-")
+            .and_then(|value| value.strip_suffix(".tar.gz"))
+        else {
+            return false;
+        };
+        let Some((timestamp, nonce)) = value.rsplit_once('-') else {
+            return false;
+        };
+        let bytes = timestamp.as_bytes();
+        bytes.len() == 16
+            && bytes[8] == b'T'
+            && bytes[15] == b'Z'
+            && bytes[..8].iter().all(u8::is_ascii_digit)
+            && bytes[9..15].iter().all(u8::is_ascii_digit)
+            && nonce.len() == 12
+            && nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     }
 
     fn recovery_archive_commit(name: &str) -> Option<&str> {

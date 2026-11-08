@@ -280,6 +280,82 @@ class StateBundleValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(validator.ValidationError, "member count limit"):
                 validator.validate_bundle(bundle)
 
+    def test_accepts_state_only_schema_with_allowlisted_service_data(self) -> None:
+        manifest = f'''schema_version = 3
+created_at_utc = "2026-11-08T00:00:00Z"
+state_catalog_version = 1
+secrets_included = false
+archive_encryption = "none"
+build_outputs_excluded = true
+config_included = false
+host_routing_included = false
+source_pins_included = false
+recovery_kit_included = false
+included_categories = ["state"]
+'''
+        bundle = make_bundle([
+            (ROOT, "dir", None),
+            (f"{ROOT}/manifest.toml", "file", manifest.encode()),
+            (f"{ROOT}/state", "dir", None),
+            (f"{ROOT}/state/identity", "dir", None),
+            (f"{ROOT}/state/identity/identity.sqlite3", "file", b"identity-db"),
+            (f"{ROOT}/state/platform", "dir", None),
+            (f"{ROOT}/state/platform/platform.sqlite3", "file", b"platform-db"),
+            (f"{ROOT}/state/registry", "dir", None),
+            (f"{ROOT}/state/registry/registry.sqlite3", "file", b"registry-db"),
+            (f"{ROOT}/state/docs/current/index.html", "file", b"published docs"),
+            (f"{ROOT}/state/operations/deployed-sources.json", "file", b'{"schema_version":1,"targets":{}}'),
+        ])
+        validator.validate_bundle(bundle)
+
+    def test_state_only_schema_rejects_host_config_and_source_categories(self) -> None:
+        manifest = b'''schema_version = 3
+created_at_utc = "2026-11-08T00:00:00Z"
+state_catalog_version = 1
+secrets_included = false
+archive_encryption = "none"
+build_outputs_excluded = true
+config_included = false
+host_routing_included = false
+source_pins_included = false
+recovery_kit_included = false
+included_categories = ["state"]
+'''
+        bundle = make_bundle([
+            (ROOT, "dir", None),
+            (f"{ROOT}/manifest.toml", "file", manifest),
+            (f"{ROOT}/state/identity/identity.sqlite3", "file", b"db"),
+            (f"{ROOT}/state/platform/platform.sqlite3", "file", b"db"),
+            (f"{ROOT}/state/registry/registry.sqlite3", "file", b"db"),
+            (f"{ROOT}/config/vapor-server/platform.env", "file", b"secret"),
+        ])
+        with self.assertRaisesRegex(validator.ValidationError, "state-only"):
+            validator.validate_bundle(bundle)
+
+    def test_state_only_schema_rejects_unclassified_paths(self) -> None:
+        manifest = b'''schema_version = 3
+created_at_utc = "2026-11-08T00:00:00Z"
+state_catalog_version = 1
+secrets_included = false
+archive_encryption = "none"
+build_outputs_excluded = true
+config_included = false
+host_routing_included = false
+source_pins_included = false
+recovery_kit_included = false
+included_categories = ["state"]
+'''
+        bundle = make_bundle([
+            (ROOT, "dir", None),
+            (f"{ROOT}/manifest.toml", "file", manifest),
+            (f"{ROOT}/state/identity/identity.sqlite3", "file", b"db"),
+            (f"{ROOT}/state/platform/platform.sqlite3", "file", b"db"),
+            (f"{ROOT}/state/registry/registry.sqlite3", "file", b"db"),
+            (f"{ROOT}/state/identity/oauth-secret.txt", "file", b"secret"),
+        ])
+        with self.assertRaisesRegex(validator.ValidationError, "state-only"):
+            validator.validate_bundle(bundle)
+
 
 if __name__ == "__main__":
     unittest.main()

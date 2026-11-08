@@ -9,14 +9,19 @@ require_root
 
 install -m 0644 "${DEPLOY_DIR}/systemd/vapor-state-export.service" /etc/systemd/system/vapor-state-export.service
 install -m 0644 "${DEPLOY_DIR}/systemd/vapor-state-export.timer" /etc/systemd/system/vapor-state-export.timer
+install -m 0644 "${DEPLOY_DIR}/systemd/vapor-state-only-export.service" /etc/systemd/system/vapor-state-only-export.service
+install -m 0644 "${DEPLOY_DIR}/systemd/vapor-state-only-export.timer" /etc/systemd/system/vapor-state-only-export.timer
 
 systemctl daemon-reload
 if [ "${VAPOR_RECOVERY_STAGING:-0}" != "1" ]; then
-  systemctl enable --now vapor-state-export.timer
+  # New exports contain only allowlisted product state. Stop generating the
+  # legacy full-host archives, which include server configuration and secrets.
+  systemctl disable --now vapor-state-export.timer >/dev/null 2>&1 || true
+  systemctl enable --now vapor-state-only-export.timer
 fi
 
 if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then
-  echo "state-backup: installed vapor-state-export.timer without starting it for recovery staging"
+  echo "state-backup: installed state export timers without starting them for recovery staging"
 else
-  echo "state-backup: installed and enabled vapor-state-export.timer"
+  echo "state-backup: legacy full-host exports disabled; state-only export enabled"
 fi

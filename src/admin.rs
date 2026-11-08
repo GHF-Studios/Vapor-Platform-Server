@@ -290,6 +290,8 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .ssh-history-list p { margin:7px 0; padding-left:10px; border-left:2px solid #40536a; }
 .ssh-pending-note { padding:10px; border-left:3px solid #d4bd69; background:#28271e; }
 .recovery-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin:14px 0 0; }
+.recovery-details { margin-top:8px; border-top:1px solid var(--line); padding-top:8px; }
+.recovery-details > summary { cursor:pointer; color:var(--muted); font-size:13px; }
 .recovery-fact { min-width:0; padding:11px; background:#111821; border-radius:5px; }
 .recovery-fact dt { color:#9eacba; font-size:11px; }
 .recovery-fact dd { margin:4px 0 0; overflow-wrap:anywhere; font-weight:600; }
@@ -1695,29 +1697,48 @@ const JS: &str = r#"
         if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Recovery status is unavailable (HTTP ${response.status}).`);
         const data = await response.json();
         const usb = data?.owner_usb_sync;
-        if (data?.schema_version !== 1 || !['available', 'missing', 'unavailable'].includes(data.archive_root_state) || !['active', 'inactive', 'unknown'].includes(data.timer_state) || !['recent', 'stale', 'unknown'].includes(data.freshness) || !Number.isInteger(data.archive_count) || data.archive_count < 0 || (data.latest_archive !== null && (!data.latest_archive || !Number.isFinite(data.latest_archive.modified_at_unix) || !Number.isFinite(data.latest_archive.size_bytes))) || (usb !== null && usb !== undefined && (!['recent', 'stale'].includes(usb.freshness) || !Number.isFinite(usb.last_success_unix) || typeof usb.latest_archive !== 'string' || !/^[0-9a-f]{64}$/.test(usb.latest_archive_sha256) || !Number.isInteger(usb.verified_archive_count) || !Number.isInteger(usb.unverified_archive_count) || !Number.isFinite(usb.retained_archive_payload_bytes)))) throw new Error('The recovery service returned an invalid status.');
+        if (data?.schema_version !== 1 || !['available', 'missing', 'unavailable'].includes(data.archive_root_state) || !['active', 'inactive', 'unknown'].includes(data.timer_state) || !['active', 'inactive', 'unknown'].includes(data.state_only_timer_state) || !Number.isInteger(data.state_only_archive_count) || data.state_only_archive_count < 0 || !['recent', 'stale', 'unknown'].includes(data.freshness) || !Number.isInteger(data.archive_count) || data.archive_count < 0 || (data.latest_archive !== null && (!data.latest_archive || !Number.isFinite(data.latest_archive.modified_at_unix) || !Number.isFinite(data.latest_archive.size_bytes))) || (data.state_only_latest_archive !== null && (!data.state_only_latest_archive || !Number.isFinite(data.state_only_latest_archive.modified_at_unix) || !Number.isFinite(data.state_only_latest_archive.size_bytes))) || (usb !== null && usb !== undefined && (!['recent', 'stale'].includes(usb.freshness) || !Number.isFinite(usb.last_success_unix) || typeof usb.latest_archive !== 'string' || !/^[0-9a-f]{64}$/.test(usb.latest_archive_sha256) || !Number.isInteger(usb.verified_archive_count) || !Number.isInteger(usb.unverified_archive_count) || !Number.isFinite(usb.retained_archive_payload_bytes)))) throw new Error('The recovery service returned an invalid status.');
         const latest = data.latest_archive;
-        const freshnessText = data.archive_root_state === 'missing' ? 'Archive folder has not been created' : data.archive_root_state === 'unavailable' ? 'Archive folder could not be read' : data.freshness === 'recent' ? 'Recent archive found — validation not verified' : data.freshness === 'stale' ? 'Latest archive is stale' : latest || data.archive_count > 0 ? 'Archive time unknown' : 'No archive found';
-        const freshnessState = data.freshness === 'recent' ? 'warning' : 'danger';
+        const stateLatest = data.state_only_latest_archive;
+        const stateRecent = stateLatest && (Date.now() / 1000 - stateLatest.modified_at_unix) <= 2 * 60 * 60;
+        const freshnessText = data.state_only_timer_state !== 'active' ? 'Automatic state snapshots are not active' : stateRecent ? 'Recent state snapshot' : stateLatest ? 'State snapshot is stale' : 'No state-only snapshot found';
+        const freshnessState = data.state_only_timer_state === 'active' && stateRecent && stateLatest.checksum_sidecar_present ? 'success' : 'danger';
         const modified = latest ? new Date(latest.modified_at_unix * 1000).toLocaleString() : 'Not available';
+        const stateModified = stateLatest ? new Date(stateLatest.modified_at_unix * 1000).toLocaleString() : 'Not available';
         const usbSync = data.owner_usb_sync;
         const usbState = usbSync?.freshness === 'recent' ? 'success' : 'danger';
-        recoveryFacts.replaceChildren(
-          fact('Archive folder', data.archive_root_state === 'available' ? 'Readable' : data.archive_root_state === 'missing' ? 'Missing' : 'Unavailable', data.archive_root_state === 'available' ? '' : 'danger'),
-          fact('Archive evidence', freshnessText, freshnessState),
-          fact('Latest snapshot', latest ? `${humanSize(latest.size_bytes)} · ${modified}` : 'Not available'),
-          fact('Source revision', latest?.commit_short || 'Not available'),
-          fact('Checksum sidecar', latest ? (latest.checksum_sidecar_present ? 'Present; not rechecked here' : 'Missing') : 'Not available', latest?.checksum_sidecar_present ? 'warning' : 'danger'),
-          fact('Export timer', data.timer_state === 'active' ? 'Active' : data.timer_state === 'inactive' ? 'Inactive' : 'Unknown', data.timer_state === 'active' ? 'warning' : 'danger'),
-          fact('Next scheduled run', typeof data.next_run_display === 'string' && data.next_run_display ? data.next_run_display : 'Not available'),
-          fact('Snapshots found', data.archive_root_state === 'available' ? String(data.archive_count) : data.archive_root_state === 'missing' ? '0' : 'Unknown'),
-          fact('USB recovery copy', usbSync ? (usbSync.freshness === 'recent' ? 'Recently verified by owner task' : 'Owner report is stale') : 'No valid owner sync report', usbState),
-          fact('USB sync time', usbSync ? new Date(usbSync.last_success_unix * 1000).toLocaleString() : 'Not reported'),
-          fact('USB archive', usbSync ? `${usbSync.latest_archive} · SHA-256 ${usbSync.latest_archive_sha256}` : 'Not reported'),
-          fact('USB verification', usbSync ? `${usbSync.verified_archive_count} verified · ${usbSync.unverified_archive_count} unverified · ${humanSize(usbSync.retained_archive_payload_bytes)}` : 'Not reported'),
-          fact('USB recovery kit', usbSync?.recovery_kit_available ? `Preflight passed · ${usbSync.recovery_kit_source_commit}` : usbSync ? 'No validated recovery kit in reported sync' : 'Not reported')
+        const primary = document.createElement('div'); primary.className = 'recovery-facts';
+        primary.append(
+          fact('State snapshot', freshnessText, freshnessState),
+          fact('Latest', stateLatest ? `${humanSize(stateLatest.size_bytes)} · ${stateModified} · checksum ${stateLatest.checksum_sidecar_present ? 'listed' : 'missing'}` : 'Not available', stateLatest?.checksum_sidecar_present ? '' : 'danger'),
+          fact('Automatic schedule', data.state_only_timer_state === 'active' ? 'Hourly · active' : data.state_only_timer_state === 'inactive' ? 'Stopped' : 'Unknown', data.state_only_timer_state === 'active' ? 'success' : 'danger'),
+          fact('Retained', String(data.state_only_archive_count)),
+          fact('Legacy USB report', usbSync ? (usbSync.freshness === 'recent' ? 'Recently verified' : 'Report is stale') : 'Not reported', usbState)
         );
-        recoveryFeedback.textContent = 'VPS archive status is based on server file evidence. USB status is reported by the owner sync task; the VPS cannot independently verify USB contents or possession.';
+        const legacy = document.createElement('details'); legacy.className = 'recovery-details';
+        const legacySummary = document.createElement('summary'); legacySummary.textContent = `Legacy full-host archives · ${data.archive_count}`;
+        const legacyFacts = document.createElement('dl'); legacyFacts.className = 'recovery-facts';
+        legacyFacts.append(
+          fact('Archive folder', data.archive_root_state === 'available' ? 'Readable' : data.archive_root_state === 'missing' ? 'Missing' : 'Unavailable'),
+          fact('Latest legacy archive', latest ? `${humanSize(latest.size_bytes)} · ${modified}` : 'Not available'),
+          fact('Source revision', latest?.commit_short || 'Not available'),
+          fact('Checksum sidecar', latest ? (latest.checksum_sidecar_present ? 'Present; not rechecked here' : 'Missing') : 'Not available'),
+          fact('Old schedule', data.timer_state === 'active' ? 'Active' : data.timer_state === 'inactive' ? 'Inactive' : 'Unknown'),
+          fact('Next run', typeof data.next_run_display === 'string' && data.next_run_display ? data.next_run_display : 'Not available')
+        );
+        legacy.append(legacySummary, legacyFacts);
+        const usbDetails = document.createElement('details'); usbDetails.className = 'recovery-details';
+        const usbSummary = document.createElement('summary'); usbSummary.textContent = 'Legacy USB verification details';
+        const usbFacts = document.createElement('dl'); usbFacts.className = 'recovery-facts';
+        usbFacts.append(
+          fact('Last sync', usbSync ? new Date(usbSync.last_success_unix * 1000).toLocaleString() : 'Not reported'),
+          fact('Archive', usbSync ? `${usbSync.latest_archive} · SHA-256 ${usbSync.latest_archive_sha256}` : 'Not reported'),
+          fact('Verified data', usbSync ? `${usbSync.verified_archive_count} verified · ${usbSync.unverified_archive_count} unverified · ${humanSize(usbSync.retained_archive_payload_bytes)}` : 'Not reported'),
+          fact('Old recovery kit', usbSync?.recovery_kit_available ? `Preflight passed · ${usbSync.recovery_kit_source_commit}` : usbSync ? 'Not included in latest report' : 'Not reported')
+        );
+        usbDetails.append(usbSummary, usbFacts);
+        recoveryFacts.replaceChildren(primary, legacy, usbDetails);
+        recoveryFeedback.textContent = 'State-only snapshots contain allowlisted service data. Legacy full-host archives are retained separately during migration.';
       } catch (error) {
         recoveryFacts.replaceChildren(); recoveryFeedback.textContent = error.message || 'Recovery status is unavailable.';
       }

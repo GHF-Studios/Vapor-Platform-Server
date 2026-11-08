@@ -8,6 +8,8 @@ vapor-diagnostics.service
 vapor-deploy@.service
 vapor-state-export.service
 vapor-state-export.timer
+vapor-state-only-export.service
+vapor-state-only-export.timer
 ```
 
 The app services are installed separately and run as the `vapor` system user.
@@ -26,3 +28,9 @@ not deploy it. The deploy unit has no start timeout because a first build can
 legitimately take a long time. A wedged worker therefore needs operator
 attention before later deploy/export/restore work can acquire the shared lock.
 Temporary SSH grants use a separate one-shot expiry timer per grant.
+
+The state-only exporter writes under `/var/backups/vapor-server/state-only`
+with its own pointer and retention. It snapshots the SQLite databases online
+through SQLite's backup API, so hourly exports do not stop service writers.
+The installer disables the legacy full-host timer; its retained archives are
+read-only during migration and are never pruned by the new exporter.

@@ -1,6 +1,8 @@
 # Vapor Platform Operations and Recovery Redesign
 
-**Status:** Owner-approved architecture; implementation in progress
+**Status:** Owner-approved architecture; implementation in progress. Recovery
+requirements were superseded on 2026-11-08 by
+`docs/superpowers/specs/2026-11-08-state-only-owner-recovery.md`.
 **Date:** 2026-11-06
 **Scope:** Vapor Platform Server and its service-owned admin, deployment, security, distribution, and recovery contracts. This document records the target architecture; it does not claim the current VPS already implements it.
 
@@ -149,6 +151,13 @@ These observations distinguish current implementation from the target below.
    recovery. This is the selected target and matches the owner's answer.
 
 ## Recovery and worker choices
+
+> **Superseded recovery decision (2026-11-08):** The selected hourly full-host
+> archive and plaintext credential bundle described in this historical design
+> are no longer the target. New backups are state-only, omit host config and
+> secrets, and are surfaced as explicit owner operations in the Recovery area.
+> The older archives are preserved during migration. The 2026-11-08 state-only
+> recovery spec and plan are authoritative for new work.
 
 1. **VPS-local exports only.** Easy to operate, but does not survive loss or
    compromise of the primary host. Rejected as the final recovery path.

@@ -11,8 +11,19 @@ pub(crate) struct RecoveryStatus {
     pub archive_count: u32,
     pub latest_archive: Option<LatestArchive>,
     pub freshness: String,
+    pub state_only_timer_state: String,
+    pub state_only_archive_count: u32,
+    pub state_only_latest_archive: Option<LatestStateOnlyArchive>,
     #[serde(default)]
     pub owner_usb_sync: Option<OwnerUsbSyncStatus>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LatestStateOnlyArchive {
+    pub modified_at_unix: i64,
+    pub size_bytes: u64,
+    pub checksum_sidecar_present: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -204,6 +215,16 @@ impl RecoveryStatus {
                 "available" | "missing" | "unavailable"
             )
             && matches!(self.timer_state.as_str(), "active" | "inactive" | "unknown")
+            && matches!(
+                self.state_only_timer_state.as_str(),
+                "active" | "inactive" | "unknown"
+            )
+            && self.state_only_archive_count <= 10_000
+            && self
+                .state_only_latest_archive
+                .as_ref()
+                .is_none_or(|archive| archive.modified_at_unix > 0 && archive.size_bytes > 0)
+            && (self.state_only_latest_archive.is_some() || self.state_only_archive_count == 0)
             && self
                 .next_run_display
                 .as_deref()

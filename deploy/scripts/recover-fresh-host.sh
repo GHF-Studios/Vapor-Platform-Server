@@ -179,7 +179,7 @@ cleanup() {
       vapor-homepage.service vapor-docs.service vapor-identity.service \
       vapor-diagnostics.service vapor-registry.service vapor-artifact.service \
       vapor-build-cache.service vapor-platform-server.service \
-      vapor-state-export.timer caddy.service; do
+      vapor-state-export.timer vapor-state-only-export.timer caddy.service; do
       systemctl disable --now "${unit}" >/dev/null 2>&1 || true
     done
     echo "fresh-recovery: failed recovery units were disabled and stopped; rerun --resume after review" >&2

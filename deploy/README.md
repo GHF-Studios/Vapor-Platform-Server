@@ -158,7 +158,11 @@ console remains separately disabled by default.
   already linked Steam+GitHub developer/root profile by requiring both SteamID64
   and GitHub login, using the server-local identity admin token for bootstrap
   or emergency operator use.
-- `scripts/export-state.sh`: create a root-only full-platform recovery archive
+- `scripts/export-state.sh`: create the retained legacy full-platform archive
+- `scripts/export-state-only.sh`: create a separately indexed archive of the
+  explicitly allowlisted service state, without host configuration or secrets
+- `scripts/backup-state-only-to-usb.ps1`: copy and verify state-only generations
+  to the owner-controlled USB without pruning the legacy archive set
   under `/var/backups/vapor-server`. The target schema includes service state,
   `/etc/vapor-server` credentials/configuration, selected host routing files,
   and exact source/submodule pins. The archive is intentionally unencrypted;

@@ -40,6 +40,11 @@ RECOVERY_KIT_V3_FILES = RECOVERY_KIT_V2_FILES | {"service_deploy_map.py"}
 MAX_MEMBER_COUNT = 100_000
 MAX_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
 MAX_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
+STATE_ONLY_REQUIRED_FILES = {
+    f"{ROOT}/state/identity/identity.sqlite3",
+    f"{ROOT}/state/platform/platform.sqlite3",
+    f"{ROOT}/state/registry/registry.sqlite3",
+}
 
 
 def normalized_parts(name: str) -> tuple[str, ...]:
@@ -117,6 +122,95 @@ def validate_manifest_text(
     return set(categories), manifest.get("runtime_mode", ""), root_commit, toolchain
 
 
+def validate_state_only_manifest(manifest: dict[str, object]) -> None:
+    """Reject ambiguous or host-bearing schema-v3 snapshots."""
+    expected_keys = {
+        "schema_version", "created_at_utc", "state_catalog_version",
+        "secrets_included", "archive_encryption", "build_outputs_excluded",
+        "config_included", "host_routing_included", "source_pins_included",
+        "recovery_kit_included", "included_categories",
+    }
+    if set(manifest) != expected_keys:
+        raise ValidationError("state-only manifest contains unsupported fields")
+    if manifest.get("state_catalog_version") != 1:
+        raise ValidationError("state-only catalog version is unsupported")
+    if manifest.get("secrets_included") is not False:
+        raise ValidationError("state-only archive must declare secrets excluded")
+    if manifest.get("archive_encryption") != "none":
+        raise ValidationError("state-only archive encryption declaration is invalid")
+    if manifest.get("build_outputs_excluded") is not True:
+        raise ValidationError("state-only archive must exclude rebuildable outputs")
+    if any(manifest.get(key) is not False for key in (
+        "config_included", "host_routing_included", "source_pins_included",
+        "recovery_kit_included",
+    )):
+        raise ValidationError("state-only archive declares host/configuration material")
+    if manifest.get("included_categories") != ["state"]:
+        raise ValidationError("state-only archive must declare only the state category")
+    created = manifest.get("created_at_utc")
+    if not isinstance(created, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", created
+    ):
+        raise ValidationError("state-only creation timestamp is invalid")
+
+
+def validate_state_only_members(
+    archive: tarfile.TarFile,
+    members: dict[str, tarfile.TarInfo],
+    manifest: dict[str, object],
+) -> None:
+    validate_state_only_manifest(manifest)
+    allowed_exact = STATE_ONLY_REQUIRED_FILES | {
+        f"{ROOT}/state/operations/deployed-sources.json",
+    }
+    allowed_prefixes = (
+        f"{ROOT}/state/docs/current/",
+        f"{ROOT}/state/docs/releases/",
+        f"{ROOT}/state/updates/releases/",
+    )
+    allowed_dirs = {ROOT, f"{ROOT}/state"}
+    for file_path in allowed_exact:
+        parts = pathlib.PurePosixPath(file_path).parts
+        for size in range(1, len(parts)):
+            allowed_dirs.add("/".join(parts[:size]))
+    for prefix in allowed_prefixes:
+        parts = pathlib.PurePosixPath(prefix.rstrip("/")).parts
+        for size in range(1, len(parts) + 1):
+            allowed_dirs.add("/".join(parts[:size]))
+
+    for name, member in members.items():
+        if name in {f"{ROOT}/manifest.toml"}:
+            continue
+        if member.isdir() and name in allowed_dirs:
+            continue
+        if name in allowed_exact and member.isfile():
+            continue
+        if any(name.startswith(prefix) and member.isfile() for prefix in allowed_prefixes):
+            continue
+        # SQLite's WAL and shared-memory companions are part of the database
+        # snapshot only when their owning service has one of the allowlisted DBs.
+        if member.isfile() and any(
+            name in {f"{db}-wal", f"{db}-shm"} for db in STATE_ONLY_REQUIRED_FILES
+        ):
+            continue
+        raise ValidationError(f"state-only archive contains a non-state or unclassified path: {name}")
+
+    missing = STATE_ONLY_REQUIRED_FILES - {
+        name for name, member in members.items() if member.isfile()
+    }
+    if missing:
+        raise ValidationError("state-only archive is missing a required service database")
+    deployed_sources = members.get(f"{ROOT}/state/operations/deployed-sources.json")
+    if deployed_sources is not None:
+        stream = archive.extractfile(deployed_sources)
+        if stream is None:
+            raise ValidationError("state-only deployed-source manifest cannot be read")
+        try:
+            validate_deployed_source_manifest(stream.read(64 * 1024).decode("utf-8", errors="strict"))
+        except (ManifestError, UnicodeDecodeError) as error:
+            raise ValidationError("state-only deployed-source manifest is invalid") from error
+
+
 def validate_bundle(path: pathlib.Path) -> None:
     if not path.is_file():
         raise ValidationError("bundle path is not a file")
@@ -135,6 +229,7 @@ def validate_bundle(path: pathlib.Path) -> None:
     service_units: set[str] = set()
     deployed_sources_member: tarfile.TarInfo | None = None
     recovery_kit_members: dict[str, tarfile.TarInfo] = {}
+    archive_members: dict[str, tarfile.TarInfo] = {}
     member_count = 0
     total_bytes = 0
 
@@ -155,6 +250,7 @@ def validate_bundle(path: pathlib.Path) -> None:
                 if normalized_name in names:
                     raise ValidationError("bundle contains a duplicate archive entry")
                 names.add(normalized_name)
+                archive_members[normalized_name] = member
 
                 if normalized_name == f"{ROOT}/manifest.toml":
                     manifest_member = member
@@ -188,6 +284,23 @@ def validate_bundle(path: pathlib.Path) -> None:
 
             if manifest_member is None:
                 raise ValidationError("bundle is missing its manifest")
+            manifest_file = archive.extractfile(manifest_member)
+            if manifest_file is None:
+                raise ValidationError("bundle manifest cannot be read")
+            manifest_text = manifest_file.read(64 * 1024).decode("utf-8", errors="strict")
+            manifest_values = tomllib.loads(manifest_text)
+
+            if manifest_values.get("schema_version") == 3:
+                validate_state_only_members(archive, archive_members, manifest_values)
+                return
+
+            declared_categories, runtime_mode, declared_root_commit, declared_toolchain = validate_manifest_text(
+                manifest_text
+            )
+            manifest_stream = archive.extractfile(manifest_member)
+            assert manifest_stream is not None
+            manifest_values = tomllib.loads(manifest_stream.read(64 * 1024).decode("utf-8", errors="strict"))
+
             if deployed_sources_member is not None:
                 deployed_sources_stream = archive.extractfile(deployed_sources_member)
                 if deployed_sources_stream is None:
@@ -198,15 +311,6 @@ def validate_bundle(path: pathlib.Path) -> None:
                     )
                 except (ManifestError, UnicodeDecodeError) as error:
                     raise ValidationError("bundle deployed-source manifest is invalid") from error
-            manifest_file = archive.extractfile(manifest_member)
-            if manifest_file is None:
-                raise ValidationError("bundle manifest cannot be read")
-            declared_categories, runtime_mode, declared_root_commit, declared_toolchain = validate_manifest_text(
-                manifest_file.read(64 * 1024).decode("utf-8", errors="strict")
-            )
-            manifest_stream = archive.extractfile(manifest_member)
-            assert manifest_stream is not None
-            manifest_values = tomllib.loads(manifest_stream.read(64 * 1024).decode("utf-8", errors="strict"))
 
             if recovery_kit_members or manifest_values.get("recovery_kit_included") is True:
                 if manifest_values.get("recovery_kit_included") is not True:
@@ -304,7 +408,7 @@ def validate_bundle(path: pathlib.Path) -> None:
                 raise ValidationError("bundle is missing the local root-operations socket units")
             if not declared_categories.issubset(categories_seen):
                 raise ValidationError("bundle category declaration does not match its contents")
-    except (tarfile.TarError, UnicodeDecodeError) as error:
+    except (tarfile.TarError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise ValidationError("bundle is not a readable recovery archive") from error
 
 
