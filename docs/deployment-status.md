@@ -1095,11 +1095,12 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   deployment rows or label the platform fully recoverable until that drill is
   recorded.
 
-## Root console dependency review (2026-11-08)
+## Root console dependency review at `1c19795` (2026-11-08)
 
-- The review branch has advanced through `1c19795` and is 12 commits ahead of
-  `main` at `d6be2a1`. The preceding checkpoint's nine-commit count and `2f19975`
-  CI reference are historical; the source does not include a deployment.
+- At this review point the branch was at `1c19795` and 12 commits ahead of
+  `main` at `d6be2a1`. The preceding checkpoint's nine-commit count and
+  `2f19975` CI reference are historical; the source does not include a
+  deployment.
 - The upstream ttyd repository still identifies `1.7.7` as its latest release.
   Its empty-WebSocket-frame crash report (`#1546`) and proposed fix (`#1574`)
   remain open. The reported crash requires a connected client; in this design,
@@ -1111,9 +1112,8 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - The root-terminal service remains disabled and absent on the live VPS. The
   branch's root-console route is not deployed or enabled. Root SSH/VNC remains
   the only live host recovery path.
-- GitHub CI succeeded for `1c19795`'s parent `c79e4ed`; CI for `1c19795` was
-  still running when this checkpoint was written. Check its result before
-  merging the branch.
+- GitHub CI for `1c19795` and its parent `c79e4ed` completed successfully.
+  This is source/CI evidence only; check the current head's CI before merging.
 - The shared public/admin origin and lack of verified step-up remain separate
   blockers to enabling a browser root shell, even after ttyd becomes approved.
 - Read-only production checks still return HTTP 200 for `/docs/` with the

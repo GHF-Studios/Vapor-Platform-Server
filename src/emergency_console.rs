@@ -296,18 +296,30 @@ async fn enable(
     if !configured_enabled() {
         return error(StatusCode::CONFLICT, "console_not_enabled_in_host_config");
     }
-    match sqlx::query("UPDATE platform_emergency_console_config SET enabled=1 WHERE slot=1")
-        .execute(&state.pool)
-        .await
-    {
-        Ok(_) => {}
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
         Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable"),
+    };
+    let enabled = sqlx::query("UPDATE platform_emergency_console_config SET enabled=1 WHERE slot=1")
+        .execute(&mut *transaction)
+        .await;
+    if !enabled.is_ok_and(|result| result.rows_affected() == 1) {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
     }
-    if record_event(&state.pool, None, Some(&profile_id), "enabled", unix_now())
-        .await
-        .is_err()
+    if record_event_tx(
+        &mut transaction,
+        None,
+        Some(&profile_id),
+        "enabled",
+        unix_now(),
+    )
+    .await
+    .is_err()
     {
         return error(StatusCode::SERVICE_UNAVAILABLE, "console_audit_unavailable");
+    }
+    if transaction.commit().await.is_err() {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
     }
     private_json(StatusCode::OK, serde_json::json!({"enabled": true}))
 }
@@ -510,40 +522,47 @@ async fn end_session(
     if !same_origin(&state, &headers) || !request.confirmed {
         return error(StatusCode::FORBIDDEN, "same_origin_confirmation_required");
     }
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable"),
+    };
     let session_id = sqlx::query_scalar::<_, String>(
         "SELECT id FROM platform_emergency_console_sessions WHERE status='active' ORDER BY created_at_unix DESC LIMIT 1",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *transaction)
     .await;
     let session_id = match session_id {
         Ok(value) => value,
         Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable"),
     };
-    let audit_ok = if let Some(session_id) = session_id.as_deref() {
-        if sqlx::query(
+    if let Some(session_id) = session_id.as_deref() {
+        let updated = sqlx::query(
             "UPDATE platform_emergency_console_sessions SET status='ended', ended_at_unix=?
              WHERE id=? AND status='active'",
         )
         .bind(unix_now())
         .bind(session_id)
-        .execute(&state.pool)
-        .await
-        .is_err()
-        {
+        .execute(&mut *transaction)
+        .await;
+        if !updated.is_ok_and(|result| result.rows_affected() == 1) {
             return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
         }
-        record_event(
-            &state.pool,
+        if record_event_tx(
+            &mut transaction,
             Some(session_id),
             Some(&profile_id),
             "ended",
             unix_now(),
         )
         .await
-        .is_ok()
-    } else {
-        true
-    };
+        .is_err()
+        {
+            return error(StatusCode::SERVICE_UNAVAILABLE, "console_audit_unavailable");
+        }
+    }
+    if transaction.commit().await.is_err() {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
+    }
     let stopped = helper_action("emergency-console-stop").await.is_ok();
     if !stopped {
         if let Some(session_id) = session_id.as_deref() {
@@ -557,14 +576,10 @@ async fn end_session(
             .await;
         }
     }
-    if !stopped || !audit_ok {
+    if !stopped {
         return clear_cookie(error(
             StatusCode::SERVICE_UNAVAILABLE,
-            if stopped {
-                "console_ended_but_audit_unconfirmed"
-            } else {
-                "console_ended_but_stop_unconfirmed"
-            },
+            "console_ended_but_stop_unconfirmed",
         ));
     }
     clear_cookie(private_json(
@@ -707,38 +722,39 @@ async fn disable_internal(
     profile_id: &str,
     now: i64,
 ) -> Result<Vec<String>, ()> {
+    let mut transaction = state.pool.begin().await.map_err(|_| ())?;
     let was_enabled = sqlx::query_scalar::<_, i64>(
         "SELECT enabled FROM platform_emergency_console_config WHERE slot=1",
     )
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *transaction)
     .await
     .map_err(|_| ())?
         == 1;
     sqlx::query("UPDATE platform_emergency_console_config SET enabled=0 WHERE slot=1")
-        .execute(&state.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| ())?;
     let active_ids = sqlx::query_scalar::<_, String>(
         "SELECT id FROM platform_emergency_console_sessions WHERE status='active'",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *transaction)
     .await
     .map_err(|_| ())?;
     sqlx::query(
         "UPDATE platform_emergency_console_sessions SET status='revoked', ended_at_unix=? WHERE status='active'",
     )
     .bind(now)
-    .execute(&state.pool)
+    .execute(&mut *transaction)
     .await
     .map_err(|_| ())?;
     if was_enabled || !active_ids.is_empty() {
-        record_event(&state.pool, None, Some(profile_id), "disabled", now)
+        record_event_tx(&mut transaction, None, Some(profile_id), "disabled", now)
             .await
             .map_err(|_| ())?;
     }
     for id in &active_ids {
-        record_event(
-            &state.pool,
+        record_event_tx(
+            &mut transaction,
             Some(id.as_str()),
             Some(profile_id),
             "revoked",
@@ -747,6 +763,7 @@ async fn disable_internal(
         .await
         .map_err(|_| ())?;
     }
+    transaction.commit().await.map_err(|_| ())?;
     Ok(active_ids)
 }
 
@@ -822,6 +839,26 @@ async fn record_event(
     .bind(event)
     .bind(at_unix)
     .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+async fn record_event_tx(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    session_id: Option<&str>,
+    profile_id: Option<&str>,
+    event: &str,
+    at_unix: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO platform_emergency_console_events(session_id,actor_profile_id,event,at_unix)
+         VALUES (?,?,?,?)",
+    )
+    .bind(session_id)
+    .bind(profile_id)
+    .bind(event)
+    .bind(at_unix)
+    .execute(&mut **transaction)
     .await
     .map(|_| ())
 }

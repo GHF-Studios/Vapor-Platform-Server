@@ -29,6 +29,9 @@
   one WebSocket client, same-origin check, one-shot server, and no transcript
   persistence. Bash has a prompt idle timeout; systemd enforces the hard limit.
 - Existing deployment approval and Recovery behavior remain separate.
+- Enable, disable, and end-session state transitions commit with their audit
+  event in the same SQLite transaction. A missing audit write must not leave
+  the console enabled or report a completed revocation.
 
 ## Work sequence
 

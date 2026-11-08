@@ -86,8 +86,10 @@ for smoke testing only; the intended public endpoint remains
   SSH wrappers, and the isolated temporary-account SSH policy.
 - `scripts/install-emergency-console.sh`: optional Linux preparation
   for a browser-based root shell. It requires an exact, reviewed ttyd release
-  at `/usr/bin/ttyd`, then installs a dedicated unenabled systemd unit and
-  fixed shell wrapper; it does not install ttyd, start the unit, or enable it.
+  version at `/usr/bin/ttyd`, then installs a dedicated unenabled systemd unit
+  and fixed shell wrapper; it does not install ttyd, verify binary provenance,
+  start the unit, or enable it. The version allowlist must be updated only
+  after the binary's source and release are reviewed.
   Upstream's latest release is still 1.7.7 and has an unresolved
   empty-WebSocket-frame crash report, so no version is currently approved and
   setup intentionally fails closed until a fixed release is reviewed.
