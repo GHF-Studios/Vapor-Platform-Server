@@ -27,8 +27,10 @@ while the implementation is still moving quickly.
 - Git is not the normal diagnostics transport and should not be a normal player
   dependency.
 - Players should not require GitHub accounts.
-- Content/development workflows may require both Steam identity and GitHub
-  identity because Vapor content is GitHub-backed for now.
+- Developer source workflows may require a linked GitHub identity for
+  repository access and attribution. Public content consumption must not
+  require GitHub merely because a source repository exists; the content's
+  acquisition provider and license decide availability.
 - The Steam account is the primary Vapor player profile anchor. GitHub attaches
   to a Steam-anchored profile for development/root authorization; it should not
   create a standalone player profile.
