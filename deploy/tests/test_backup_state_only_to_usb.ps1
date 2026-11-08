@@ -36,7 +36,7 @@ Copy-Item -LiteralPath (Join-Path $env:VAPOR_USB_TEST_REMOTE_ROOT $name) -Destin
 exit 0
 '@ | Set-Content -LiteralPath $scpShim -Encoding utf8
 
-    & $git -C $sourceRoot init --quiet
+    & $git -C $sourceRoot init --quiet --initial-branch=main
     & $git -C $sourceRoot config user.name 'Vapor USB fixture'
     & $git -C $sourceRoot config user.email 'fixture@example.invalid'
     $kitFiles = @(
@@ -47,9 +47,16 @@ exit 0
     $scriptFolder = Join-Path $sourceRoot 'deploy\scripts'
     New-Item -ItemType Directory -Path $scriptFolder | Out-Null
     foreach ($name in $kitFiles) { Set-Content -LiteralPath (Join-Path $scriptFolder $name) -Value "fixture $name" -Encoding utf8 }
+    Set-Content -LiteralPath (Join-Path $scriptFolder 'state_only_recovery_marker.py') -Value 'fixture recovery kit from archived revision' -Encoding utf8
     & $git -C $sourceRoot add deploy/scripts
-    & $git -C $sourceRoot commit --quiet -m 'Fixture recovery kit'
-    $sourceCommit = (& $git -C $sourceRoot rev-parse HEAD).Trim()
+    & $git -C $sourceRoot commit --quiet -m 'Fixture archived application revision'
+    $archiveSourceCommit = (& $git -C $sourceRoot rev-parse HEAD).Trim()
+    Set-Content -LiteralPath (Join-Path $scriptFolder 'state_only_recovery_marker.py') -Value 'fixture recovery kit from current main' -Encoding utf8
+    & $git -C $sourceRoot add deploy/scripts/state_only_recovery_marker.py
+    & $git -C $sourceRoot commit --quiet -m 'Fixture current recovery-kit revision'
+    $recoveryKitCommit = (& $git -C $sourceRoot rev-parse HEAD).Trim()
+    $repositoryCache = Join-Path $testRoot 'Vapor-Platform-Server.git'
+    & $git clone --quiet --bare $sourceRoot $repositoryCache
 
     $archiveName = 'vapor-platform-state-20261108T000000Z-0123456789ab.tar.gz'
     $archivePath = Join-Path $remoteRoot $archiveName
@@ -57,7 +64,7 @@ exit 0
     @"
 schema_version = 4
 created_at_utc = "2026-11-08T00:00:00Z"
-platform_source_commit = "$sourceCommit"
+platform_source_commit = "$archiveSourceCommit"
 "@ | Set-Content -LiteralPath $manifestPath -Encoding ascii
     $makeArchive = Join-Path $testRoot 'make-archive.py'
     @'
@@ -92,31 +99,33 @@ with tarfile.open(root / sys.argv[3], "w:gz") as archive:
     $env:VAPOR_USB_TEST_SSH_EXECUTABLE = $sshShim
     $env:VAPOR_USB_TEST_SCP_EXECUTABLE = $scpShim
     $sync = Join-Path $PSScriptRoot '..\scripts\backup-state-only-to-usb.ps1'
-    & $sync -Server fixture -SshKey $sshKey -UsbPath $usbRoot -AllowFixedDrive -RecoveryRepositoryPath $sourceRoot | Out-Null
+    & $sync -Server fixture -SshKey $sshKey -UsbPath $usbRoot -AllowFixedDrive -RecoveryRepositoryPath $repositoryCache | Out-Null
 
     $snapshot = Join-Path $usbRoot (Join-Path 'State-Snapshots' $archiveName)
     Assert-True (Test-Path -LiteralPath $snapshot -PathType Leaf) 'verified state archive was not copied'
-    $kitRoot = Join-Path $usbRoot (Join-Path 'Recovery-Kit\state-only' $sourceCommit)
+    $kitRoot = Join-Path $usbRoot (Join-Path 'Recovery-Kit\state-only' $recoveryKitCommit)
     foreach ($name in ($kitFiles + 'SHA256SUMS')) {
         Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot $name) -PathType Leaf) "recovery kit is missing $name"
     }
     $pointer = Get-Content -LiteralPath (Join-Path $usbRoot 'Recovery-Kit\state-only\latest.json') -Raw | ConvertFrom-Json
-    Assert-True ($pointer.source_commit -ceq $sourceCommit) 'recovery-kit pointer has the wrong source revision'
+    Assert-True ($pointer.recovery_kit_commit -ceq $recoveryKitCommit) 'recovery-kit pointer has the wrong kit revision'
+    Assert-True ($pointer.archive_source_commit -ceq $archiveSourceCommit) 'recovery-kit pointer has the wrong archived application revision'
     Assert-True ($pointer.archive_sha256 -ceq $archiveHash) 'recovery-kit pointer does not bind the snapshot checksum'
     Assert-True ($pointer.files.'recover-state-only-host.sh' -ceq (Get-FileHash -LiteralPath (Join-Path $kitRoot 'recover-state-only-host.sh') -Algorithm SHA256).Hash.ToLowerInvariant()) 'recovery-kit file digest is incorrect'
     $syncReport = Get-Content -LiteralPath (Join-Path $usbRoot 'State-Snapshots\last-sync.json') -Raw | ConvertFrom-Json
     Assert-True ($syncReport.platform_reported -eq $true) 'local sync report does not show the Platform status update'
     $serverReport = Get-Content -LiteralPath (Join-Path $remoteRoot 'owner-usb-sync.json') -Raw | ConvertFrom-Json
-    Assert-True ($serverReport.source_commit -ceq $sourceCommit) 'Platform report has the wrong source-pinned recovery-kit revision'
+    Assert-True ($serverReport.source_commit -ceq $recoveryKitCommit) 'Platform report has the wrong source-pinned recovery-kit revision'
     Assert-True ($serverReport.latest_archive_sha256 -ceq $archiveHash) 'Platform report does not bind the latest archive checksum'
 
-    & $sync -Server fixture -SshKey $sshKey -UsbPath $usbRoot -AllowFixedDrive -RecoveryRepositoryPath $sourceRoot | Out-Null
+    & $sync -Server fixture -SshKey $sshKey -UsbPath $usbRoot -AllowFixedDrive -RecoveryRepositoryPath $repositoryCache | Out-Null
     $damagePath = Join-Path $kitRoot 'recover-state-only-host.sh'
     Set-Content -LiteralPath $damagePath -Value 'tampered' -Encoding utf8
     $rejected = $false
-    try { & $sync -Server fixture -SshKey $sshKey -UsbPath $usbRoot -AllowFixedDrive -RecoveryRepositoryPath $sourceRoot | Out-Null }
+    try { & $sync -Server fixture -SshKey $sshKey -UsbPath $usbRoot -AllowFixedDrive -RecoveryRepositoryPath $repositoryCache | Out-Null }
     catch { $rejected = $_.Exception.Message -like '*checksum file does not match*' }
     Assert-True $rejected 'sync must reject a modified source-pinned recovery kit'
+    Assert-True ((Get-Content -LiteralPath (Join-Path $kitRoot 'state_only_recovery_marker.py') -Raw).Trim() -ceq 'fixture recovery kit from current main') 'recovery kit was incorrectly taken from the archived application revision'
     Write-Output 'state-only USB recovery-kit tests passed'
 } finally {
     Remove-Item Env:\VAPOR_USB_TEST_REMOTE_ROOT -ErrorAction SilentlyContinue

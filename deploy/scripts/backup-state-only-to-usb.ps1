@@ -155,21 +155,43 @@ foreach ($metadataPath in @($indexPath, $latestPath, $indexTemp, $latestTemp)) {
 Move-Item -LiteralPath $indexTemp -Destination $indexPath -Force
 Move-Item -LiteralPath $latestTemp -Destination $latestPath -Force
 
-# Keep the recovery launcher and its validators beside the state snapshots,
-# pinned to the root revision recorded inside the latest archive.
+# Keep the recovery launcher and its validators beside the state snapshots.
+# The archived Platform revision rebuilds the application; the recovery kit
+# must come from the current recovery-tool source, which can be newer.
 $latestArchivePath = Join-Path $snapshotRoot ([string]$latest.archive)
 $metadataHelper = Join-Path $PSScriptRoot 'recovery_bundle_metadata.py'
 $python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-$sourceCommit = & $python $metadataHelper --source-commit $latestArchivePath
-if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40}$') {
+$archiveSourceCommit = & $python $metadataHelper --source-commit $latestArchivePath
+if ($LASTEXITCODE -ne 0 -or $archiveSourceCommit -notmatch '^[0-9a-f]{40}$') {
     throw 'The latest state snapshot does not contain a valid Platform source revision.'
 }
 $repositoryRoot = (Resolve-Path -LiteralPath $RecoveryRepositoryPath).Path
 $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-& $git -C $repositoryRoot cat-file -e "$sourceCommit^{commit}" 2>$null
+$isBare = (& $git -C $repositoryRoot rev-parse --is-bare-repository).Trim()
+if ($LASTEXITCODE -ne 0 -or $isBare -notin @('true', 'false')) {
+    throw 'The recovery-tool repository is not a valid Git repository.'
+}
+if ($isBare -ceq 'true') {
+    # The scheduled task uses Vapor's bare repository cache. Refresh canonical
+    # main here so the backup does not depend on cache freshness or the archive
+    # having been produced by the same application revision.
+    & $git -C $repositoryRoot fetch --no-tags origin main
+    if ($LASTEXITCODE -ne 0) { throw 'Could not update recovery tools from Platform main.' }
+    $recoveryKitCommit = (& $git -C $repositoryRoot rev-parse 'FETCH_HEAD^{commit}').Trim()
+} else {
+    $dirty = & $git -C $repositoryRoot status --porcelain --untracked-files=all
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the recovery-tool checkout.' }
+    if (-not [string]::IsNullOrWhiteSpace(($dirty -join "`n"))) {
+        throw 'The recovery-tool checkout has local changes; use a clean checkout or bare repository cache.'
+    }
+    $recoveryKitCommit = (& $git -C $repositoryRoot rev-parse 'HEAD^{commit}').Trim()
+}
+if ($recoveryKitCommit -notmatch '^[0-9a-f]{40}$') {
+    throw 'Could not identify a valid recovery-tool source revision.'
+}
+& $git -C $repositoryRoot cat-file -e "$recoveryKitCommit^{commit}" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    & $git -C $repositoryRoot fetch --no-tags origin $sourceCommit
-    if ($LASTEXITCODE -ne 0) { throw 'Could not retrieve the source-pinned recovery tools.' }
+    throw 'The selected recovery-tool revision is unavailable in the repository.'
 }
 
 $kitFiles = @(
@@ -184,9 +206,9 @@ $kitFiles = @(
     'README-state-only-recovery.txt'
 )
 $kitRoot = Join-Path $destination 'Recovery-Kit\state-only'
-$kitFinal = Join-Path $kitRoot $sourceCommit
-$kitStage = Join-Path $incoming "kit-$sourceCommit"
-$kitZip = Join-Path $incoming "kit-$sourceCommit.zip"
+$kitFinal = Join-Path $kitRoot $recoveryKitCommit
+$kitStage = Join-Path $incoming "kit-$recoveryKitCommit"
+$kitZip = Join-Path $incoming "kit-$recoveryKitCommit.zip"
 Assert-NoReparsePathComponents $kitRoot
 New-Item -ItemType Directory -Path $kitRoot -Force | Out-Null
 Assert-NoReparsePathComponents $kitRoot
@@ -198,31 +220,31 @@ if (Test-Path -LiteralPath $kitFinal) {
     $expectedKitEntries = @($kitFiles + 'SHA256SUMS' | Sort-Object)
     $existingKitEntries = @(Get-ChildItem -LiteralPath $kitFinal -Force | Select-Object -ExpandProperty Name | Sort-Object)
     if (@($existingKitEntries) -join ',' -cne ($expectedKitEntries -join ',')) {
-        throw 'Existing source-pinned recovery kit has unexpected files; refusing to replace it.'
+        throw 'Existing recovery-kit revision has unexpected files; refusing to replace it.'
     }
     foreach ($name in $kitFiles) {
         $path = Join-Path $kitFinal $name
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Existing source-pinned recovery kit is incomplete.' }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Existing recovery-kit revision is incomplete.' }
         $kitHashes[$name] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     $expectedChecksums = foreach ($name in ($kitFiles | Sort-Object)) { "$($kitHashes[$name])  $name" }
     $actualChecksums = (Get-Content -LiteralPath (Join-Path $kitFinal 'SHA256SUMS') -Raw).TrimEnd("`r", "`n") -split "`r?`n"
     if (@($actualChecksums) -join "`n" -cne (@($expectedChecksums) -join "`n")) {
-        throw 'Existing source-pinned recovery kit checksum file does not match its contents.'
+        throw 'Existing recovery-kit checksum file does not match its contents.'
     }
 } else {
     Remove-Item -LiteralPath $kitStage -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $kitZip -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $kitStage | Out-Null
     $archivePaths = @($kitFiles | ForEach-Object { "deploy/scripts/$_" })
-    & $git -C $repositoryRoot archive --format=zip --output=$kitZip $sourceCommit @archivePaths
-    if ($LASTEXITCODE -ne 0) { throw 'Could not export the source-pinned recovery kit.' }
+    & $git -C $repositoryRoot archive --format=zip --output=$kitZip $recoveryKitCommit @archivePaths
+    if ($LASTEXITCODE -ne 0) { throw 'Could not export the selected recovery kit.' }
     Expand-Archive -LiteralPath $kitZip -DestinationPath $kitStage
     $sourceScripts = Join-Path $kitStage 'deploy\scripts'
     foreach ($name in $kitFiles) {
         $source = Join-Path $sourceScripts $name
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            throw "The source-pinned recovery kit is missing $name."
+            throw "The selected recovery kit is missing $name."
         }
         Copy-Item -LiteralPath $source -Destination (Join-Path $kitStage $name)
     }
@@ -249,9 +271,10 @@ if (-not (Test-Path -LiteralPath $kitPointerRoot -PathType Container)) {
 Assert-NoReparsePathComponents $kitPointerRoot
 $kitPointerTemp = Join-Path $incoming 'latest-state-kit.json.partial'
 $kitPointer = [ordered]@{
-    schema_version = 1
+    schema_version = 2
     available = $true
-    source_commit = $sourceCommit
+    recovery_kit_commit = $recoveryKitCommit
+    archive_source_commit = $archiveSourceCommit
     archive = [string]$latest.archive
     archive_sha256 = [string]$latest.sha256
     files = $kitHashes
@@ -270,7 +293,7 @@ $ownerReport = [ordered]@{
     latest_archive_sha256 = [string]$latest.sha256
     verified_generation_count = [int]@($index.archives).Count
     retained_payload_bytes = [long]$verifiedBytes
-    source_commit = [string]$sourceCommit
+    source_commit = [string]$recoveryKitCommit
     latest_rehashed = $true
     recovery_kit_available = $true
 }
@@ -291,7 +314,8 @@ $localReport = [ordered]@{
     latest_archive_sha256 = [string]$latest.sha256
     verified_generation_count = [int]@($index.archives).Count
     retained_payload_bytes = [long]$verifiedBytes
-    source_commit = [string]$sourceCommit
+    recovery_kit_commit = [string]$recoveryKitCommit
+    archive_source_commit = [string]$archiveSourceCommit
     recovery_kit_available = $true
     platform_reported = $platformReported
 }
@@ -304,4 +328,4 @@ Move-Item -LiteralPath $localReportTemp -Destination $localReportPath -Force
 if (-not $platformReported) {
     Write-Warning 'USB snapshot and recovery kit verified locally, but the server status report could not be updated.'
 }
-Write-Output "state-usb-sync: verified $(@($index.archives).Count) generations; copied $copied; $verifiedBytes bytes; recovery kit $sourceCommit; platform report $(if ($platformReported) { 'updated' } else { 'unavailable' })"
+Write-Output "state-usb-sync: verified $(@($index.archives).Count) generations; copied $copied; $verifiedBytes bytes; recovery kit $recoveryKitCommit for archive source $archiveSourceCommit; platform report $(if ($platformReported) { 'updated' } else { 'unavailable' })"

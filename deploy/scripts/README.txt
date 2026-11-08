@@ -1,10 +1,12 @@
 Vapor Platform recovery kits
 
-For new state-only snapshots, use the source-pinned kit under
-`Recovery-Kit/state-only/<source-commit>/`. It matches a `State-Snapshots/`
-archive and rebuilds a blank Ubuntu x86_64 host from the source revision in the
-archive. The archive contains no host configuration or provider credentials;
-the recovery script asks for domain and provider settings during setup. See
+For new state-only snapshots, use the recovery kit under
+`Recovery-Kit/state-only/<recovery-kit-commit>/`. The latest pointer records
+both `recovery_kit_commit` and `archive_source_commit`: the kit comes from the
+current Platform `main`, while the state archive records the exact application
+revision that the recovery script will rebuild. These revisions can differ.
+The archive contains no host configuration or provider credentials; the
+recovery script asks for domain and provider settings during setup. See
 `README-state-only-recovery.txt` in that kit.
 
 The instructions below apply only to retained legacy full-host archives.

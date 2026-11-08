@@ -62,7 +62,7 @@ The archive is based on the service-owned persistent state root, with explicit i
 - Hourly state exports must not stop application services. Each SQLite database is snapshotted online and validated before publication.
 - The currently retained full-host archives are legacy evidence. Keep them read-only during the transition; deployment disables the old timer so no more secret-bearing full-host archives are created.
 - The restore path must state which format it is handling and must never infer host configuration from a state-only archive.
-- The owner USB sync writes state snapshots to `State-Snapshots/` and a matching source-pinned recovery launcher to `Recovery-Kit/state-only/<commit>/`. It does not prune the legacy generations.
+- The owner USB sync writes state snapshots to `State-Snapshots/` and a source-pinned recovery launcher to `Recovery-Kit/state-only/<recovery-kit-commit>/`. The kit is refreshed from current Platform `main` (or a clean checked-out revision during manual runs), independently of the older `platform_source_commit` stored in the archive. `Recovery-Kit/state-only/latest.json` records both `recovery_kit_commit` and `archive_source_commit`; recovery tools rebuild the exact archived application revision. It does not prune legacy generations.
 
 ## Alternatives considered
 
@@ -73,7 +73,7 @@ The archive is based on the service-owned persistent state root, with explicit i
 ## Acceptance
 
 - A new archive has no config, host, source checkout, toolchain, recovery-kit, or credential entries.
-- A schema-4 archive binds the exact Platform source commit used by the matching recovery kit without embedding code or host configuration.
+- A schema-4 archive records the exact Platform source commit to rebuild without embedding code or host configuration; the separately pinned recovery kit can be newer and must be identified explicitly in the USB pointer.
 - The manifest and validator distinguish state-only schema from any retained legacy archive.
 - A clean Ubuntu x86_64 host can be rebuilt from the pinned source, prompt for provider credentials without echoing them, and import the archive without restoring host configuration from the archive.
 - Failed import restores the prior state and leaves the pre-restore copy available.

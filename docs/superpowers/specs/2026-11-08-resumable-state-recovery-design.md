@@ -6,7 +6,9 @@ Make an interrupted clean-host rebuild recoverable without asking the owner to
 reinstall the VPS or guess which setup steps completed. The owner-held USB
 continues to provide a verified state archive and a source-pinned recovery kit;
 host packages, service configuration, and provider credentials are recreated
-on the host.
+on the host. The recovery-kit source pin is independent of the Platform source
+revision inside the archive: current tools can recover state produced by an
+older deployed application revision.
 
 ## Current behavior
 

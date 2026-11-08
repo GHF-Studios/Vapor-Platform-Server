@@ -54,13 +54,16 @@ class StateOnlyFreshHostContractTests(unittest.TestCase):
             self.assertIn('CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"', script)
             self.assertIn('[[ "${CARGO_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]', script)
 
-    def test_usb_sync_stores_a_source_pinned_recovery_kit_next_to_state_snapshots(self) -> None:
+    def test_usb_sync_versions_recovery_tools_separately_from_archived_platform(self) -> None:
         script = (REPO_ROOT / "deploy/scripts/backup-state-only-to-usb.ps1").read_text()
         self.assertIn("Recovery-Kit\\state-only", script)
         self.assertIn(
-            '& $git -C $repositoryRoot archive --format=zip --output=$kitZip $sourceCommit @archivePaths',
+            '& $git -C $repositoryRoot archive --format=zip --output=$kitZip $recoveryKitCommit @archivePaths',
             script,
         )
+        self.assertIn("fetch --no-tags origin main", script)
+        self.assertIn("recovery_kit_commit = $recoveryKitCommit", script)
+        self.assertIn("archive_source_commit = $archiveSourceCommit", script)
         self.assertIn("archive_sha256", script)
 
     def test_recovery_is_serialized_and_safe_empty_marker_directory_can_restart(self) -> None:

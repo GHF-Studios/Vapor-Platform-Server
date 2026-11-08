@@ -2,8 +2,11 @@ Vapor Platform state-only recovery
 
 This folder is a source-pinned recovery kit. It contains recovery tooling, not
 server configuration, credentials, or a copy of the Platform source tree.
-The matching State-Snapshots archive contains allowlisted service state and the
-exact Platform source revision needed to rebuild the host.
+The matching State-Snapshots archive contains allowlisted service state and
+records the exact Platform source revision needed to rebuild the host. The kit
+revision and application revision are separate: the kit may be newer than the
+archived application, so use the kit and archive named by the latest USB
+pointer together.
 
 1. Provision a fresh Ubuntu x86_64 VPS and connect as root.
 2. Copy the selected .tar.gz archive and its .sha256 sidecar to that host.
