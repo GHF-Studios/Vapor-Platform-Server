@@ -35,9 +35,12 @@ class DeploymentScopeTests(unittest.TestCase):
         self.assertEqual(
             SCOPE.classify_changed_paths(
                 [
+                    "deploy/scripts/README-state-only-recovery.txt",
+                    "deploy/scripts/README.txt",
                     "deploy/scripts/recover-state-only-host.sh",
                     "deploy/scripts/recover-fresh-host.sh",
                     "deploy/scripts/backup-state-only-to-usb.ps1",
+                    "deploy/scripts/test.sh",
                     "deploy/tests/test_state_only_fresh_host_contract.py",
                 ]
             ),

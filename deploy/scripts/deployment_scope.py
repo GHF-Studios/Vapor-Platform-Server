@@ -26,6 +26,9 @@ OFFLINE_RECOVERY_PATHS = {
     "deploy/scripts/recover-state-only-host.sh",
     "deploy/scripts/state_only_recovery_marker.py",
     "deploy/scripts/backup-state-only-to-usb.ps1",
+    "deploy/scripts/test.sh",
+    "deploy/scripts/README.txt",
+    "deploy/scripts/README-state-only-recovery.txt",
 }
 PLATFORM_SERVER_SOURCES = {
     "src/main.rs",
