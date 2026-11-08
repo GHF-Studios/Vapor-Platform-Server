@@ -1056,3 +1056,41 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - No production VPS reset, Steam migration, clean-room purge, or fresh-host
   restore drill has been performed. The USB contents are plaintext and must be
   treated as sensitive because the recovery bundle contains server credentials.
+
+## Emergency access and recovery workbench checkpoint (2026-11-08)
+
+- Review branch `codex/platform-integration-20261102` is now at `2f19975`, nine
+  commits ahead of `main` (`d6be2a1`); all source changes remain on the branch.
+  The latest branch push includes the serialized SSH-audit schema migration,
+  idempotent handling when the optional terminal unit is absent, and clearer
+  archive-folder status in Recovery. Platform/helper `cargo check` and
+  `git diff --check` passed after the latest change; GitHub CI is running for
+  `2f19975`.
+- The live VPS remains on `739debf5` in services mode. `/admin/recovery` is not
+  deployed there yet. Both the public emergency-terminal route and its internal
+  authorization callback return 404; the optional terminal service is not
+  installed. No deployment ticket was created, approved, retried, or dispatched
+  during this review.
+- The read-only deployment-queue snapshot still has one pending request for
+  `d6be2a1` and three older approved requests with failed dispatch state. None
+  was modified or retried. The older worker error came from a request/worker
+  topology mismatch; the relevant source fix preserves the request's pinned
+  mode across host-config loading. The exact historical host config at that
+  failure time remains unverified.
+- The current branch's console remains opt-in and is not safe to enable on the
+  shared public/admin origin. A public-service same-origin script flaw could
+  issue privileged browser requests while a root Identity session is open.
+  Keep it disabled until an admin origin/session boundary or verified Identity
+  step-up exists. The installed live host has no terminal unit, and the public
+  routes currently fail closed with 404.
+- The latest local USB sync report is `2026-11-08T03:00:03Z`: it rehashed the
+  latest archive and one rotating historical archive, found 31 retained
+  archives, and left 29 historical archives unverified. It records successful
+  local sync/preflight, not a clean-host restore drill or Platform-received USB
+  evidence.
+- Outstanding owner-level work: review and merge the nine-commit branch; decide
+  when to open a deployment request for the current branch; isolate the admin
+  origin or add a verifiable step-up before enabling browser root access; and
+  complete a disposable fresh-host restore drill. Do not bulk-retry the failed
+  deployment rows or label the platform fully recoverable until that drill is
+  recorded.
