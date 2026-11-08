@@ -534,8 +534,8 @@ const JS: &str = r#"
           primary.textContent = '—';
           secondary.textContent = outcome.error;
         } else {
-          primary.textContent = `${outcome.counts.primary}${outcome.moreAvailable ? '+' : ''}`;
-          secondary.textContent = outcome.counts.secondary > 0 ? `${outcome.counts.secondary}${outcome.moreAvailable ? '+' : ''} · ${outcome.counts.secondaryLabel}` : outcome.moreAvailable ? 'More records available' : '—';
+          primary.textContent = `${outcome.counts.primary}${outcome.moreAvailable ? ' shown' : ''}`;
+          secondary.textContent = outcome.counts.secondary > 0 ? `${outcome.counts.secondary}${outcome.moreAvailable ? ' shown' : ''} · ${outcome.counts.secondaryLabel}` : outcome.moreAvailable ? 'Older records available' : '—';
           if (outcome.counts.primary > 0) actionText = 'Review';
           if (outcome.source.name === 'Deployments' && outcome.counts.primary === 0 && outcome.counts.secondary > 0) { actionHref = '/admin/deployments'; actionText = 'Inspect'; }
           if (outcome.source.name === 'Temporary access' && outcome.counts.primary === 0) { actionHref = '/admin/ssh-access'; actionText = 'Manage'; }
@@ -1835,7 +1835,7 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Services</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading service health…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Incoming work</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts cover loaded records; a + means older records are available. Review requests in Approvals; active access opens its own work area.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section>";
+    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Services</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Loading service health…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Incoming work</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts describe loaded records; “shown” means older pages remain. Review requests in Approvals; active access opens its own work area.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Loading request queues…</p></div></section>";
     admin_page_response(StatusCode::OK, fragment)
 }
 
@@ -2600,6 +2600,7 @@ mod tests {
         assert!(fragment.contains("<h1>Overview</h1>"));
         assert!(fragment.contains("id=\"platform-overview\""));
         assert!(fragment.contains("id=\"operator-queue\""));
+        assert!(fragment.contains("“shown” means older pages remain"));
         assert!(!fragment.contains("Operator work areas"));
         assert!(!fragment.contains("action-links"));
     }
@@ -2624,7 +2625,7 @@ mod tests {
         assert!(script.contains("source.summarize(records)"));
         assert!(script.contains("moreAvailable = !Array.isArray(items) && typeof items?.next_cursor === 'string'"));
         assert!(script.contains("permission-requests/page?limit=200"));
-        assert!(script.contains("${outcome.moreAvailable ? '+' : ''}"));
+        assert!(script.contains("${outcome.moreAvailable ? ' shown' : ''}"));
         assert!(script.contains("hosting.textContent = 'View service details'"));
         assert!(script.contains("actionHref = '/admin/deployments'"));
         assert!(script.contains("actionHref = '/admin/ssh-access'"));
