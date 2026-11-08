@@ -1142,3 +1142,29 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - Branch CI was green through `f88576f` before this parser patch. Recheck the
   current head's CI before merging; the documented compile and shell-syntax
   checks are not runtime validation.
+
+## Emergency access continuation checkpoint (`359075d`, 2026-11-08)
+
+- Branch `codex/platform-integration-20261102` is at `359075d`, 22 commits ahead
+  of `main` at `d6be2a1`. Recent changes strictly parse ttyd's own version,
+  reject nonzero version-command exits, keep its allowlist empty, prevent stale
+  Approvals-page pagination responses from mutating a refreshed inbox, and
+  make console session creation and its start audit one transaction. Backend
+  start-failure and revocation transitions also write their audit event in the
+  same transaction. The targeted console review found no concrete issue.
+- Platform/helper `cargo check --locked --bin vapor_platform_server --bin
+  vapor_platform_ops`, `git diff --check`, and Git Bash `bash -n` for the
+  emergency-console installer passed. Local tests were not run. CI passed
+  through `54b5e7b`; run `42446572188` for `359075d` was still in progress at
+  this checkpoint.
+- Read-only live-host inspection confirms Platform and Caddy are active, the
+  VPS remains on `739debf`, and `/` has about 40 GB free. The emergency-console
+  unit is inactive. `/docs/` returns 200 and `/docs` redirects to `/docs/`;
+  `/admin/recovery` and `/admin/emergency-console` return 404 on the older live
+  revision, as expected. No production files, services, DNS, or Identity
+  settings were changed.
+- The root-terminal feature is still not deployable for use: ttyd `1.7.7` is
+  still the latest release, issue `#1546` remains open and proposed PR `#1574`
+  remains unmerged. The exact-version allowlists remain empty. Separately, the
+  shared public/admin origin and lack of verified Identity step-up still block
+  activation. Recovery and console pages therefore remain source-only.
