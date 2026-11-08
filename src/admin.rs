@@ -677,16 +677,20 @@ const JS: &str = r#"
     };
     const isExpiredByTime = item => Number(item.expires_at_unix) > 0
       && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000);
+    const requireConfirmation = checkbox => {
+      checkbox.required = true;
+      checkbox.addEventListener('invalid', () => {
+        feedback.textContent = 'Confirm this action before submitting the request.';
+      });
+      return checkbox;
+    };
     const confirmationForm = (item, labelText, buttonText, submit) => {
       const form = document.createElement('form');
       form.className = 'inline';
       const label = document.createElement('label');
       const confirm = document.createElement('input');
       confirm.type = 'checkbox';
-      confirm.required = true;
-      confirm.addEventListener('invalid', () => {
-        feedback.textContent = 'Confirm this action before submitting the request.';
-      });
+      requireConfirmation(confirm);
       label.append(confirm, document.createTextNode(` ${labelText}`));
       const button = document.createElement('button');
       button.type = 'submit';
@@ -786,6 +790,11 @@ const JS: &str = r#"
         }
         if (!duration.reportValidity()) return;
         const granted = choices.filter(input => input.checked).map(input => input.value);
+        if (!granted.length) {
+          feedback.textContent = 'Select at least one capability for this temporary grant.';
+          choices[0]?.focus();
+          return;
+        }
         if (granted.includes('host_admin') && (granted.length !== 1 || !hostConfirm.checked)) {
           feedback.textContent = 'Full temporary sudo requires its separate confirmation and cannot be combined with other capabilities.';
           return;
@@ -808,7 +817,7 @@ const JS: &str = r#"
       const form = document.createElement('form');
       const reason = document.createElement('textarea'); reason.required = true; reason.maxLength = 500; reason.rows = 2;
       reason.setAttribute('aria-label', 'Reason for rejecting this Identity request'); reason.placeholder = 'Reason for rejection';
-      const label = document.createElement('label'); const confirm = document.createElement('input'); confirm.type = 'checkbox'; confirm.required = true;
+      const label = document.createElement('label'); const confirm = document.createElement('input'); confirm.type = 'checkbox'; requireConfirmation(confirm);
       label.append(confirm, document.createTextNode(' I intend to reject this permission request'));
       const reject = document.createElement('button'); reject.type = 'submit'; reject.textContent = 'Reject';
       form.append(reason, label, reject);
@@ -1362,7 +1371,7 @@ const JS: &str = r#"
           const label = document.createElement('label');
           const confirmed = document.createElement('input');
           confirmed.type = 'checkbox';
-          confirmed.required = true;
+          requireConfirmation(confirmed);
           const wording = decision === 'dispatch' ? 'Queue this already-approved revision now' : decision === 'reconcile' ? 'I confirmed this worker is no longer running; mark this execution failed without retrying it' : 'I confirmed dispatch failed before a worker was queued; close this request without deploying it';
           label.append(confirmed, document.createTextNode(` ${wording}`));
           let reason;
@@ -3292,8 +3301,12 @@ mod tests {
             script.contains("Approval saved; the worker claimed the deployment and it is running.")
         );
         assert!(script.contains("Approval saved; deployment succeeded."));
-        assert!(script.contains("confirm.addEventListener('invalid'"));
+        assert!(script.contains("checkbox.addEventListener('invalid'"));
         assert!(script.contains("Confirm this action before submitting the request."));
+        assert!(script.contains("const requireConfirmation = checkbox =>"));
+        assert!(script.contains("requireConfirmation(confirmed)"));
+        assert!(script.contains("requireConfirmation(confirm)"));
+        assert!(script.contains("Select at least one capability for this temporary grant."));
         assert!(script.contains("let deploymentCursor = null;"));
         assert!(script.contains("cursor: deploymentCursor"));
         assert!(script.contains("deployment-refresh"));
