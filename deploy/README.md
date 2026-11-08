@@ -84,6 +84,21 @@ for smoke testing only; the intended public endpoint remains
   units and remove the retired periodic deploy timer.
 - `scripts/install-platform-ops.sh`: install the fixed root operation helper,
   SSH wrappers, and the isolated temporary-account SSH policy.
+- `scripts/install-emergency-console.sh`: optional Ubuntu/Debian preparation
+  for a browser-based root shell. It installs ttyd, a dedicated unenabled
+  systemd unit, and the fixed shell wrapper; it does not start or enable the
+  service. The host's root-owned `/etc/vapor-server/platform.env` must opt in
+  with `VAPOR_EMERGENCY_CONSOLE_ENABLED=1`, and Caddy must be updated from the
+  same release. The root-only Emergency Console page then has a separate
+  enable switch and issues one 20-minute, one-connection grant at a time.
+  Every terminal request is checked by Platform and Identity before reaching
+  ttyd over its private Unix socket. This remains equivalent to root SSH and
+  is disabled by default; Identity currently has no recent-authentication or
+  second-factor signal. Do not enable it on a host unless that limitation is
+  acceptable. The terminal wrapper disables shell history, applies a 10-minute
+  idle timeout, and systemd enforces a 20-minute hard lifetime. See
+  `docs/superpowers/specs/2026-11-08-emergency-console-design.md` for the full
+  boundary and limitations.
 - `scripts/report-cutover-preflight.sh`: upload a short-lived, secret-free
   report of the active VPS source revision, relevant service states, path
   metadata, and expected route status codes. It does not change host state.

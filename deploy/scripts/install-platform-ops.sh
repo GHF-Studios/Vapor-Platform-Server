@@ -72,6 +72,8 @@ trap 'rm -f -- "${temporary_sudoers}"; cleanup' EXIT
 printf '%s\n' \
   'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""' \
   'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops recovery-status' \
+  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-start' \
+  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-stop' \
   > "${temporary_sudoers}"
 chown root:root "${temporary_sudoers}"
 chmod 0440 "${temporary_sudoers}"

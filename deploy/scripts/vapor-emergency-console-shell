@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+export HISTFILE=/dev/null
+exec /usr/bin/env -i \
+  HOME=/root \
+  USER=root \
+  LOGNAME=root \
+  SHELL=/bin/bash \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  TERM="${TERM:-xterm-256color}" \
+  HISTFILE=/dev/null \
+  HISTSIZE=0 \
+  HISTFILESIZE=0 \
+  /bin/bash --noprofile --rcfile /usr/local/libexec/vapor-emergency-console.bashrc -i

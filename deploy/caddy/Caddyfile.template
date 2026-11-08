@@ -2,9 +2,40 @@
 	encode zstd gzip
 
 	redir /atlas /atlas/ permanent
+	redir /emergency-terminal /emergency-terminal/ permanent
+	# This callback is reachable only by Caddy's loopback forward-auth request.
+	handle /api/admin/emergency-console/authorize {
+		respond "not found" 404
+	}
 	handle_path /atlas/* {
 		root * /srv/vapor-web/atlas/current
 		file_server
+	}
+
+	# Root terminal is a separate service on a private Unix socket. Platform
+	# checks Identity and the short grant on every resource/WS request.
+	handle /emergency-terminal/* {
+		log_skip
+		header Cache-Control "private, no-store"
+		forward_auth 127.0.0.1:7110 {
+			uri /api/admin/emergency-console/authorize
+			header_up X-Vapor-Console-Gateway CaddyEmergencyTerminalV1
+			header_up X-Vapor-Console-Original-Method {http.request.method}
+			header_up X-Vapor-Console-Original-Uri {http.request.uri}
+			header_up X-Vapor-Console-Original-Origin {http.request.header.Origin}
+			header_up X-Vapor-Console-Original-Upgrade {http.request.header.Upgrade}
+			header_up X-Vapor-Console-Original-Fetch-Site {http.request.header.Sec-Fetch-Site}
+			copy_headers X-Vapor-Console-User
+		}
+		reverse_proxy unix//run/vapor-emergency-console/ttyd.sock {
+			header_up Host {http.request.host}
+			header_up -Cookie
+			header_up -Authorization
+			transport http {
+				versions 1.1
+			}
+			stream_timeout 20m
+		}
 	}
 
 	handle /api/build-cache/v1/internal/* {

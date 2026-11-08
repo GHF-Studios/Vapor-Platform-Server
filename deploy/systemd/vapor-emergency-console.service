@@ -1,0 +1,32 @@
+[Unit]
+Description=Vapor emergency browser terminal
+Documentation=https://github.com/GHF-Studios/Vapor-Platform-Server
+After=network-online.target caddy.service
+Wants=network-online.target
+ConditionPathIsExecutable=/usr/bin/ttyd
+
+[Service]
+Type=simple
+User=root
+Group=caddy
+RuntimeDirectory=vapor-emergency-console
+RuntimeDirectoryMode=0750
+UMask=0007
+ExecStart=/usr/bin/ttyd --interface /run/vapor-emergency-console/ttyd.sock --socket-owner root:caddy --auth-header X-Vapor-Console-User --writable --check-origin --max-clients 1 --once --base-path /emergency-terminal/ /usr/local/libexec/vapor-emergency-console-shell
+Restart=no
+RuntimeMaxSec=20m
+TimeoutStopSec=5s
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+StandardOutput=null
+StandardError=journal
+
+# The shell runs as root because this is an explicitly granted emergency
+# console. The unit is started only by the fixed Platform helper and is not
+# enabled at boot. RuntimeMaxSec and ttyd --once bound each shell lifetime.

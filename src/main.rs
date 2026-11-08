@@ -3,6 +3,7 @@ mod admin_auth;
 mod admin_gateway;
 mod deploy_request_schema;
 mod deploy_requests;
+mod emergency_console;
 mod operation_history;
 mod pagination;
 mod recovery;
@@ -24,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     deploy_requests::initialize().await?;
     ssh_access::initialize().await?;
     operation_history::initialize().await?;
+    emergency_console::initialize().await?;
 
     let app = if env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services") {
         // In independent-services mode Platform remains the shared operator

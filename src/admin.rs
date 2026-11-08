@@ -154,10 +154,10 @@ const MODULES: &[AdminSection] = &[
     AdminSection {
         group: "Emergency",
         name: "Browser console",
-        path: None,
-        description: "Isolated, short-lived browser terminal is under security design",
+        path: Some("/admin/emergency-console"),
+        description: "Explicit short-lived root browser terminal",
         service_ids: &[],
-        state: SectionState::Planned,
+        state: SectionState::Implemented,
     },
 ];
 
@@ -1698,6 +1698,48 @@ const JS: &str = r#"
     };
     recoveryRefresh?.addEventListener('click', refreshRecovery); refreshRecovery();
   }
+
+  const consoleStatus = document.querySelector('#emergency-console-status');
+  const consoleEvents = document.querySelector('#emergency-console-events');
+  const consoleRefresh = document.querySelector('#emergency-console-refresh');
+  if (consoleStatus && consoleEvents) {
+    const enableButton = document.querySelector('#emergency-console-enable');
+    const disableButton = document.querySelector('#emergency-console-disable');
+    const startButton = document.querySelector('#emergency-console-start');
+    const endButton = document.querySelector('#emergency-console-end');
+    const acknowledgement = document.querySelector('#emergency-console-ack');
+    const post = async (path, body) => {
+      const response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(8000) });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(result?.error || `Request failed (HTTP ${response.status}).`);
+      return result;
+    };
+    const refreshConsole = async () => {
+      consoleRefresh.disabled = true; consoleStatus.textContent = 'Checking console state…';
+      try {
+        const response = await fetch('/api/admin/emergency-console/status', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || typeof data?.configured !== 'boolean' || typeof data?.enabled !== 'boolean' || typeof data?.active !== 'boolean' || !Array.isArray(data.events)) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : 'Emergency console status is unavailable.');
+        if (!data.configured) consoleStatus.textContent = 'Disabled by host configuration. It is not exposed until the root-owned server setting is enabled.';
+        else if (!data.enabled) consoleStatus.textContent = 'Available but disabled. Enable it here before starting a session.';
+        else if (data.active) consoleStatus.textContent = `Session active until ${data.expires_at_unix ? new Date(data.expires_at_unix * 1000).toLocaleTimeString() : 'expiry unknown'}${data.connected ? ' · terminal connected' : ' · waiting for terminal connection'}.`;
+        else consoleStatus.textContent = 'Enabled; no active session.';
+        enableButton.hidden = !data.configured || data.enabled;
+        disableButton.hidden = !data.enabled;
+        startButton.disabled = !data.enabled || data.active || !acknowledgement.checked;
+        endButton.hidden = !data.active;
+        const eventLabels = { enabled: 'Console access enabled', disabled: 'Console access disabled', started: 'Root session started', start_failed: 'Terminal failed to start', connected: 'Terminal connected', ended: 'Root session ended', revoked: 'Session revoked', expired: 'Session expired', stop_failed: 'Terminal stop failed' };
+        consoleEvents.replaceChildren(...data.events.map(item => { const row = document.createElement('li'); row.textContent = `${eventLabels[item.event] || 'Console event'} · ${new Date(item.at_unix * 1000).toLocaleString()}`; return row; }));
+      } catch (error) { consoleStatus.textContent = error.message || 'Emergency console status is unavailable.'; consoleEvents.replaceChildren(); startButton.disabled = true; }
+      consoleRefresh.disabled = false;
+    };
+    acknowledgement?.addEventListener('change', refreshConsole);
+    enableButton?.addEventListener('click', async () => { if (!window.confirm('Enable root browser-console sessions?')) return; consoleStatus.textContent = 'Enabling console sessions…'; try { await post('/api/admin/emergency-console/enable', { confirmed: true }); } catch (error) { consoleStatus.textContent = error.message || 'Could not enable console sessions.'; } await refreshConsole(); });
+    disableButton?.addEventListener('click', async () => { if (!window.confirm('Disable console access and stop any active root terminal?')) return; consoleStatus.textContent = 'Revoking access and stopping the terminal…'; try { await post('/api/admin/emergency-console/disable', { confirmed: true }); } catch (error) { consoleStatus.textContent = error.message || 'Console disable did not fully complete.'; } await refreshConsole(); });
+    startButton?.addEventListener('click', async () => { if (!acknowledgement.checked || !window.confirm('Open a root shell on this VPS for up to 20 minutes?')) return; startButton.disabled = true; consoleStatus.textContent = 'Starting isolated terminal…'; try { await post('/api/admin/emergency-console/session', { acknowledge_root_shell: true }); window.location.assign('/emergency-terminal/'); } catch (error) { consoleStatus.textContent = error.message || 'Could not start the terminal.'; await refreshConsole(); } });
+    endButton?.addEventListener('click', async () => { if (!window.confirm('Revoke the console grant and stop the terminal now?')) return; endButton.disabled = true; consoleStatus.textContent = 'Revoking access and stopping the terminal…'; try { await post('/api/admin/emergency-console/session/end', { confirmed: true }); } catch (error) { consoleStatus.textContent = error.message || 'The grant was revoked, but terminal stop was not confirmed.'; } await refreshConsole(); });
+    consoleRefresh?.addEventListener('click', refreshConsole); refreshConsole();
+  }
 })();
 "#;
 
@@ -1712,10 +1754,12 @@ pub fn router() -> Router {
         .route("/admin/hosting", get(hosting))
         .route("/admin/history", get(history))
         .route("/admin/recovery", get(recovery_page))
+        .route("/admin/emergency-console", get(emergency_console_page))
         .route("/api/admin/overview", get(overview))
         .route("/api/admin/platform-healthz", get(platform_healthz))
         .route("/api/admin/operations", get(operations_status))
         .merge(crate::recovery::router())
+        .merge(crate::emergency_console::router())
         .merge(crate::operation_history::router())
         .route("/admin/assets/admin.css", get(stylesheet))
         .route("/admin/assets/admin.js", get(script))
@@ -1849,7 +1893,10 @@ fn render_admin_navigation(current_path: &str) -> String {
     );
     let group_order = ["Operate", "Ecosystem", "Accounts", "Emergency"];
     for group in group_order {
-        let sections: Vec<_> = MODULES.iter().filter(|section| section.group == group).collect();
+        let sections: Vec<_> = MODULES
+            .iter()
+            .filter(|section| section.group == group)
+            .collect();
         if sections.is_empty() {
             continue;
         }
@@ -1975,6 +2022,39 @@ async fn recovery_page(headers: axum::http::HeaderMap) -> Response {
     admin_page_response(StatusCode::OK, fragment)
 }
 
+async fn emergency_console_page(headers: axum::http::HeaderMap) -> Response {
+    let endpoint = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL")
+        .unwrap_or_else(|_| DEFAULT_IDENTITY_AUTHZ_URL.to_owned());
+    let service_token = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok();
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return admin_page_auth_response(crate::admin_auth::AuthFailure::Unavailable),
+    };
+    if let Err(failure) = crate::admin_auth::authorize_root_with_client(
+        &headers,
+        service_token.as_deref(),
+        &endpoint,
+        &client,
+    )
+    .await
+    {
+        return admin_page_auth_response(failure);
+    }
+    let fragment = concat!(
+        "<p class=\"eyebrow\">Emergency · Explicit access</p><h1>Browser console</h1>",
+        "<section class=\"card emergency-console-warning\"><h2>Full VPS root shell</h2><p>This is equivalent to root SSH. Commands can change or destroy the whole host. Use it only for a short maintenance task; Strato VNC and SSH remain the recovery path.</p><p><strong>Authentication limit:</strong> this requires a root Identity session and a separate session start, but Identity does not currently report recent password entry or a second-factor check. It is not a second factor.</p><p>Vapor records session start, connection, end, expiry, and stop failures. It does not store terminal input or output; your browser memory and clipboard may still contain commands or secrets.</p></section>",
+        "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Session control</h2><p id=\"emergency-console-status\" role=\"status\" aria-live=\"polite\">Loading console status…</p></div><button id=\"emergency-console-refresh\" type=\"button\">Refresh</button></div>",
+        "<p><label><input id=\"emergency-console-ack\" type=\"checkbox\"> I understand this opens a root shell on the VPS for up to 20 minutes.</label></p><div class=\"form-actions\"><button id=\"emergency-console-enable\" type=\"button\" hidden>Enable console sessions</button><button id=\"emergency-console-disable\" type=\"button\" hidden>Disable and stop console</button><button id=\"emergency-console-start\" type=\"button\" disabled>Start 20-minute root session</button><button id=\"emergency-console-end\" type=\"button\" hidden>End session now</button></div><p class=\"muted\">Starting opens one terminal connection. Ending revokes access first, then stops the isolated terminal service.</p></section>",
+        "<section class=\"card\"><h2>Recent access events</h2><ol id=\"emergency-console-events\" aria-live=\"polite\"><li>Loading…</li></ol></section>"
+    );
+    admin_page_response(StatusCode::OK, fragment)
+}
+
 async fn operations_view(headers: axum::http::HeaderMap, view: OperationsView) -> Response {
     let endpoint = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL")
         .unwrap_or_else(|_| DEFAULT_IDENTITY_AUTHZ_URL.to_owned());
@@ -1986,9 +2066,7 @@ async fn operations_view(headers: axum::http::HeaderMap, view: OperationsView) -
         .build()
     {
         Ok(client) => client,
-        Err(_) => {
-            return admin_page_auth_response(crate::admin_auth::AuthFailure::Unavailable)
-        }
+        Err(_) => return admin_page_auth_response(crate::admin_auth::AuthFailure::Unavailable),
     };
     if let Err(failure) = crate::admin_auth::authorize_root_with_client(
         &headers,
@@ -2123,7 +2201,9 @@ impl OperationsView {
 
     fn area(self) -> &'static str {
         match self {
-            Self::Approvals | Self::Deployments | Self::Hosting | Self::TemporaryAccess => "Operate",
+            Self::Approvals | Self::Deployments | Self::Hosting | Self::TemporaryAccess => {
+                "Operate"
+            }
             Self::History => "Records",
         }
     }
@@ -2724,7 +2804,9 @@ mod tests {
         assert!(script.contains("All service probes healthy"));
         assert!(script.contains("overview.id === 'platform-overview'"));
         assert!(script.contains("source.summarize(records)"));
-        assert!(script.contains("moreAvailable = !Array.isArray(items) && typeof items?.next_cursor === 'string'"));
+        assert!(script.contains(
+            "moreAvailable = !Array.isArray(items) && typeof items?.next_cursor === 'string'"
+        ));
         assert!(script.contains("permission-requests/page?limit=200"));
         assert!(script.contains("${outcome.moreAvailable ? ' shown' : ''}"));
         assert!(script.contains("hosting.textContent = 'View service details'"));
@@ -2767,11 +2849,9 @@ mod tests {
 
     #[tokio::test]
     async fn shared_shell_skip_link_target_is_keyboard_focusable() {
-        let document = super::render_admin_fragment_document(
-            "<h1>Accessible page</h1>",
-            "/admin/operations",
-        )
-        .unwrap();
+        let document =
+            super::render_admin_fragment_document("<h1>Accessible page</h1>", "/admin/operations")
+                .unwrap();
         assert!(document.contains("href=\"#admin-content\">Skip to content</a>"));
         assert!(document.contains("<main id=\"admin-content\" tabindex=\"-1\">"));
     }
@@ -2781,8 +2861,12 @@ mod tests {
         let response = super::stylesheet().await;
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let css = std::str::from_utf8(&body).unwrap();
-        assert!(css.contains("@media(max-width:620px) { .history-controls { grid-template-columns:1fr; }"));
-        assert!(css.contains("@media(max-width:760px) { .history-workbench { grid-template-columns:1fr; }"));
+        assert!(css.contains(
+            "@media(max-width:620px) { .history-controls { grid-template-columns:1fr; }"
+        ));
+        assert!(css.contains(
+            "@media(max-width:760px) { .history-workbench { grid-template-columns:1fr; }"
+        ));
     }
 
     #[tokio::test]
@@ -3272,7 +3356,9 @@ mod tests {
         assert!(script.contains("record.kind === 'Identity request' && status === 'approved'"));
         assert!(script.contains("record.kind === 'Temporary access' && status === 'active'"));
         assert!(script.contains("const isOpenHistoryRecord = (source, item) =>"));
-        assert!(script.contains("source.kind !== 'Platform operation' && item.status === 'pending'"));
+        assert!(
+            script.contains("source.kind !== 'Platform operation' && item.status === 'pending'")
+        );
         assert!(script.contains("if (isOpenHistoryRecord(source, item))"));
         assert!(script.contains("Pending requests are in"));
         assert!(script.contains("record.id === selectedRecordId"));
@@ -3323,7 +3409,9 @@ mod tests {
         assert!(script.contains("const updatedRecords = Array.isArray(body) ? body : body?.items;"));
         assert!(script.contains("if (!Array.isArray(updatedRecords))"));
         assert!(script.contains("const matchesFilter = item =>"));
-        assert!(script.contains("No response received. Refresh to verify whether access was revoked."));
+        assert!(
+            script.contains("No response received. Refresh to verify whether access was revoked.")
+        );
         assert!(
             script.contains("/api/admin/ssh-access/requests/${encodeURIComponent(item.id)}/events")
         );
@@ -3390,9 +3478,9 @@ mod tests {
             .unwrap();
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
-        assert!(
-            script.contains("${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'Stage not reported'}")
-        );
+        assert!(script.contains(
+            "${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'Stage not reported'}"
+        ));
         assert!(script.contains("expired: 'Expired before worker claim'"));
         assert!(script.contains("claimed: 'Worker claimed deployment'"));
         assert!(script.contains("completed: 'Worker finished deployment'"));
@@ -3419,14 +3507,20 @@ mod tests {
             "const link = document.createElement('a'); link.href = '/admin/deployments';"
         ));
         assert!(script.contains("const validDeploymentSelection = item =>"));
-        assert!(script.contains("const isCurrentDeployment = item => ['approved', 'executing'].includes(item.status);"));
+        assert!(script.contains(
+            "const isCurrentDeployment = item => ['approved', 'executing'].includes(item.status);"
+        ));
         assert!(script.contains(".filter(item => item && isCurrentDeployment(item))"));
         assert!(script.contains("No active deployments."));
         assert!(script.contains("serviceDeployTargets.has(item.service_target)"));
         assert!(script.contains("document.querySelector('[data-deployment-targets]')"));
         assert!(script.contains("Target: ${deploymentSelectionLabel(item)}"));
-        assert!(script.contains("const canRetry = validDeploymentSelection(item) && item.status === 'approved'"));
-        assert!(script.contains("&& item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)"));
+        assert!(script.contains(
+            "const canRetry = validDeploymentSelection(item) && item.status === 'approved'"
+        ));
+        assert!(script.contains(
+            "&& item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state)"
+        ));
         assert!(script.contains("if (canRetry) actions.push('dispatch')"));
         assert!(script.contains("item.status === 'approved' && item.dispatch_state === 'failed') actions.push('retire')"));
         assert!(script.contains("Close failed dispatch"));

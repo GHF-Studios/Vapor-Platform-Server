@@ -1,10 +1,10 @@
+#[cfg_attr(not(unix), allow(dead_code))]
+#[path = "../recovery_status.rs"]
+mod recovery_status;
 #[path = "../ssh_cli.rs"]
 mod ssh_cli;
 #[path = "../ssh_policy.rs"]
 mod ssh_policy;
-#[cfg_attr(not(unix), allow(dead_code))]
-#[path = "../recovery_status.rs"]
-mod recovery_status;
 
 #[cfg_attr(not(unix), allow(dead_code))]
 const MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES: usize = 4096;
@@ -181,6 +181,54 @@ mod unix_impl {
 
     pub async fn run_entry() {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
+        if args.as_slice() == ["emergency-console-start"] {
+            return match run_command(
+                "/usr/bin/systemctl",
+                &["restart", "vapor-emergency-console.service"],
+            )
+            .await
+            {
+                Ok(()) => emit(
+                    true,
+                    "emergency-console",
+                    "started",
+                    "emergency console started",
+                ),
+                Err(()) => {
+                    emit(
+                        false,
+                        "emergency-console",
+                        "failed",
+                        "emergency console could not start",
+                    );
+                    std::process::exit(1);
+                }
+            };
+        }
+        if args.as_slice() == ["emergency-console-stop"] {
+            return match run_command(
+                "/usr/bin/systemctl",
+                &["stop", "vapor-emergency-console.service"],
+            )
+            .await
+            {
+                Ok(()) => emit(
+                    true,
+                    "emergency-console",
+                    "stopped",
+                    "emergency console stopped",
+                ),
+                Err(()) => {
+                    emit(
+                        false,
+                        "emergency-console",
+                        "failed",
+                        "emergency console could not stop",
+                    );
+                    std::process::exit(1);
+                }
+            };
+        }
         if args.as_slice() == ["recovery-status"] {
             match recovery_status().await {
                 Ok(status) => println!("{}", serde_json::to_string(&status).unwrap_or_default()),
@@ -280,7 +328,9 @@ mod unix_impl {
                     continue;
                 }
                 archive_count = archive_count.saturating_add(1);
-                let modified_at_unix = metadata.modified().ok()
+                let modified_at_unix = metadata
+                    .modified()
+                    .ok()
                     .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
                     .and_then(|duration| i64::try_from(duration.as_secs()).ok());
                 let Some(modified_at_unix) = modified_at_unix.filter(|value| *value > 0) else {
@@ -302,9 +352,10 @@ mod unix_impl {
         let latest_archive = latest.and_then(|(path, modified_at_unix, size_bytes)| {
             let commit_short = recovery_archive_commit(path.file_name()?.to_str()?)?.to_owned();
             let sidecar = PathBuf::from(format!("{}.sha256", path.display()));
-            let checksum_sidecar_present = std::fs::symlink_metadata(sidecar).is_ok_and(|metadata| {
-                metadata.file_type().is_file() && !metadata.file_type().is_symlink()
-            });
+            let checksum_sidecar_present =
+                std::fs::symlink_metadata(sidecar).is_ok_and(|metadata| {
+                    metadata.file_type().is_file() && !metadata.file_type().is_symlink()
+                });
             Some(recovery_status::LatestArchive {
                 modified_at_unix,
                 size_bytes,
@@ -315,12 +366,19 @@ mod unix_impl {
         let freshness = match latest_archive.as_ref() {
             None => "unknown",
             Some(archive) if archive.modified_at_unix as u64 > now.saturating_add(300) => "unknown",
-            Some(archive) if now.saturating_sub(archive.modified_at_unix as u64) <= 7200 => "recent",
+            Some(archive) if now.saturating_sub(archive.modified_at_unix as u64) <= 7200 => {
+                "recent"
+            }
             Some(_) => "stale",
         };
         let timer_state = command_output_bounded(
             "/usr/bin/systemctl",
-            &["show", "--property=ActiveState", "--value", "vapor-state-export.timer"],
+            &[
+                "show",
+                "--property=ActiveState",
+                "--value",
+                "vapor-state-export.timer",
+            ],
             64,
         )
         .await
@@ -332,7 +390,13 @@ mod unix_impl {
         .unwrap_or("unknown");
         let next_run_display = command_output_bounded(
             "/usr/bin/systemctl",
-            &["list-timers", "--all", "--no-pager", "--no-legend", "vapor-state-export.timer"],
+            &[
+                "list-timers",
+                "--all",
+                "--no-pager",
+                "--no-legend",
+                "vapor-state-export.timer",
+            ],
             256,
         )
         .await
@@ -1646,7 +1710,8 @@ mod unix_impl {
             }
         }
         let Some(mut actual_commands) = actual_commands else {
-            return expected_commands.is_empty() && lines.iter().any(|line| line.starts_with(&denied));
+            return expected_commands.is_empty()
+                && lines.iter().any(|line| line.starts_with(&denied));
         };
         expected_commands.sort();
         actual_commands.sort();
