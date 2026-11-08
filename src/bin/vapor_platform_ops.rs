@@ -189,11 +189,8 @@ mod unix_impl {
 
     pub async fn run_entry() {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
-        if unsafe { libc::geteuid() } != 0 {
-            emit(false, "", "failed", "root privileges required");
-            std::process::exit(1);
-        }
         if args.as_slice() == ["emergency-console-start"] {
+            require_root_cli();
             let version = command_output("/usr/bin/ttyd", &["--version"]).await;
             if !version.is_ok_and(|output| ttyd_version_is_approved(&output)) {
                 emit(
@@ -228,6 +225,7 @@ mod unix_impl {
             };
         }
         if args.as_slice() == ["emergency-console-stop"] {
+            require_root_cli();
             let load_state = command_output(
                 "/usr/bin/systemctl",
                 &[
@@ -270,6 +268,7 @@ mod unix_impl {
             };
         }
         if args.as_slice() == ["recovery-status"] {
+            require_root_cli();
             match recovery_status().await {
                 Ok(status) => println!("{}", serde_json::to_string(&status).unwrap_or_default()),
                 Err(_) => {
@@ -298,6 +297,7 @@ mod unix_impl {
             return;
         }
         if args.len() == 2 && args[0] == "--expire" {
+            require_root_cli();
             match expire(&args[1]).await {
                 Ok(()) => emit(true, &args[1], "expired", "temporary SSH grant expired"),
                 Err(detail) => {
@@ -328,6 +328,7 @@ mod unix_impl {
             std::process::exit(2);
         }
         if let Ok(operation) = serde_json::from_slice::<LocalOperation>(&bytes) {
+            require_root_cli();
             match operation.operation.as_str() {
                 "recovery_status" | "emergency_console_start" | "emergency_console_stop" => {
                     if !authorize_root(&operation.session_token).await {
@@ -383,6 +384,13 @@ mod unix_impl {
                 emit(false, &id, "failed", detail);
                 std::process::exit(1);
             }
+        }
+    }
+
+    fn require_root_cli() {
+        if unsafe { libc::geteuid() } != 0 {
+            emit(false, "", "failed", "root privileges required");
+            std::process::exit(1);
         }
     }
 
