@@ -56,3 +56,5 @@
 - User-supplied values never become command arguments or Caddy upstreams.
 - Auth failure, helper timeout, ttyd absence, or stop failure fail closed.
 - The UI states the missing recent-authentication/second-factor limitation.
+- The feature remains disabled until the shared-origin XSS risk is addressed by
+  an isolated admin origin/session boundary or a verified Identity step-up.

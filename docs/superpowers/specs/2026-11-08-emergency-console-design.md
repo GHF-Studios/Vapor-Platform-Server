@@ -60,6 +60,12 @@ recovery path or OpenSSH.
 - Therefore the UI must say that the grant is explicit and short-lived but is
   not a second factor. Never describe this as stronger than the Identity
   session that authorizes it.
+- The dashboard and public services currently share one browser origin. A
+  same-origin script-injection flaw in any service page can issue authenticated
+  requests as the owner, including starting this console. The short grant and
+  `HttpOnly` cookie do not defend against that same-origin attacker. Keep the
+  host switch off until either the admin surface has its own origin and
+  Identity session boundary, or Identity provides a verified step-up claim.
 - Terminal transport is isolated from the Platform web process, but a
   vulnerability in ttyd, Caddy, Identity, or the browser route can still expose
   root access. The deployment has a global enable/disable switch and the
