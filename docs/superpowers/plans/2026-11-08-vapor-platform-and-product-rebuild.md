@@ -15,7 +15,7 @@
 ### 1. Finish recovery baseline (Platform)
 
 - Keep hourly state export and the removable-drive sync operational; make the backup status easy to read and alert on stale/failed copies.
-- Test archive verification and recovery-kit preflight on the USB. Record that the current task run verified the latest and one rotating archive; do not call all history verified.
+- Re-hash every indexed USB archive on each sync, repair damaged indexed copies from the VPS, and preserve/report unindexed files. Record counts and recovery-kit preflight results; never describe an archive as verified without hashing its bytes against the current VPS index.
 - Produce a redacted rebuild checklist from a genuinely fresh Ubuntu host: OS assumptions, source pin, service setup, secrets/config import, external DNS/provider steps, health criteria, rollback boundaries.
 - Run a restore drill on a disposable VPS/host before any production wipe. Verify every owner service's state, Caddy routes, login/auth flows, exact source/submodule pins, then create and verify a repeat export.
 - Any `platform state reset` preview/execute workflow must name its scope and must not imply a host reinstall. Full-host compromise recovery is a separate runbook: Strato OS reinstall (manually through Strato if no safe API exists), owner SSH key reauthorization, then pinned recovery-kit import. Both require a fresh validated export and exact confirmation.
