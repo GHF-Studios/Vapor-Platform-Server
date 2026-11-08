@@ -54,15 +54,10 @@ def classify_changed_paths(paths: Iterable[str]) -> str:
         if _is_non_deploy_path(path):
             continue
 
-        root, separator, _ = path.partition("/")
+        root = path.partition("/")[0]
         target = TARGET_BY_PACKAGE_PATH.get(root)
         if target is not None:
             changed_targets.add(target)
-            continue
-
-        # git diff reports a submodule update as the submodule path itself.
-        if not separator and root in TARGET_BY_PACKAGE_PATH:
-            changed_targets.add(TARGET_BY_PACKAGE_PATH[root])
             continue
 
         root_runtime_changed = True

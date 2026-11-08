@@ -27,14 +27,15 @@ VPS and never approves or starts a deployment.
 
 ## Target selection
 
-A push to `main` runs the composed CI before it can create a request. Changes to
-one root service submodule select only that service (or `atlas` for the static
-Atlas site). Changes to Platform runtime/deployment inputs, or changes to more
-than one service submodule, select the full composition. Unknown root paths also
-select the full composition so new runtime inputs cannot be silently skipped.
-Root documentation, Markdown files, workflow files, and tests do not request a
-VPS deployment. `workflow_dispatch` keeps its explicit target selector for an
-operator-requested full or single-service build.
+Deployment-relevant pushes to `main` run the composed CI before creating a
+request. Changes to one root service submodule select only that service (or
+`atlas` for the static Atlas site). Changes to Platform runtime/deployment
+inputs, or changes to more than one service submodule, select the full
+composition. Unknown root paths also select the full composition so new runtime
+inputs cannot be silently skipped. Root documentation, Markdown files,
+workflow files, and tests do not request a VPS deployment.
+`workflow_dispatch` keeps its explicit target selector for an operator-requested
+full or single-service build.
 
 There is no deploy polling timer. The independent state-export timer remains.
 Temporary SSH access is a separate, explicitly approved capability managed in
