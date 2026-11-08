@@ -421,11 +421,8 @@ async fn arm(
     if inserted.is_err() {
         return error(StatusCode::CONFLICT, "another_console_session_is_active");
     }
-    if transaction.commit().await.is_err() {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
-    }
-    if record_event(
-        &state.pool,
+    if record_event_tx(
+        &mut transaction,
         Some(&session_id),
         Some(&profile_id),
         "started",
@@ -434,35 +431,15 @@ async fn arm(
     .await
     .is_err()
     {
-        let _ = helper_action("emergency-console-stop").await;
-        let _ = sqlx::query(
-            "UPDATE platform_emergency_console_sessions SET status='start_failed', ended_at_unix=?
-             WHERE id=? AND status='active'",
-        )
-        .bind(unix_now())
-        .bind(&session_id)
-        .execute(&state.pool)
-        .await;
         return error(StatusCode::SERVICE_UNAVAILABLE, "console_audit_unavailable");
+    }
+    if transaction.commit().await.is_err() {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
     }
     if helper_action("emergency-console-start").await.is_err() {
         let _ = helper_action("emergency-console-stop").await;
-        let _ = sqlx::query(
-            "UPDATE platform_emergency_console_sessions SET status='start_failed', ended_at_unix=?
-             WHERE id=? AND status='active'",
-        )
-        .bind(unix_now())
-        .bind(&session_id)
-        .execute(&state.pool)
-        .await;
-        let _ = record_event(
-            &state.pool,
-            Some(&session_id),
-            Some(&profile_id),
-            "start_failed",
-            unix_now(),
-        )
-        .await;
+        let _ = finish_session_start_failure(&state.pool, &session_id, &profile_id, unix_now())
+            .await;
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "console_backend_unavailable",
@@ -482,13 +459,14 @@ async fn arm(
     .is_ok_and(|count| count == 1);
     if !grant_still_active {
         let _ = helper_action("emergency-console-stop").await;
-        let _ = sqlx::query(
-            "UPDATE platform_emergency_console_sessions SET status='revoked', ended_at_unix=?
-             WHERE id=? AND status='active'",
+        let _ = transition_active_session(
+            &state.pool,
+            &session_id,
+            &profile_id,
+            "revoked",
+            "revoked",
+            unix_now(),
         )
-        .bind(unix_now())
-        .bind(&session_id)
-        .execute(&state.pool)
         .await;
         return error(StatusCode::CONFLICT, "console_session_revoked");
     }
@@ -867,6 +845,67 @@ async fn record_event_tx(
     .execute(&mut **transaction)
     .await
     .map(|_| ())
+}
+
+async fn finish_session_start_failure(
+    pool: &SqlitePool,
+    session_id: &str,
+    profile_id: &str,
+    now: i64,
+) -> Result<(), ()> {
+    let mut transaction = pool.begin().await.map_err(|_| ())?;
+    sqlx::query(
+        "UPDATE platform_emergency_console_sessions SET status='start_failed', ended_at_unix=?
+         WHERE id=? AND status='active'",
+    )
+    .bind(now)
+    .bind(session_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|_| ())?;
+    record_event_tx(
+        &mut transaction,
+        Some(session_id),
+        Some(profile_id),
+        "start_failed",
+        now,
+    )
+    .await
+    .map_err(|_| ())?;
+    transaction.commit().await.map_err(|_| ())
+}
+
+async fn transition_active_session(
+    pool: &SqlitePool,
+    session_id: &str,
+    profile_id: &str,
+    status: &str,
+    event: &str,
+    now: i64,
+) -> Result<(), ()> {
+    let mut transaction = pool.begin().await.map_err(|_| ())?;
+    let updated = sqlx::query(
+        "UPDATE platform_emergency_console_sessions SET status=?, ended_at_unix=?
+         WHERE id=? AND status='active'",
+    )
+    .bind(status)
+    .bind(now)
+    .bind(session_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|_| ())?;
+    if updated.rows_affected() == 1 {
+        record_event_tx(
+            &mut transaction,
+            Some(session_id),
+            Some(profile_id),
+            event,
+            now,
+        )
+        .await
+        .map_err(|_| ())?;
+    }
+    transaction.commit().await.map_err(|_| ())
 }
 
 async fn no_store(request: axum::http::Request<Body>, next: axum::middleware::Next) -> Response {
