@@ -105,6 +105,10 @@ recovery path or OpenSSH.
   terminal path.
 - A global disable transition revokes the active grant and stops the terminal
   unit. Host-level emergency recovery remains Strato VNC or SSH.
+- Start/stop/enable/disable are serialized by a process-wide lifecycle lock;
+  this is correct only while Platform runs as one service process, as it does
+  on the current VPS. If Platform is ever run with multiple replicas, replace
+  this with a durable cross-process lease before allowing console operations.
 - Access records keep actor/profile, start, expiry, end/revoke reason, and
   backend lifecycle result. They do not record commands, environment values,
   or terminal output.

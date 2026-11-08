@@ -35,6 +35,8 @@
 - Start, end, enable, and disable serialize through one process-wide lifecycle
   lock that remains held across the matching systemd action, preventing an old
   stop request from killing a newly granted terminal session.
+- This lock assumes one Platform service process. Horizontal replicas require
+  a durable cross-process lease before the console is exposed there.
 
 ## Work sequence
 
