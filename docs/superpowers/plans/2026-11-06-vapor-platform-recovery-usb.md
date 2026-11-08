@@ -178,10 +178,12 @@
   verifies the copy logic and overlap guard without proving removable-media
   behavior or a real network transfer.
 - The pull path follows the VPS `latest.json` pointer and checks it against the
-  generation index. It hashes the latest plus one rotating historical archive
-  each sync; before capacity pruning it hashes every indexed candidate. Unknown
-  or damaged local archives are preserved and can stop pruning. This source
-  behavior has not been run against the owner's drive.
+  generation index. It re-hashes every indexed archive each sync, restores a
+  damaged indexed copy from the VPS before replacing it, and verifies that
+  download. Unknown/manual archives are preserved and reported as unverified;
+  capacity pruning only follows a successful full indexed-archive audit. The
+  source behavior has been exercised against the owner's drive, but not yet in
+  a clean-host restore drill.
 - Fresh-host recovery now stages binaries and units with application services
   disabled until the validated state/configuration import. This is
   source-tested only; package scripts and systemd ordering still need a clean

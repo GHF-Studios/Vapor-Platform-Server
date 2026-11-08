@@ -295,12 +295,12 @@ hardening work.
   `deploy/scripts/install-usb-backup-task.ps1` registers an hourly current-user
   task plus a logon catch-up trigger; it does not install an SSH key or register
   itself during source deployment.
-  It reads the explicit latest-generation pointer, hashes every new download,
-  re-hashes the latest generation each sync, and rotates a re-hash through
-  historical copies. It treats other indexed copies as not content-verified
-  during that run. Before any capacity pruning, it hashes every indexed
-  candidate and only removes the oldest whose content matches the current VPS
-  index. Unknown or damaged files count against capacity and are left untouched.
+  It reads the explicit latest-generation pointer and re-hashes every indexed
+  archive on every sync. A damaged indexed copy is restored from the VPS and
+  verified before it replaces the local file. Unindexed/manual files are
+  preserved and reported as unverified. Capacity pruning is allowed only after
+  every indexed archive has passed its content check. Unknown or damaged files
+  count against capacity and are left untouched.
   A per-destination OS mutex serializes the scheduled task with manual catch-up
   before stale partial files are removed; the Windows fixture test covers
   initial copy, catch-up, pointer mismatch, hash failure, and overlapping runs.

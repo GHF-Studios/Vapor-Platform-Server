@@ -59,7 +59,7 @@ function New-RecoveryArchive {
 }
 
 function New-Fixture {
-    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive, [switch]$LegacyKit, [switch]$V2Kit, [switch]$LargeArchives)
+    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive, [switch]$LegacyKit, [switch]$V2Kit, [switch]$LargeArchives, [switch]$ThreeArchives)
 
     $root = Join-Path $scratch $Name
     $remote = Join-Path $root 'remote'
@@ -67,28 +67,38 @@ function New-Fixture {
     New-Item -ItemType Directory -Path $remote, $destination | Out-Null
 
     $olderName = 'vapor-platform-recovery-20261106T120000Z-111111111111.tar.gz'
+    $secondHistoricalName = 'vapor-platform-recovery-20261106T130000Z-333333333333.tar.gz'
     $latestName = 'vapor-platform-recovery-20261107T120000Z-222222222222.tar.gz'
     $olderPayload = "known-good-$Name"
+    $secondHistoricalPayload = "second-historical-good-$Name"
     $latestPayload = "latest-good-$Name"
     if ($LargeArchives.IsPresent) {
         $olderPayload += [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(1MB))
+        $secondHistoricalPayload += [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(1MB))
         $latestPayload += [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(1MB))
     }
     $olderBytes = New-RecoveryArchive -Root $remote -ArchiveName $olderName -Payload $olderPayload -WithoutKit:$WithoutRecoveryKit
+    $secondHistoricalBytes = if ($ThreeArchives.IsPresent) { New-RecoveryArchive -Root $remote -ArchiveName $secondHistoricalName -Payload $secondHistoricalPayload -WithoutKit:$WithoutRecoveryKit } else { $null }
     $latestBytes = New-RecoveryArchive -Root $remote -ArchiveName $latestName -Payload $latestPayload -CorruptKit:$CorruptKit -WithoutKit:$WithoutRecoveryKit -IncompleteKit:$IncompleteKit -LegacyKit:$LegacyKit -V2Kit:$V2Kit
     if ($TruncateLatestArchive.IsPresent) {
         [Array]::Resize([ref]$latestBytes, [Math]::Max(1, $latestBytes.Length - 32))
     }
     $wireBytes = if ($CorruptLatest.IsPresent) { [System.Text.Encoding]::UTF8.GetBytes("corrupt-$Name") } else { $latestBytes }
     [System.IO.File]::WriteAllBytes((Join-Path $remote $olderName), $olderBytes)
+    if ($ThreeArchives.IsPresent) {
+        [System.IO.File]::WriteAllBytes((Join-Path $remote $secondHistoricalName), $secondHistoricalBytes)
+    }
     [System.IO.File]::WriteAllBytes((Join-Path $remote $latestName), $wireBytes)
     $olderHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($olderBytes)).ToLowerInvariant()
+    $secondHistoricalHash = if ($ThreeArchives.IsPresent) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($secondHistoricalBytes)).ToLowerInvariant() } else { $null }
     $latestHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latestBytes)).ToLowerInvariant()
     $latestSize = $latestBytes.Length
-    $index = [ordered]@{ schema_version = 1; archives = @(
-        [ordered]@{ archive = $olderName; sha256 = $olderHash; size_bytes = $olderBytes.Length },
-        [ordered]@{ archive = $latestName; sha256 = $latestHash; size_bytes = $latestSize }
-    ) }
+    $archiveEntries = @([ordered]@{ archive = $olderName; sha256 = $olderHash; size_bytes = $olderBytes.Length })
+    if ($ThreeArchives.IsPresent) {
+        $archiveEntries += [ordered]@{ archive = $secondHistoricalName; sha256 = $secondHistoricalHash; size_bytes = $secondHistoricalBytes.Length }
+    }
+    $archiveEntries += [ordered]@{ archive = $latestName; sha256 = $latestHash; size_bytes = $latestSize }
+    $index = [ordered]@{ schema_version = 1; archives = $archiveEntries }
     $pointer = [ordered]@{ schema_version = 1; archive = $latestName; sha256 = $latestHash; size_bytes = $latestSize }
     if (-not $WithoutRecoveryKit.IsPresent) { $pointer.recovery_kit_included = $true }
     $index | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $remote 'index.json') -Encoding utf8
@@ -136,8 +146,10 @@ $global:LASTEXITCODE = 0
         SshPath = $sshPath
         ScpPath = $scpPath
         OlderName = $olderName
+        SecondHistoricalName = $secondHistoricalName
         LatestName = $latestName
         OlderBytes = $olderBytes
+        SecondHistoricalBytes = $secondHistoricalBytes
         LatestBytes = $latestBytes
         OlderHash = $olderHash
         LatestHash = $latestHash
@@ -232,6 +244,29 @@ try {
     Invoke-Sync $fixture | Out-Null
     $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
     Assert-True ($report.copied_this_run -eq 0) 'second run should only verify existing archives'
+
+    $fixture = New-Fixture -Name 'full-historical-audit' -ThreeArchives
+    Invoke-Sync $fixture | Out-Null
+    $damagedHistoricalPath = Join-Path $fixture.Destination $fixture.OlderName
+    $sameLengthDamage = [Security.Cryptography.RandomNumberGenerator]::GetBytes($fixture.OlderBytes.Length)
+    [System.IO.File]::WriteAllBytes($damagedHistoricalPath, $sameLengthDamage)
+    [ordered]@{
+        schema_version = 1
+        next_archive = $fixture.SecondHistoricalName
+        last_rehashed_archive = $fixture.OlderName
+        last_rehashed_utc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $fixture.Destination '.vapor-usb-audit.json') -Encoding utf8
+    Invoke-Sync $fixture | Out-Null
+    $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
+    $repairedHash = (Get-FileHash -LiteralPath $damagedHistoricalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-True ($report.copied_this_run -eq 1) 'normal sync must repair a damaged historical archive, even when its matching sidecar is intact'
+    Assert-True ($repairedHash -ceq $fixture.OlderHash) 'normal sync did not restore the historical archive from its indexed VPS copy'
+    Assert-True ($report.hash_checks_this_run -eq 4) 'normal sync must hash every archive and verify the repaired download'
+    Assert-True ($report.content_verified_this_run -eq 3) 'normal sync did not content-verify every indexed archive'
+    Assert-True ($report.unverified_archives -eq 0) 'normal sync left indexed archives unverified'
+    Assert-True ($report.verification_policy -ceq 'all indexed archives rehashed on every sync; pruning requires full verification') 'sync report does not describe the full verification policy'
+    Assert-True ($null -eq $report.PSObject.Properties['rotating_audit_archive']) 'obsolete rotating-audit report field remains'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture.Destination '.vapor-usb-audit.json'))) 'obsolete rotating-audit state was not retired after successful sync'
 
     $legacyPointer = [ordered]@{
         schema_version = 1

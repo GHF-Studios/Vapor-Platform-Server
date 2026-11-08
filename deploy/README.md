@@ -139,9 +139,9 @@ for smoke testing only; the intended public endpoint remains
   pointer is published only after validation and SHA-256 calculation.
 - `scripts/backup-to-usb.ps1`: pull unseen completed archives to an explicitly
   selected USB directory over the owner's existing SSH key. The script
-  verifies SHA-256 before retaining a copy, rechecks the latest generation on
-  every run, rotates a recheck through older copies, and can catch up after
-  missed runs. A per-destination Windows mutex prevents a scheduled run and a
+  verifies SHA-256 before retaining a copy, rechecks every indexed generation
+  on every run, repairs damaged indexed copies from the VPS, and can catch up
+  after missed runs. A per-destination Windows mutex prevents a scheduled run and a
   manual catch-up from deleting or replacing each other's in-progress files.
   `-MaxStoredBytes` defaults to 100 GiB and bounds archive payload bytes; it
   accepts 1 MiB through 120 GiB. The current archive is never pruned, and
@@ -230,10 +230,11 @@ temporary directory, checks byte count and SHA-256, then renames the bundle into
 the recovery folder. The USB archive is intentionally plaintext and contains
 server credentials; keep the drive physically controlled. The sync follows the
 explicit latest-generation pointer and checks it against the archive index; it
-does not infer recency from a timestamp/hash filename. It rehashes the latest
-copy and one rotating historical copy each run. Before deleting any
-generation for capacity, it rehashes every indexed candidate and removes only
-the oldest candidate whose payload digest matches the current VPS index.
+does not infer recency from a timestamp/hash filename. It rehashes every
+indexed copy each run and repairs damaged indexed copies from the VPS before
+replacing them. Before deleting any generation for capacity, it requires the
+full indexed set to have passed verification and removes only the oldest
+candidate whose payload digest matches the current VPS index.
 Unknown, stale, or damaged files count against capacity and are left untouched;
 if they prevent safe pruning, the sync stops. The report distinguishes copies
 hashed this run from archive files merely retained on the drive.

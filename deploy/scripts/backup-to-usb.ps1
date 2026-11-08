@@ -223,39 +223,16 @@ if ($null -eq $latestEntry -or
     throw 'The VPS latest-generation pointer does not match an indexed archive.'
 }
 $latestArchive = [string]$latestPointer.archive
-$orderedEntries = @($index.archives | Sort-Object { $_.archive })
-$historicalEntries = @($orderedEntries | Where-Object { $_.archive -cne $latestArchive })
-$auditArchive = $null
-$nextAuditArchive = $null
 $auditStatePath = Join-Path $destination '.vapor-usb-audit.json'
-if ($historicalEntries.Count -gt 0) {
-    if ((Test-Path -LiteralPath $auditStatePath) -and
-        -not (Test-Path -LiteralPath $auditStatePath -PathType Leaf)) {
-        throw 'USB verification state is not a regular file.'
+if (Test-Path -LiteralPath $auditStatePath) {
+    if (-not (Test-Path -LiteralPath $auditStatePath -PathType Leaf)) {
+        throw 'Obsolete USB verification state is not a regular file.'
     }
-    $auditIndex = 0
-    if (Test-Path -LiteralPath $auditStatePath -PathType Leaf) {
-        $auditStateItem = Get-Item -LiteralPath $auditStatePath
-        if (($auditStateItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw 'USB verification state is a reparse point.'
-        }
-        if ($auditStateItem.Length -gt 4096) {
-            throw 'USB verification state exceeds the expected size.'
-        }
-        try {
-            $auditState = Get-Content -LiteralPath $auditStatePath -Raw | ConvertFrom-Json
-            for ($i = 0; $i -lt $historicalEntries.Count; $i++) {
-                if ($historicalEntries[$i].archive -ceq [string]$auditState.next_archive) {
-                    $auditIndex = $i
-                    break
-                }
-            }
-        } catch {
-            $auditIndex = 0
-        }
+    $auditStateItem = Get-Item -LiteralPath $auditStatePath
+    if (($auditStateItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $auditStateItem.Length -gt 4096) {
+        throw 'Obsolete USB verification state is unsafe or exceeds the expected size.'
     }
-    $auditArchive = $historicalEntries[$auditIndex].archive
-    $nextAuditArchive = $historicalEntries[($auditIndex + 1) % $historicalEntries.Count].archive
 }
 
 $copied = 0
@@ -288,19 +265,15 @@ foreach ($entry in $index.archives) {
                 $sidecarMatches = ((Get-Content -LiteralPath $sidecarPath -Raw).Trim() -ceq $expectedSidecar)
             }
         }
-        $mustRehash = $entry.archive -ceq $latestArchive -or $entry.archive -ceq $auditArchive
-        if ($existing.Length -ne [long]$entry.size_bytes -or -not $sidecarMatches -or $mustRehash) {
-            $hashChecks++
-            $existingHash = (Get-FileHash -LiteralPath $finalPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($existing.Length -eq [long]$entry.size_bytes -and $existingHash -ceq $entry.sha256) {
-                $hashedValidNames[$entry.archive] = $true
+        $hashChecks++
+        $existingHash = (Get-FileHash -LiteralPath $finalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($existing.Length -eq [long]$entry.size_bytes -and $existingHash -ceq $entry.sha256) {
+            $hashedValidNames[$entry.archive] = $true
+            if (-not $sidecarMatches) {
                 $sidecarTemp = Join-Path $incoming ($entry.archive + '.sha256.partial')
                 Set-Content -LiteralPath $sidecarTemp -Value $expectedSidecar -Encoding ascii
                 Move-Item -LiteralPath $sidecarTemp -Destination $sidecarPath -Force
-                continue
             }
-        }
-        else {
             continue
         }
     }
@@ -498,17 +471,6 @@ if ($latestHasRecoveryKit) {
     Publish-RecoveryKitPointer -KitRoot (Join-Path $destination 'Recovery-Kit') -IncomingPath $incoming -Manifest $kitManifest
 }
 
-if ($historicalEntries.Count -gt 0) {
-    $auditStateTemp = Join-Path $incoming '.vapor-usb-audit.json.partial'
-    [ordered]@{
-        schema_version = 1
-        next_archive = $nextAuditArchive
-        last_rehashed_archive = $auditArchive
-        last_rehashed_utc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-    } | ConvertTo-Json -Compress | Set-Content -LiteralPath $auditStateTemp -Encoding utf8
-    Move-Item -LiteralPath $auditStateTemp -Destination $auditStatePath -Force
-}
-
 $allArchives = @(Get-ChildItem -LiteralPath $destination -File -Filter 'vapor-platform-recovery-*.tar.gz' |
     Sort-Object Name)
 $indexedArchives = @()
@@ -597,7 +559,6 @@ $report = [ordered]@{
     server = $Server
     last_success_utc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     latest_archive = $latestArchive
-    rotating_audit_archive = $auditArchive
     copied_this_run = $copied
     hash_checks_this_run = $hashChecks
     retained_archive_files = $allArchives.Count
@@ -609,12 +570,13 @@ $report = [ordered]@{
     recovery_kit_available = $recoveryKitAvailable
     recovery_kit_preflight_validation = $recoveryKitPreflightValidation
     recovery_kit_source_commit = $recoveryKitCommit
-    verification_policy = 'latest and one rotating historical archive each sync; all indexed candidates rehashed before pruning'
+    verification_policy = 'all indexed archives rehashed on every sync; pruning requires full verification'
 }
 $reportTemp = Join-Path $incoming 'last-sync.json.partial'
 $reportPath = Join-Path $destination 'last-sync.json'
 $report | ConvertTo-Json -Compress | Set-Content -LiteralPath $reportTemp -Encoding utf8
 Move-Item -LiteralPath $reportTemp -Destination $reportPath -Force
+Remove-Item -LiteralPath $auditStatePath -Force -ErrorAction SilentlyContinue
 
 Write-Output "USB recovery sync complete: copied $copied archive(s); content-verified $($verifiedArchives.Count) generation(s) this run."
 } finally {

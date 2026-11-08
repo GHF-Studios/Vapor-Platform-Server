@@ -1,6 +1,6 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-08 10:19 UTC)
+## Current verified state (2026-11-08 10:57 UTC)
 
 - Platform `12ab9d8d2f1b581bb728e60bcc5835e6d57a226d` is live in `services`
   mode. Its approved request `dc62975c-86b6-4c41-8e4b-e7aed4f10bf8` completed
@@ -21,13 +21,12 @@
   `b02d04bde8b8267e2f0dc2442d3d4f69ad31cf7d1a4274ea9c1552318f1b9e48`). The
   manifest includes the recovery kit and matches the latest pointer.
 - The owner-held `E:\VaporRecovery` sync completed successfully at
-  `2026-11-08T10:03:45Z`. It copied one archive, verified the latest and one
-  rotating historical archive, validated the embedded recovery kit against
-  source commit `12ab9d8d2f1b581bb728e60bcc5835e6d57a226d`, and reports 42
-  retained archives (about 192 MiB of archive payload). Forty older archives
-  have not yet been individually rehashed by the rotating sync policy. The
-  hourly task is registered and its last result was success; the next run was
-  scheduled for 12:00 local time.
+  `2026-11-08T10:57:58Z`. It copied no archives, re-hashed all 43 indexed
+  archives, reported zero unverified archives and 206,553,954 bytes of archive
+  payload, and validated the embedded recovery kit against source commit
+  `7204d749bb1ee555855f97a6b92d6e858e834cd1`. A one-time full checksum sweep
+  also found no checksum failures. The hourly task is registered and its last
+  result was success; the next run was scheduled for 12:00 local time.
 - A direct host snapshot reports about 39.4 GiB free on `/`, 1 vCPU, and 1.8
   GiB RAM. The VPS remains suitable for its current deployment-build fallback,
   not for a concurrent guest compiler worker.
