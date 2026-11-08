@@ -11,8 +11,8 @@ archive and its .sha256 file when moving recovery data to a fresh Ubuntu host.
    .sha256 file, and this complete recovery-kit folder to the host. The
    sidecar must contain one SHA-256 entry naming that exact archive.
 3. From the complete folder containing recover-fresh-host.sh,
-   recovery_bundle_metadata.py, state-bundle-validate.py, and
-   deployed_source_manifest.py, run:
+   recovery_bundle_metadata.py, state-bundle-validate.py,
+   deployed_source_manifest.py, and service_deploy_map.py, run:
 
    sudo bash ./recover-fresh-host.sh --bundle ./vapor-platform-recovery-....tar.gz --yes
 

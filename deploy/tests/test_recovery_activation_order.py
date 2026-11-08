@@ -45,6 +45,7 @@ class RecoveryActivationOrderTests(unittest.TestCase):
         export = (REPO_ROOT / "deploy/scripts/export-state.sh").read_text()
         self.assertIn("state-bundle-validate.py", export)
         self.assertIn("deployed_source_manifest.py", export)
+        self.assertIn("service_deploy_map.py", export)
 
     def test_fresh_host_stages_before_restoring_and_only_restore_activates(self) -> None:
         coordinator = (REPO_ROOT / "deploy/scripts/recover-fresh-host.sh").read_text()

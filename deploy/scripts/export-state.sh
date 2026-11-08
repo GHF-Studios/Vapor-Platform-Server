@@ -198,7 +198,8 @@ fi
 RECOVERY_KIT_DIR="${BUNDLE_ROOT}/source/recovery-kit"
 for recovery_file in \
   recover-fresh-host.sh recovery_bundle_metadata.py \
-  state-bundle-validate.py deployed_source_manifest.py README.txt; do
+  state-bundle-validate.py deployed_source_manifest.py \
+  service_deploy_map.py README.txt; do
   source_path="${SCRIPT_DIR}/${recovery_file}"
   [ -f "${source_path}" ] && [ ! -L "${source_path}" ] \
     || { echo "error: required recovery kit source file is missing" >&2; exit 1; }
@@ -206,7 +207,8 @@ for recovery_file in \
 done
 (cd "${RECOVERY_KIT_DIR}" && sha256sum \
   README.txt recover-fresh-host.sh recovery_bundle_metadata.py \
-  state-bundle-validate.py deployed_source_manifest.py) \
+  state-bundle-validate.py deployed_source_manifest.py \
+  service_deploy_map.py) \
   > "${RECOVERY_KIT_DIR}/SHA256SUMS"
 chmod 0600 "${RECOVERY_KIT_DIR}/SHA256SUMS"
 

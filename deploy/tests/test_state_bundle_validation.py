@@ -4,6 +4,8 @@ import importlib.util
 import hashlib
 import io
 import pathlib
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -74,18 +76,27 @@ KIT_FILES = {
     "recovery_bundle_metadata.py": b"#!/usr/bin/env python3\nprint('metadata')\n",
     "state-bundle-validate.py": b"#!/usr/bin/env python3\nprint('validate')\n",
     "deployed_source_manifest.py": b"#!/usr/bin/env python3\nprint('manifest')\n",
+    "service_deploy_map.py": b"#!/usr/bin/env python3\nDEPLOY_TARGETS = {}\n",
     "README.txt": b"Recovery instructions\n",
 }
 KIT_SUMS = "".join(
     f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in KIT_FILES.items()
 ).encode()
-LEGACY_KIT_FILES = {
+V2_KIT_FILES = {
     name: payload
     for name, payload in KIT_FILES.items()
-    if name not in {"state-bundle-validate.py", "deployed_source_manifest.py"}
+    if name != "service_deploy_map.py"
 }
-LEGACY_KIT_SUMS = "".join(
-    f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in LEGACY_KIT_FILES.items()
+V2_KIT_SUMS = "".join(
+    f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in V2_KIT_FILES.items()
+).encode()
+V1_KIT_FILES = {
+    name: payload
+    for name, payload in KIT_FILES.items()
+    if name not in {"state-bundle-validate.py", "deployed_source_manifest.py", "service_deploy_map.py"}
+}
+V1_KIT_SUMS = "".join(
+    f"{hashlib.sha256(payload).hexdigest()}  {name}\n" for name, payload in V1_KIT_FILES.items()
 ).encode()
 
 
@@ -122,16 +133,69 @@ class StateBundleValidationTests(unittest.TestCase):
     def test_accepts_previous_recovery_kit_version(self) -> None:
         members = [
             entry for entry in valid_members()
-            if not entry[0].endswith((
-                "recovery-kit/state-bundle-validate.py",
-                "recovery-kit/deployed_source_manifest.py",
-            ))
+            if not entry[0].endswith("recovery-kit/service_deploy_map.py")
         ]
         members = [
-            (name, kind, LEGACY_KIT_SUMS if name.endswith("recovery-kit/SHA256SUMS") else payload)
+            (name, kind, V2_KIT_SUMS if name.endswith("recovery-kit/SHA256SUMS") else payload)
             for name, kind, payload in members
         ]
         validator.validate_bundle(make_bundle(members))
+
+    def test_accepts_legacy_v1_recovery_kit(self) -> None:
+        members = [
+            entry for entry in valid_members()
+            if not entry[0].endswith((
+                "recovery-kit/state-bundle-validate.py",
+                "recovery-kit/deployed_source_manifest.py",
+                "recovery-kit/service_deploy_map.py",
+            ))
+        ]
+        members = [
+            (name, kind, V1_KIT_SUMS if name.endswith("recovery-kit/SHA256SUMS") else payload)
+            for name, kind, payload in members
+        ]
+        validator.validate_bundle(make_bundle(members))
+
+    def test_recovery_kit_validator_runs_with_only_its_bundled_files(self) -> None:
+        kit_names = {
+            "recover-fresh-host.sh",
+            "recovery_bundle_metadata.py",
+            "state-bundle-validate.py",
+            "deployed_source_manifest.py",
+            "service_deploy_map.py",
+            "README.txt",
+        }
+        kit_dir = REPO_ROOT / "deploy" / "scripts"
+        kit_payloads = {name: (kit_dir / name).read_bytes() for name in kit_names}
+        checksum_text = "".join(
+            f"{hashlib.sha256(payload).hexdigest()}  {name}\n"
+            for name, payload in kit_payloads.items()
+        ).encode()
+        members = [
+            entry for entry in valid_members()
+            if not entry[0].startswith(f"{ROOT}/source/recovery-kit/")
+        ]
+        members.extend(
+            (f"{ROOT}/source/recovery-kit/{name}", "file", payload)
+            for name, payload in kit_payloads.items()
+        )
+        members.append((f"{ROOT}/source/recovery-kit/SHA256SUMS", "file", checksum_text))
+        bundle = make_bundle(members)
+        with tempfile.TemporaryDirectory() as temporary:
+            extracted_kit = pathlib.Path(temporary) / "kit"
+            extracted_kit.mkdir()
+            with tarfile.open(bundle, "r:gz") as archive:
+                for name in kit_names | {"SHA256SUMS"}:
+                    member = archive.extractfile(f"{ROOT}/source/recovery-kit/{name}")
+                    assert member is not None
+                    (extracted_kit / name).write_bytes(member.read())
+            result = subprocess.run(
+                [sys.executable, str(extracted_kit / "state-bundle-validate.py"), str(bundle)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_accepts_old_bundle_without_deployed_source_manifest(self) -> None:
         bundle = make_bundle(valid_members())

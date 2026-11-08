@@ -212,9 +212,10 @@ for smoke testing only; the intended public endpoint remains
   and GitHub and verifies the owner dashboard; then rerun with
   `--resume --confirm-provider-checks`. Exit code `3` means the restore is
   complete and waiting for those owner checks. The Windows sync places the
-  matching entrypoint, metadata reader, archive validator, and validator
-  dependency in `Recovery-Kit/<root-commit>/`, alongside its README and file
-  checksums; use that kit folder and archive together. Older complete kits
+  matching entrypoint, metadata reader, archive validator, and both validator
+  dependencies (`deployed_source_manifest.py` and `service_deploy_map.py`) in
+  `Recovery-Kit/<root-commit>/`, alongside its README and file checksums; use
+  that kit folder and archive together. Older complete kits
   remain usable but report that they lack the newer pre-package validation
   step. A failed post-restore recovery
   disables and stops the newly deployed Vapor services, the export timer, and

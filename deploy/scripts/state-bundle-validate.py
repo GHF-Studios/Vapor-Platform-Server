@@ -30,6 +30,7 @@ RECOVERY_KIT_V2_FILES = RECOVERY_KIT_V1_FILES | {
     "state-bundle-validate.py",
     "deployed_source_manifest.py",
 }
+RECOVERY_KIT_V3_FILES = RECOVERY_KIT_V2_FILES | {"service_deploy_map.py"}
 # Restore extracts the validated bundle to a temporary directory before applying
 # state. Bound both archive complexity and expanded disk use before extraction.
 MAX_MEMBER_COUNT = 100_000
@@ -210,6 +211,7 @@ def validate_bundle(path: pathlib.Path) -> None:
                 if frozenset(kit_files) not in {
                     frozenset(RECOVERY_KIT_V1_FILES),
                     frozenset(RECOVERY_KIT_V2_FILES),
+                    frozenset(RECOVERY_KIT_V3_FILES),
                 }:
                     raise ValidationError("bundle recovery kit is incomplete")
                 checksums_member = recovery_kit_members["SHA256SUMS"]

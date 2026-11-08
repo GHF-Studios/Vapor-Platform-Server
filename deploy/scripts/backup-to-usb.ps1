@@ -355,9 +355,11 @@ if ($latestHasRecoveryKit) {
     }
     $validatorMember = 'vapor-platform-recovery/source/recovery-kit/state-bundle-validate.py'
     $manifestValidatorMember = 'vapor-platform-recovery/source/recovery-kit/deployed_source_manifest.py'
+    $serviceDeployMapMember = 'vapor-platform-recovery/source/recovery-kit/service_deploy_map.py'
     $hasValidator = $archiveMembers -ccontains $validatorMember
     $hasManifestValidator = $archiveMembers -ccontains $manifestValidatorMember
-    if ($hasValidator -ne $hasManifestValidator) {
+    $hasServiceDeployMap = $archiveMembers -ccontains $serviceDeployMapMember
+    if ($hasValidator -ne $hasManifestValidator -or ($hasServiceDeployMap -and -not $hasValidator)) {
         throw 'The latest generation declares an incomplete preflight recovery kit.'
     }
     $recoveryKitPreflightValidation = $hasValidator -and $hasManifestValidator
@@ -371,6 +373,9 @@ if ($latestHasRecoveryKit) {
     )
     if ($recoveryKitPreflightValidation) {
         $kitMembers += @($validatorMember, $manifestValidatorMember)
+    }
+    if ($hasServiceDeployMap) {
+        $kitMembers += $serviceDeployMapMember
     }
     & $tar -xzf $latestBundlePath -C $kitStage @kitMembers 2>$null
     if ($LASTEXITCODE -ne 0) {
@@ -386,6 +391,9 @@ if ($latestHasRecoveryKit) {
     )
     if ($recoveryKitPreflightValidation) {
         $expectedKitNames += @('state-bundle-validate.py', 'deployed_source_manifest.py')
+    }
+    if ($hasServiceDeployMap) {
+        $expectedKitNames += 'service_deploy_map.py'
     }
     $checksumPath = Join-Path $kitSourceDir 'SHA256SUMS'
     if ((Test-Path -LiteralPath $sourceCommitPath -PathType Leaf) -and

@@ -241,8 +241,10 @@ an untransferred grant as active access.
 
 New recovery exports carry a source-pinned recovery kit inside the archive:
 recover-fresh-host.sh, recovery_bundle_metadata.py, state-bundle-validate.py,
-deployed_source_manifest.py, a short operator README, and SHA-256 entries for
-those files. The fresh-host entrypoint checks kit consistency and runs the
+deployed_source_manifest.py, service_deploy_map.py, a short operator README,
+and SHA-256 entries for those files. The source-manifest validator imports the
+closed service map, so both files must travel with the standalone validator.
+The fresh-host entrypoint checks kit consistency and runs the
 validator before apt can change host packages, then validates again from the
 checked-out source revision before changing application state. Preflight needs
 the base Ubuntu image to supply Python 3.11+ and stops without package changes

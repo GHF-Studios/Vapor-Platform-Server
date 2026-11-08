@@ -11,7 +11,7 @@ function Assert-True {
 }
 
 function New-RecoveryArchive {
-    param([string]$Root, [string]$ArchiveName, [string]$Payload, [switch]$CorruptKit, [switch]$WithoutKit, [switch]$IncompleteKit, [switch]$LegacyKit)
+    param([string]$Root, [string]$ArchiveName, [string]$Payload, [switch]$CorruptKit, [switch]$WithoutKit, [switch]$IncompleteKit, [switch]$LegacyKit, [switch]$V2Kit)
 
     $stage = Join-Path $Root ($ArchiveName + '.stage')
     $recovery = Join-Path $stage 'vapor-platform-recovery'
@@ -26,6 +26,9 @@ function New-RecoveryArchive {
     if (-not $LegacyKit.IsPresent) {
         $files['state-bundle-validate.py'] = "#!/usr/bin/env python3`nprint('validate')`n"
         $files['deployed_source_manifest.py'] = "#!/usr/bin/env python3`nprint('manifest')`n"
+    }
+    if (-not $LegacyKit.IsPresent -and -not $V2Kit.IsPresent) {
+        $files['service_deploy_map.py'] = "#!/usr/bin/env python3`nDEPLOY_TARGETS = {}`n"
     }
     [System.IO.File]::WriteAllText((Join-Path $recovery 'source\root-commit.txt'), "$commit`n", [System.Text.UTF8Encoding]::new($false))
     foreach ($name in $files.Keys) {
@@ -56,7 +59,7 @@ function New-RecoveryArchive {
 }
 
 function New-Fixture {
-    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive, [switch]$LegacyKit, [switch]$LargeArchives)
+    param([string]$Name, [switch]$CorruptLatest, [switch]$CorruptKit, [switch]$WithoutRecoveryKit, [switch]$IncompleteKit, [switch]$TruncateLatestArchive, [switch]$LegacyKit, [switch]$V2Kit, [switch]$LargeArchives)
 
     $root = Join-Path $scratch $Name
     $remote = Join-Path $root 'remote'
@@ -72,7 +75,7 @@ function New-Fixture {
         $latestPayload += [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(1MB))
     }
     $olderBytes = New-RecoveryArchive -Root $remote -ArchiveName $olderName -Payload $olderPayload -WithoutKit:$WithoutRecoveryKit
-    $latestBytes = New-RecoveryArchive -Root $remote -ArchiveName $latestName -Payload $latestPayload -CorruptKit:$CorruptKit -WithoutKit:$WithoutRecoveryKit -IncompleteKit:$IncompleteKit -LegacyKit:$LegacyKit
+    $latestBytes = New-RecoveryArchive -Root $remote -ArchiveName $latestName -Payload $latestPayload -CorruptKit:$CorruptKit -WithoutKit:$WithoutRecoveryKit -IncompleteKit:$IncompleteKit -LegacyKit:$LegacyKit -V2Kit:$V2Kit
     if ($TruncateLatestArchive.IsPresent) {
         [Array]::Resize([ref]$latestBytes, [Math]::Max(1, $latestBytes.Length - 32))
     }
@@ -204,6 +207,7 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'recovery_bundle_metadata.py') -PathType Leaf) 'matching metadata helper was not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'state-bundle-validate.py') -PathType Leaf) 'matching archive validator was not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'deployed_source_manifest.py') -PathType Leaf) 'matching source-manifest validator dependency was not extracted'
+    Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'service_deploy_map.py') -PathType Leaf) 'matching deploy-map import dependency was not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'README.txt') -PathType Leaf) 'recovery instructions were not extracted'
     Assert-True (Test-Path -LiteralPath (Join-Path $kitRoot 'SHA256SUMS') -PathType Leaf) 'recovery-kit checksum file was not extracted'
     $kitPointer = Get-Content -LiteralPath (Join-Path $fixture.Destination 'Recovery-Kit\latest.json') -Raw | ConvertFrom-Json
@@ -218,6 +222,12 @@ try {
     Assert-True ($report.recovery_kit_available) 'a valid previous recovery kit was not retained as usable'
     Assert-True (-not $report.recovery_kit_preflight_validation) 'previous recovery kit falsely reports preflight validation support'
     Assert-True (-not $kitPointer.preflight_validation) 'previous recovery kit pointer falsely reports preflight validation support'
+
+    $fixture = New-Fixture -Name 'v2-kit' -V2Kit
+    Invoke-Sync $fixture | Out-Null
+    $v2KitRoot = Join-Path $fixture.Destination (Join-Path 'Recovery-Kit' '0123456789abcdef0123456789abcdef01234567')
+    Assert-True (Test-Path -LiteralPath (Join-Path $v2KitRoot 'deployed_source_manifest.py') -PathType Leaf) 'valid v2 recovery kit was not accepted'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $v2KitRoot 'service_deploy_map.py'))) 'v2 kit was falsely treated as v3'
 
     Invoke-Sync $fixture | Out-Null
     $report = Get-Content -LiteralPath (Join-Path $fixture.Destination 'last-sync.json') -Raw | ConvertFrom-Json
