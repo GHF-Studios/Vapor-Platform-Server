@@ -1172,3 +1172,35 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
   remains unmerged. The exact-version allowlists remain empty. Separately, the
   shared public/admin origin and lack of verified Identity step-up still block
   activation. Recovery and console pages therefore remain source-only.
+
+## Current live checkpoint (`fffbc779`, 2026-11-08 08:59 UTC)
+
+- Platform revision `fffbc77981c2eb24d98f8a91a78ea67e7bf2e415` is deployed
+  from successful request `18eb3672-fcb2-40b5-9751-f7d57c8c958a`. The request
+  was approved through the installed root-operated queue command after both
+  Linux Platform CI and Windows recovery tests passed. This is the current
+  autonomous operator path; it does not add a separate assistant identity or
+  change the provider trust boundaries.
+- The eight independent services and Caddy are active. The deployed
+  `health-check.sh` passed in services mode, `/healthz` and `/docs/` returned
+  200, the state-export timer is enabled and active, and the VPS root filesystem
+  has about 40 GB available. Build Cache is healthy but reports no configured
+  current snapshots for either supported target.
+- The recovery export at
+  `2026-11-08T08:52:39Z` is pinned to this revision. The refreshed USB sync
+  completed at `08:52:59Z`; its manifest names this revision, the archive hash
+  matches, and every extracted recovery-kit checksum matches. The standalone
+  validator from that extracted kit accepted the archive. The kit now includes
+  `service_deploy_map.py`, fixing a missing import that made the previous kit's
+  pre-package validator fail. The scheduled USB task remains Ready with result
+  0 and its next hourly run is scheduled for 10:00 local time.
+- This is structural/archive verification, not a fresh-host recovery drill.
+  A disposable fresh host was not used for an end-to-end rebuild, so the
+  platform is not yet proven fully recoverable. The active Vapor Client checkout also
+  documents that `Vapor.lock` is not implemented; the worker/snapshot contract
+  remains intentionally unconfigured until the canonical lock and build recipe
+  exist. The primary-host local build path remains the working service-deploy
+  path.
+- Public docs routes are working at both `/docs` and `/docs/`. The emergency
+  browser console remains unavailable and should stay disabled on the shared
+  origin until its authentication/origin boundary is resolved.
