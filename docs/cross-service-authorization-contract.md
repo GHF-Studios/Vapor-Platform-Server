@@ -128,7 +128,8 @@ Docs and Diagnostics may keep their local admin-token scaffolds during the
 migration, but those tokens are bootstrap/emergency compatibility paths. They
 are not the long-term operator workflow.
 
-Registry enforces protected ecosystem reads and its root-only Workshop admin
-view through Identity. Artifact's root-only inventory also checks Identity.
+Registry enforces protected ecosystem reads and its root-only ecosystem/source
+inventory through Identity. This is not the future typed-content or Workshop
+release catalog. Artifact's root-only inventory also checks Identity.
 Docs and Diagnostics still need their own resource policies and authorization
 integration before replacing their migration-era service tokens.

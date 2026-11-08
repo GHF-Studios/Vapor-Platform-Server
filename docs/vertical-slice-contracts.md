@@ -158,7 +158,7 @@ They must not expose internal profile ids as operator-facing authority.
 /var/lib/vapor-server/docs           docs artifacts and current pointers
 /var/lib/vapor-server/identity       SQLite identity DB and session state
 /var/lib/vapor-server/diagnostics    uploaded diagnostics and indexes
-/var/lib/vapor-server/registry       Workshop/catalog metadata
+/var/lib/vapor-server/registry       provider, repository, ecosystem, and source-topology metadata; typed content catalog not implemented
 /var/lib/vapor-server/updates        immutable application releases
 /var/lib/vapor-server/build-cache   current target snapshots and candidate staging
 /var/lib/vapor-server/operations     latest deploy/restore status pointer
