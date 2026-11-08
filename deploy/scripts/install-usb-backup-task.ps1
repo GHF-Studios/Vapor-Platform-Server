@@ -10,6 +10,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$UsbPath,
 
+    [string]$RecoveryRepositoryPath = (Join-Path $env:USERPROFILE 'Vapor\cache\repositories\Vapor-Platform-Server.git'),
+
     [string]$TaskName = 'Vapor USB Recovery Sync',
 
     [switch]$AllowFixedDrive
@@ -17,9 +19,24 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $keyPath = (Resolve-Path -LiteralPath $SshKey).Path
+if (-not (Test-Path -LiteralPath $RecoveryRepositoryPath)) {
+    $repositoryParent = Split-Path -Parent ([System.IO.Path]::GetFullPath($RecoveryRepositoryPath))
+    New-Item -ItemType Directory -Path $repositoryParent -Force | Out-Null
+    $bootstrapGit = Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    & $bootstrapGit.Source clone --bare --single-branch --branch main `
+        'https://github.com/GHF-Studios/Vapor-Platform-Server.git' $RecoveryRepositoryPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not bootstrap the Platform recovery-source cache from its public GitHub repository.'
+    }
+}
+$sourceRepositoryPath = (Resolve-Path -LiteralPath $RecoveryRepositoryPath).Path
+$gitCommand = Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+& $gitCommand.Source -C $sourceRepositoryPath rev-parse --git-dir 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw 'RecoveryRepositoryPath must be an existing Git checkout or bare repository.'
+}
 $sourceBackupScript = Join-Path $PSScriptRoot 'backup-state-only-to-usb.ps1'
 $sourceMetadataHelper = Join-Path $PSScriptRoot 'recovery_bundle_metadata.py'
-$sourceRepositoryPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $triggerHelper = Join-Path $PSScriptRoot 'usb_backup_task.ps1'
 if (-not (Test-Path -LiteralPath $sourceBackupScript -PathType Leaf)) {
     throw 'The state-only USB sync script is missing beside the task installer.'

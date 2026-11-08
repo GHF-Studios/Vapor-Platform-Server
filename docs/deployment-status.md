@@ -1,6 +1,6 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-08 20:27 UTC)
+## Current verified state (2026-11-08 20:37 UTC)
 
 - Platform commit `1f5d14cc7eab1ba7891b63ea4368362fb529100e` is live on the
   main VPS in services mode. Linux and Windows CI passed before deployment;
@@ -12,15 +12,16 @@
   `cd550fc74d912279dadb4d068f2f102228c51cf08fe3a402d23828eddb505552`). Its
   source pin is `1f5d14cc7eab1ba7891b63ea4368362fb529100e`. Two state-only
   generations are indexed on the USB, totalling 9,593,983 bytes.
-- At 20:27 UTC the installed `Vapor USB Recovery Sync` task completed with
+- At 20:37 UTC the installed `Vapor USB Recovery Sync` task completed with
   Task Scheduler result `0`. It now runs the state-only sync, verified both
   indexed snapshots and the matching recovery kit, and copied no files because
   both generations were already current. The kit is pinned to
   `1f5d14cc7eab1ba7891b63ea4368362fb529100e`.
-- The task currently uses the Platform source checkout at
-  `C:\Users\David Jackson\.codex\worktrees\madmax-vapor-server\Vapor-Platform-Server`
-  to assemble source-pinned recovery tools. Moving or removing that checkout
-  requires updating the task to a durable Vapor-managed source location.
+- The task's recovery tools now come from the bare Git cache at
+  `C:\Users\David Jackson\Vapor\cache\repositories\Vapor-Platform-Server.git`.
+  This 1.58 MiB cache is under the user-owned Vapor home, tracks Platform
+  `main`, and supplied the pinned commit needed by the recovery kit. The task
+  no longer depends on the disposable Codex worktree or a Documents checkout.
 - `E:\VaporRecovery\last-sync.json` still describes the legacy full-host
   archive sync; it is not evidence for the state-only run. Existing legacy
   archives were left untouched. The prior request to erase the USB was allowed
