@@ -681,6 +681,9 @@ const JS: &str = r#"
       const confirm = document.createElement('input');
       confirm.type = 'checkbox';
       confirm.required = true;
+      confirm.addEventListener('invalid', () => {
+        feedback.textContent = 'Confirm this action before submitting the request.';
+      });
       label.append(confirm, document.createTextNode(` ${labelText}`));
       const button = document.createElement('button');
       button.type = 'submit';
@@ -3280,6 +3283,8 @@ mod tests {
             script.contains("Approval saved; the worker claimed the deployment and it is running.")
         );
         assert!(script.contains("Approval saved; deployment succeeded."));
+        assert!(script.contains("confirm.addEventListener('invalid'"));
+        assert!(script.contains("Confirm this action before submitting the request."));
         assert!(script.contains("let deploymentCursor = null;"));
         assert!(script.contains("cursor: deploymentCursor"));
         assert!(script.contains("deployment-refresh"));
