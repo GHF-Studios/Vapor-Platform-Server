@@ -109,6 +109,8 @@ def valid_members() -> list[tuple[str, str | None, bytes | None]]:
         (f"{ROOT}/host/caddy/Caddyfile", "file", b"vapor.example.test {}\n"),
         (f"{ROOT}/host/systemd", "dir", None),
         (f"{ROOT}/host/systemd/vapor-platform-server.service", "file", b"[Service]\n"),
+        (f"{ROOT}/host/systemd/vapor-platform-ops.socket", "file", b"[Socket]\n"),
+        (f"{ROOT}/host/systemd/vapor-platform-ops@.service", "file", b"[Service]\n"),
     ]
 
 
