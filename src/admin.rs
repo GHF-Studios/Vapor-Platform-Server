@@ -1862,6 +1862,11 @@ fn admin_page_title(current_path: &str) -> Option<&'static str> {
     if normalized_path == "/admin/operations" {
         return Some("Operations");
     }
+    // Keep the service's canonical name in the document title. The navigation
+    // label describes the operator task; it does not rename the service.
+    if section_path_matches("/admin/build-cache", normalized_path) {
+        return Some("Build Cache");
+    }
     MODULES
         .iter()
         .filter(|section| matches!(section.state, SectionState::Implemented))
@@ -1962,7 +1967,7 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let fragment = "<p class=\"eyebrow\">Vapor Platform</p><h1>Operator overview</h1><p class=\"page-intro\">Service health and work that needs an operator decision. Sign in with an authorized Steam-linked Vapor account to load protected information.</p><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Service health</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Needs review</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Requests awaiting a decision appear here. Active SSH grants, deployment runs, and past decisions have their own work areas.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section>";
+    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Operator overview</h1><p class=\"page-intro\">Service health and work that needs an operator decision. Sign in with an authorized Steam-linked Vapor account to load protected information.</p><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Service health</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Needs review</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Requests awaiting a decision appear here. Active SSH grants, deployment runs, and past decisions have their own work areas.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section>";
     admin_page_response(StatusCode::OK, fragment)
 }
 
@@ -2433,10 +2438,10 @@ fn auth_unavailable_response(failure: crate::admin_auth::AuthFailure) -> Respons
 fn admin_page_auth_response(failure: crate::admin_auth::AuthFailure) -> Response {
     let fragment = match failure {
         crate::admin_auth::AuthFailure::Unauthorized => {
-            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Sign in to continue</h1><p>Use Steam to sign in to your Vapor account. This area is available only to accounts with the Platform root role.</p><a class=\"button-link\" href=\"/login\">Continue to sign in</a>"
+            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Sign-in required</h1><p>Use Steam to sign in to your Vapor account. This area is available only to accounts with the Platform root role.</p><a class=\"button-link\" href=\"/login\">Continue to sign in</a>"
         }
         crate::admin_auth::AuthFailure::Forbidden => {
-            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Operator access required</h1><p>You are signed in, but this account does not have the Platform root role.</p><a href=\"/login\">View account</a>"
+            "<p class=\"eyebrow\">Platform · Operator access</p><h1>Root access required</h1><p>You are signed in, but this account does not have the Platform root role.</p><a href=\"/login\">View account</a>"
         }
         crate::admin_auth::AuthFailure::Unavailable => {
             "<p class=\"eyebrow\">Platform · Operations</p><h1>Authorization unavailable</h1><p>Identity authorization is temporarily unavailable. Retry in a moment.</p>"
