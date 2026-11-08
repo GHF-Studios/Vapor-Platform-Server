@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.github/**'
+      - 'deploy/tests/**'
+      - 'deploy/scripts/deployment_scope.py'
   workflow_dispatch:
     inputs:
       target:
@@ -47,8 +53,28 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Resolve deployment target
+        id: deployment_target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TARGET: ${{ inputs.target }}
+          PUSH_BASE: ${{ github.event.before }}
+          PUSH_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            target="${DISPATCH_TARGET}"
+          elif [[ "${PUSH_BASE}" =~ ^0+$ ]]; then
+            target="full"
+          else
+            target="$(git diff --name-only "${PUSH_BASE}" "${PUSH_HEAD}" | python3 deploy/scripts/deployment_scope.py)"
+          fi
+          echo "target=${target}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved deployment target: ${target}"
+
       - name: Check request credentials
-        id: request-secrets
+        id: request_secrets
+        if: steps.deployment_target.outputs.target != 'none'
         env:
           VAPOR_DEPLOY_REQUEST_TOKEN: ${{ secrets.VAPOR_DEPLOY_REQUEST_TOKEN }}
           VAPOR_DEPLOY_PUBLIC_BASE: https://vapor.ghf-studios.site
@@ -62,7 +88,7 @@ jobs:
           fi
 
       - name: Submit exact revision for root approval
-        if: steps.request-secrets.outputs.configured == 'true'
+        if: steps.request_secrets.outputs.configured == 'true' && steps.deployment_target.outputs.target != 'none'
         env:
           VAPOR_DEPLOY_REQUEST_TOKEN: ${{ secrets.VAPOR_DEPLOY_REQUEST_TOKEN }}
           VAPOR_DEPLOY_PUBLIC_BASE: https://vapor.ghf-studios.site
@@ -71,7 +97,7 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-          VAPOR_REQUEST_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'full' }}
+          VAPOR_REQUEST_TARGET: ${{ steps.deployment_target.outputs.target }}
         run: |
           set -euo pipefail
           payload="$(python3 - <<'PY'

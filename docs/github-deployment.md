@@ -9,7 +9,7 @@ VPS and never approves or starts a deployment.
 1. CI validates the Platform repository and every pinned root-level service
    submodule.
 2. The request workflow submits the full root commit, tree, pinned submodule
-   revisions, CI run URL, and explicit `services` target to Platform using an
+   revisions, CI run URL, and resolved deployment target to Platform using an
    Identity credential scoped only to `platform:deploy-request:create`.
 3. A root operator reviews the exact source and deployment target in
    `/admin/operations` and approves or rejects it. Legacy requests without a
@@ -24,6 +24,17 @@ VPS and never approves or starts a deployment.
    inactive or failed. Reconciliation records terminal failure and never
    replays a possibly partial deployment; a new CI request and approval are
    required.
+
+## Target selection
+
+A push to `main` runs the composed CI before it can create a request. Changes to
+one root service submodule select only that service (or `atlas` for the static
+Atlas site). Changes to Platform runtime/deployment inputs, or changes to more
+than one service submodule, select the full composition. Unknown root paths also
+select the full composition so new runtime inputs cannot be silently skipped.
+Root documentation, Markdown files, workflow files, and tests do not request a
+VPS deployment. `workflow_dispatch` keeps its explicit target selector for an
+operator-requested full or single-service build.
 
 There is no deploy polling timer. The independent state-export timer remains.
 Temporary SSH access is a separate, explicitly approved capability managed in
