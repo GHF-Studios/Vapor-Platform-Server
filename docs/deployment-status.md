@@ -1204,3 +1204,24 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - Public docs routes are working at both `/docs` and `/docs/`. The emergency
   browser console remains unavailable and should stay disabled on the shared
   origin until its authentication/origin boundary is resolved.
+
+## Current live checkpoint (`4078d1fb`, 2026-11-08 09:17 UTC)
+
+- Platform composition `4078d1fb0caa7517df9f51c7beffb9c7e394a3f7` deployed
+  successfully from request `370b0730-ec5a-4c95-bc45-e45d162a56b6` after the
+  Linux and Windows CI jobs passed. Approval used the existing root-only typed
+  queue command under the owner's explicit delegation; no new machine identity
+  or auto-approve policy was introduced.
+- The request result is `succeeded`; the full services-mode host health check
+  passed, and public `/healthz` returned `ok`. The deployed-source inventory
+  records all eight services plus Atlas at this composition revision.
+- Hosting now reads Build Cache's bounded `/v1/status` response and reports
+  configured/current counts separately from service health. Live Build Cache
+  remains healthy with `0/2` snapshots current and `0/2` targets configured.
+- The owner root-operator command remains the available autonomous approval
+  path for an exact pending request. Previously failed dispatch tickets were
+  left unchanged; only the matching, unexpired, CI-passed requests were
+  approved.
+- The earlier recovery, USB, fresh-host drill, and Vapor.lock/worker limitations
+  remain as recorded in the preceding checkpoint; this deploy did not resolve
+  them.
