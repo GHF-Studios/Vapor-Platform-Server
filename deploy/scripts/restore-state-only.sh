@@ -67,21 +67,44 @@ ACTIVE_SERVICES=()
 ACTIVE_TIMERS=()
 ACTIVE_SSH_EXPIRY_TIMERS=()
 REPLACED_PATHS=()
+PREEXISTING_PATHS=()
 MUTATION_STARTED=false
 ROLLBACK_FAILED=false
 
 restore_previous() {
   local relative
   local source target
+  local was_preexisting
+  local existing_relative
   set +e
   for ((index=${#REPLACED_PATHS[@]}-1; index>=0; index--)); do
     relative="${REPLACED_PATHS[index]}"
     target="${STATE_ROOT}/${relative}"
     source="${PRE_RESTORE}/state/${relative}"
-    rm -rf -- "${target}" || ROLLBACK_FAILED=true
     if [ -e "${source}" ] || [ -L "${source}" ]; then
-      mkdir -p -- "$(dirname -- "${target}")" || ROLLBACK_FAILED=true
-      mv -- "${source}" "${target}" || ROLLBACK_FAILED=true
+      if ! rm -rf -- "${target}" \
+        || ! mkdir -p -- "$(dirname -- "${target}")" \
+        || ! mv -- "${source}" "${target}"; then
+        ROLLBACK_FAILED=true
+      fi
+      continue
+    fi
+    was_preexisting=false
+    for existing_relative in "${PREEXISTING_PATHS[@]}"; do
+      if [ "${existing_relative}" = "${relative}" ]; then
+        was_preexisting=true
+        break
+      fi
+    done
+    if [ "${was_preexisting}" = true ]; then
+      # The move into PRE_RESTORE may itself have failed. In that case the
+      # live path is still the only known copy; never delete it during rollback.
+      if [ ! -e "${target}" ] && [ ! -L "${target}" ]; then
+        ROLLBACK_FAILED=true
+      fi
+    else
+      # This path did not exist before the restore, so remove any partial copy.
+      rm -rf -- "${target}" || ROLLBACK_FAILED=true
     fi
   done
   set -e
@@ -173,6 +196,7 @@ for relative in "${REPLACE_PATHS[@]}"; do
   esac
   REPLACED_PATHS+=("${relative}")
   if [ -e "${target}" ] || [ -L "${target}" ]; then
+    PREEXISTING_PATHS+=("${relative}")
     mkdir -p -- "${PRE_RESTORE}/state/$(dirname -- "${relative}")"
     mv -- "${target}" "${PRE_RESTORE}/state/${relative}"
   fi
