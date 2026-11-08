@@ -1,34 +1,44 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-08 20:37 UTC)
+## Current verified state (2026-11-08 21:40 UTC)
 
-- Platform commit `1f5d14cc7eab1ba7891b63ea4368362fb529100e` is live on the
-  main VPS in services mode. Linux and Windows CI passed before deployment;
-  Platform, its composed services, and Caddy were reported healthy after the
-  deployment.
-- The latest state-only VPS snapshot is
-  `vapor-platform-state-20261108T201950Z-5ffb065966e8.tar.gz` (4,796,605
-  bytes; SHA-256
-  `cd550fc74d912279dadb4d068f2f102228c51cf08fe3a402d23828eddb505552`). Its
-  source pin is `1f5d14cc7eab1ba7891b63ea4368362fb529100e`. Two state-only
-  generations are indexed on the USB, totalling 9,593,983 bytes.
-- At 20:37 UTC the installed `Vapor USB Recovery Sync` task completed with
-  Task Scheduler result `0`. It now runs the state-only sync, verified both
-  indexed snapshots and the matching recovery kit, and copied no files because
-  both generations were already current. The kit is pinned to
-  `1f5d14cc7eab1ba7891b63ea4368362fb529100e`.
-- The task's recovery tools now come from the bare Git cache at
-  `C:\Users\David Jackson\Vapor\cache\repositories\Vapor-Platform-Server.git`.
-  This 1.58 MiB cache is under the user-owned Vapor home, tracks Platform
-  `main`, and supplied the pinned commit needed by the recovery kit. The task
-  no longer depends on the disposable Codex worktree or a Documents checkout.
-- `E:\VaporRecovery\last-sync.json` still describes the legacy full-host
-  archive sync; it is not evidence for the state-only run. Existing legacy
-  archives were left untouched. The prior request to erase the USB was allowed
-  by the owner but blocked by the execution environment, so no deletion was
-  performed. The clean-host restore drill remains unproven.
-- The optional build worker and promoted target snapshots remain unavailable;
-  local source builds continue as the fallback.
+- The primary VPS is running the independently managed Platform, Homepage,
+  Docs, Identity, Diagnostics, Registry, Artifact, and Build Cache services.
+  The deployed Platform checkout is pinned to
+  `20d1d234b6b2886250fc2ade4c3d016aebbdf708` in `services` mode. All eight
+  Vapor services were active during the check; the state-only export timer is
+  enabled and active, while the legacy full-host export timer is disabled.
+- The public homepage, `/downloads`, `/docs/`, `/login`, `/dashboard`, and
+  `/operator/login` returned HTTP 200. Unauthenticated `/admin` returned the
+  expected 401. This verifies route availability, not an authenticated browser
+  session or the interactive admin workflows.
+- The latest owner-held state-only snapshot is
+  `E:\VaporRecovery\State-Snapshots\vapor-platform-state-20261108T212902Z-71cc538943e2.tar.gz`
+  (4,798,388 bytes; SHA-256
+  `8f0267596f2af29f00b4ce3bb3a89024787f12c0f622ac5dcf7a265cbf52e024`). Its
+  manifest and matching recovery kit are pinned to the deployed source
+  revision above. The archive validator passed, the USB index contains four
+  state-only generations (19,190,190 bytes), and the latest pointer/checksum
+  match the archive.
+- The hourly `Vapor USB Recovery Sync` now uses the state-only path. The latest
+  sync record reports success, all four generations verified, and the recovery
+  kit present. The old `E:\VaporRecovery\last-sync.json` belongs to the legacy
+  full-host sync and is not authoritative for state-only synchronization.
+  Fifty-three legacy full-host archives (254,801,651 bytes) still remain on the
+  USB; the disabled legacy timer will not create more. They are not part of the
+  state-only set.
+- The state snapshot is structurally valid and owner-held, but a clean-host
+  restore has not been exercised. A disposable second host is still needed to
+  prove the complete source rebuild and state import without touching the live
+  VPS.
+- The VPS has one vCPU, 1.8 GiB RAM, and no swap. It remains the local build
+  fallback for service deployments, but is unsuitable for a concurrent VM
+  worker. Build Cache reports `configured=false` and `current=false` for both
+  supported targets; no promoted snapshots or optional worker are available.
+  Local source builds remain the fallback.
+- Platform main is at `8c1cd265b93847238276d4c3c722672647c3cb9a`; its CI run
+  completed successfully. That commit only updates the Windows USB task and
+  does not require a VPS deployment.
 
 ## Historical checkpoint (2026-11-08 11:09 UTC)
 
