@@ -14,6 +14,22 @@ SPEC.loader.exec_module(DEPLOY_MAP)
 
 
 class ServiceDeployMapTests(unittest.TestCase):
+    def test_platform_gateway_has_a_root_source_service_target(self) -> None:
+        target = DEPLOY_MAP.target_map("platform")
+        self.assertEqual(
+            target,
+            {
+                "kind": "root-service",
+                "package_path": ".",
+                "binary": "vapor_platform_server",
+                "unit": "vapor-platform-server.service",
+                "loopback_health": "http://127.0.0.1:7110/healthz",
+                "public_health": "/healthz",
+                "state_name": "platform",
+                "state_backup": "snapshot",
+            },
+        )
+
     def test_docs_without_trailing_slash_redirects_to_canonical_path(self) -> None:
         for name in ("Caddyfile.services.template", "Caddyfile.services.example"):
             with self.subTest(name=name):
@@ -26,7 +42,7 @@ class ServiceDeployMapTests(unittest.TestCase):
         caddy = (REPO_ROOT / "deploy" / "caddy" / "Caddyfile.services.template").read_text(encoding="utf-8")
         for target, record in DEPLOY_MAP.DEPLOY_TARGETS.items():
             with self.subTest(target=target):
-                self.assertIn(record["kind"], {"service", "static"})
+                self.assertIn(record["kind"], {"service", "root-service", "static"})
                 self.assertTrue(record["package_path"])
                 self.assertTrue(record["public_health"].startswith("/"))
                 if target == "atlas":
@@ -38,8 +54,14 @@ class ServiceDeployMapTests(unittest.TestCase):
                 self.assertTrue(record["unit"].endswith(".service"))
                 self.assertTrue(record["loopback_health"].startswith("http://127.0.0.1:"))
                 self.assertTrue(record["state_name"])
-                unit = (REPO_ROOT / "deploy" / "systemd" / record["unit"]).read_text(encoding="utf-8")
+                unit_file = "vapor-platform-gateway.service" if target == "platform" else record["unit"]
+                unit = (REPO_ROOT / "deploy" / "systemd" / unit_file).read_text(encoding="utf-8")
                 self.assertIn(record["binary"], unit)
+                if target == "platform":
+                    self.assertEqual(record["kind"], "root-service")
+                    self.assertEqual(record["package_path"], ".")
+                    self.assertEqual(record["public_health"], "/healthz")
+                    continue
                 if target in {"docs", "identity", "diagnostics", "registry", "build-cache"}:
                     prefix = {
                         "docs": "/docs/",

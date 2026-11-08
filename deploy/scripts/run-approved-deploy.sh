@@ -152,12 +152,22 @@ else
 import sys
 sys.path.insert(0, sys.argv[1] + "/deploy/scripts")
 from service_deploy_map import target_map
-print(target_map(sys.argv[2])["package_path"])
+target = target_map(sys.argv[2])
+print("" if target["kind"] == "root-service" else target["package_path"])
 PY
 )"
-  git -C "${REQUEST_ROOT}" submodule sync -- "${REQUEST_SUBMODULE_PATH}"
-  if ! git -C "${REQUEST_ROOT}" submodule update --init -- "${REQUEST_SUBMODULE_PATH}"; then
-    fail_claim "could not check out the approved target submodule in the isolated clone"
+  if [ -n "${REQUEST_SUBMODULE_PATH}" ]; then
+    git -C "${REQUEST_ROOT}" submodule sync -- "${REQUEST_SUBMODULE_PATH}"
+    if ! git -C "${REQUEST_ROOT}" submodule update --init -- "${REQUEST_SUBMODULE_PATH}"; then
+      fail_claim "could not check out the approved target submodule in the isolated clone"
+    fi
+  else
+    # The root Platform binary has path dependencies on every service crate,
+    # even when only the services-mode branch is deployed.
+    git -C "${REQUEST_ROOT}" submodule sync
+    if ! git -C "${REQUEST_ROOT}" submodule update --init; then
+      fail_claim "could not check out the approved service crates required to build Platform"
+    fi
   fi
 fi
 if ! python3 "${REQUEST_ROOT}/deploy/scripts/verify-deploy-source.py" \
@@ -172,7 +182,7 @@ import json, sys
 scope = json.loads(sys.argv[1])["request"]["deployment_scope"]
 target_path = sys.argv[2]
 for item in json.loads(sys.argv[1])["request"]["submodules"]:
-    if scope == "full" or item["path"] == target_path:
+    if scope == "full" or not target_path or item["path"] == target_path:
         print(item["path"])
 PY
 ); do

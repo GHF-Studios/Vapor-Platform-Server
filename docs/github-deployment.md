@@ -29,13 +29,18 @@ VPS and never approves or starts a deployment.
 
 Deployment-relevant pushes to `main` run the composed CI before creating a
 request. Changes to one root service submodule select only that service (or
-`atlas` for the static Atlas site). Changes to Platform runtime/deployment
-inputs, or changes to more than one service submodule, select the full
-composition. Unknown root paths also select the full composition so new runtime
-inputs cannot be silently skipped. Root documentation, Markdown files,
-workflow files, and tests do not request a VPS deployment.
+`atlas` for the static Atlas site). Changes limited to the explicit Platform
+server source files select the `platform` target, which builds and restarts
+only `vapor-platform-server.service`. Its isolated build still checks out all
+pinned service crates because the root Cargo package uses them as path
+dependencies; those crates are build inputs, not deployed targets. Shared
+ops-helper modules, deployment inputs, changes to more than one service, or
+Platform source mixed with a service change select the full composition.
+Unknown root paths also select the full composition so new runtime inputs
+cannot be silently skipped. Root documentation, Markdown files, workflow
+files, and tests do not request a VPS deployment.
 `workflow_dispatch` keeps its explicit target selector for an operator-requested
-full or single-service build.
+full or single-service build, including `platform`.
 
 There is no deploy polling timer. The independent state-export timer remains.
 Temporary SSH access is a separate, explicitly approved capability managed in

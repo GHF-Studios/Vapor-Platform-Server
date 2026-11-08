@@ -35,7 +35,8 @@ class DeployedSourceManifestTests(unittest.TestCase):
             root = pathlib.Path(temporary) / "root"
             root.mkdir()
             for mapping in MANIFEST.DEPLOY_TARGETS.values():
-                (root / mapping["package_path"]).mkdir()
+                if mapping["package_path"] != ".":
+                    (root / mapping["package_path"]).mkdir()
             source_commits = {
                 mapping["package_path"]: f"{index:040x}"
                 for index, mapping in enumerate(MANIFEST.DEPLOY_TARGETS.values(), start=1)
@@ -64,7 +65,8 @@ class DeployedSourceManifestTests(unittest.TestCase):
             root = pathlib.Path(temporary) / "root"
             root.mkdir()
             for mapping in MANIFEST.DEPLOY_TARGETS.values():
-                (root / mapping["package_path"]).mkdir()
+                if mapping["package_path"] != ".":
+                    (root / mapping["package_path"]).mkdir()
 
             def fake_git(command, text=True):
                 if command[-2:] == ["rev-parse", "HEAD"] and pathlib.Path(command[2]).resolve() == root.resolve():
@@ -84,7 +86,7 @@ class DeployedSourceManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary) / "manifest.json"
             with self.assertRaisesRegex(MANIFEST.ManifestError, "allowlisted"):
-                MANIFEST.update_target(path, "platform", "a" * 40, "b" * 40)
+                MANIFEST.update_target(path, "unregistered", "a" * 40, "b" * 40)
             with self.assertRaisesRegex(MANIFEST.ManifestError, "full lowercase"):
                 MANIFEST.update_target(path, "identity", "A" * 40, "b" * 40)
 

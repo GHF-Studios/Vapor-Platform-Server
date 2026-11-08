@@ -44,6 +44,31 @@ class DeploymentScopeTests(unittest.TestCase):
             "none",
         )
 
+    def test_explicit_platform_server_sources_select_platform_target(self) -> None:
+        self.assertEqual(
+            SCOPE.classify_changed_paths(
+                ["src/main.rs", "src/admin.rs", "src/deploy_requests.rs"]
+            ),
+            "platform",
+        )
+
+    def test_ops_shared_and_unknown_source_changes_stay_full(self) -> None:
+        for path in (
+            "src/bin/vapor_platform_ops.rs",
+            "src/recovery_status.rs",
+            "src/ssh_policy.rs",
+            "src/ssh_cli.rs",
+            "src/unclassified_module.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(SCOPE.classify_changed_paths([path]), "full")
+
+    def test_platform_source_and_service_change_select_full_composition(self) -> None:
+        self.assertEqual(
+            SCOPE.classify_changed_paths(["src/admin.rs", "Vapor-Identity-Server"]),
+            "full",
+        )
+
     def test_one_service_submodule_change_selects_only_that_service(self) -> None:
         self.assertEqual(
             SCOPE.classify_changed_paths(["Vapor-Identity-Server"]),

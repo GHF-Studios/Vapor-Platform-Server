@@ -27,6 +27,7 @@ pub(crate) const SERVICE_DEPLOY_TARGETS: &[&str] = &[
     "registry",
     "artifact",
     "build-cache",
+    "platform",
 ];
 const SUBMODULES: &[&str] = &[
     "Atlas",

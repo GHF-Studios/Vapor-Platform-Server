@@ -18,7 +18,7 @@ try:
 except ImportError:  # Windows unit tests do not have POSIX group ownership.
     grp = None
 
-from service_deploy_map import target_map
+from service_deploy_map import DEPLOY_TARGETS, target_map
 from deployed_source_manifest import update_target
 
 
@@ -94,7 +94,7 @@ def public_health(runner: CommandRunner, domain: str, path: str) -> None:
 
 
 def check_health(runner: CommandRunner, target: dict[str, str], domain: str) -> None:
-    if target["kind"] == "service":
+    if target["kind"] in {"service", "root-service"}:
         run_checked(runner, ["curl", "--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "8", target["loopback_health"]])
     public_health(runner, domain, target["public_health"])
 
@@ -208,10 +208,14 @@ def verify_source(runner: CommandRunner, source_root: pathlib.Path, root_commit:
     if not package_path.exists() or package_path.is_symlink():
         raise DeploymentError("approved target source is missing or unsafe")
     source_commit = run_checked(runner, ["git", "-C", str(package_path), "rev-parse", "HEAD"])
-    gitlink = run_checked(runner, ["git", "-C", str(source_root), "ls-tree", root_commit, "--", target_map(target)["package_path"]])
-    fields = gitlink.split()
-    if len(fields) != 4 or fields[0] != "160000" or fields[1] != "commit" or fields[2] != source_commit:
-        raise DeploymentError("checked-out service commit differs from its approved Platform gitlink")
+    if target_map(target)["kind"] == "root-service":
+        if source_commit != root_commit:
+            raise DeploymentError("root-service source commit differs from its approved Platform revision")
+    else:
+        gitlink = run_checked(runner, ["git", "-C", str(source_root), "ls-tree", root_commit, "--", target_map(target)["package_path"]])
+        fields = gitlink.split()
+        if len(fields) != 4 or fields[0] != "160000" or fields[1] != "commit" or fields[2] != source_commit:
+            raise DeploymentError("checked-out service commit differs from its approved Platform gitlink")
     return source_commit
 
 
@@ -334,7 +338,7 @@ def deploy_service(args: argparse.Namespace, runner: CommandRunner | None = None
             raise DeploymentError("approved service Cargo manifest is missing or unsafe")
         run_checked(runner, [
             "cargo", "build", "--release", "--locked", "--manifest-path", str(package_manifest),
-            "--target-dir", str(source_root / "target"),
+            "--target-dir", str(source_root / "target"), "--bin", target["binary"],
         ])
         built = source_root / "target" / "release" / target["binary"]
         release_dir = deploy_root / "target" / "release"
@@ -408,7 +412,7 @@ def deploy_service(args: argparse.Namespace, runner: CommandRunner | None = None
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--approved", required=True)
-    parser.add_argument("--target", required=True, choices=sorted({"atlas", "homepage", "docs", "identity", "diagnostics", "registry", "artifact", "build-cache"}))
+    parser.add_argument("--target", required=True, choices=sorted(DEPLOY_TARGETS))
     args = parser.parse_args()
     try:
         if hasattr(os, "geteuid") and os.geteuid() != 0:

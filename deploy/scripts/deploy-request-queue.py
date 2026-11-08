@@ -22,6 +22,7 @@ SERVICE_TARGETS = {
     "registry",
     "artifact",
     "build-cache",
+    "platform",
 }
 DISPATCH_STALE_SECONDS = 30
 

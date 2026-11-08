@@ -209,6 +209,7 @@ class DeployServiceTests(unittest.TestCase):
             self.assertEqual(len(builds), 1)
             build = builds[0]
             self.assertEqual(build[1:4], ["build", "--release", "--locked"])
+            self.assertEqual(build[build.index("--bin") + 1], "vapor_identity_server")
             manifest_path = pathlib.Path(build[build.index("--manifest-path") + 1])
             self.assertEqual(manifest_path.parent.name, "Vapor-Identity-Server")
             self.assertEqual(manifest_path.name, "Cargo.toml")
@@ -223,6 +224,81 @@ class DeployServiceTests(unittest.TestCase):
                 "vapor-identity.service", "vapor-identity.service",
             ])
             self.assertFalse((pathlib.Path(environment["VAPOR_STATE_ROOT"]) / "operations" / "scoped-deploy-rollback" / REQUEST).exists())
+        finally:
+            temporary.cleanup()
+
+    def _platform_fixture(self, runner: FakeRunner):
+        temporary = tempfile.TemporaryDirectory()
+        root = pathlib.Path(temporary.name)
+        source = root / "source"
+        source.mkdir()
+        (source / "Cargo.toml").write_text("[package]\nname='vapor_platform_server'\n", encoding="utf-8")
+        built = source / "target" / "release" / "vapor_platform_server"
+        built.parent.mkdir(parents=True)
+        built.write_bytes(b"new platform binary")
+        deploy_root = root / "deploy"
+        stable = deploy_root / "target" / "release" / "vapor_platform_server"
+        stable.parent.mkdir(parents=True)
+        stable.write_bytes(b"old platform binary")
+        state_root = root / "state"
+        state = state_root / "platform"
+        state.mkdir(parents=True)
+        (state / "platform.sqlite3").write_bytes(b"platform state")
+        operations = state_root / "operations"
+        operations.mkdir(parents=True)
+        manifest = operations / "deployed-sources.json"
+        manifest.write_text(
+            '{"schema_version":1,"targets":{"platform":{"composition_commit":"'
+            + "c" * 40
+            + '","source_commit":"'
+            + "d" * 40
+            + '","deployed_at_utc":"2026-11-07T00:00:00Z"}}}\n',
+            encoding="utf-8",
+        )
+        environment = {
+            "VAPOR_APPROVED_SOURCE_ROOT": str(source),
+            "VAPOR_DEPLOY_ROOT": str(deploy_root),
+            "VAPOR_STATE_ROOT": str(state_root),
+            "VAPOR_PLATFORM_DB": str(root / "platform.sqlite3"),
+            "VAPOR_APPROVED_DEPLOY_ID": REQUEST,
+            "VAPOR_APPROVED_DEPLOY_VERSION": "3",
+            "VAPOR_SERVER_MODE": "services",
+            "VAPOR_DEPLOYMENT_SCOPE": "service",
+            "VAPOR_SERVICE_TARGET": "platform",
+            "VAPOR_APPROVED_TREE": ROOT_TREE,
+            "VAPOR_DOMAIN": "vapor.example.test",
+            "VAPOR_GROUP": "root",
+        }
+        return temporary, environment, stable, state, manifest, source
+
+    def test_platform_target_builds_root_server_without_gitlink_and_restarts_only_gateway(self) -> None:
+        runner = FakeRunner()
+        temporary, environment, stable, state, manifest, source = self._platform_fixture(runner)
+        try:
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                 mock.patch.object(DEPLOY, "set_runtime_owner_group"), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                result = DEPLOY.deploy_service(
+                    type("Args", (), {"approved": ROOT_COMMIT, "target": "platform"})(), runner
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(stable.read_bytes(), b"new platform binary")
+            self.assertEqual((state / "platform.sqlite3").read_bytes(), b"platform state")
+            self.assertIn(ROOT_COMMIT, manifest.read_text(encoding="utf-8"))
+            self.assertFalse(any(call[0] == "git" and "ls-tree" in call for call in runner.calls))
+            builds = [call for call in runner.calls if call[0] == "cargo"]
+            self.assertEqual(len(builds), 1)
+            build = builds[0]
+            self.assertEqual(build[build.index("--bin") + 1], "vapor_platform_server")
+            self.assertEqual(
+                pathlib.Path(build[build.index("--manifest-path") + 1]),
+                source / "Cargo.toml",
+            )
+            unit_calls = [call[-1] for call in runner.calls if call[0] == "systemctl"]
+            self.assertEqual(unit_calls, [
+                "vapor-platform-server.service", "vapor-platform-server.service",
+                "vapor-platform-server.service", "vapor-platform-server.service",
+            ])
         finally:
             temporary.cleanup()
 

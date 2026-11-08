@@ -87,6 +87,7 @@ class ApprovedDeployExecTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("atlas", workflow)
         self.assertIn("build-cache", workflow)
+        self.assertIn("platform", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn('"deployment_scope": scope', workflow)
         self.assertIn('"service_target": None if scope == "full" else target', workflow)
@@ -100,7 +101,9 @@ class ApprovedDeployExecTests(unittest.TestCase):
         self.assertLess(full_branch, checkout)
         self.assertLess(checkout, scoped_clone)
         self.assertIn('git -C "${REQUEST_ROOT}" submodule update --init -- "${REQUEST_SUBMODULE_PATH}"', worker)
-        self.assertIn('scope == "full" or item["path"] == target_path', worker)
+        self.assertIn('scope == "full" or not target_path or item["path"] == target_path', worker)
+        self.assertIn('target["kind"] == "root-service"', worker)
+        self.assertIn('git -C "${REQUEST_ROOT}" submodule update --init;', worker)
         self.assertNotIn('worktree add', worker)
         self.assertIn('VAPOR_APPROVED_SOURCE_ROOT="${REQUEST_ROOT}"', worker)
 

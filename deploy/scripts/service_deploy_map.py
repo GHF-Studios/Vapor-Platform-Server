@@ -88,6 +88,16 @@ DEPLOY_TARGETS = {
         "state_name": "build-cache",
         "state_backup": "preserve-in-place",
     },
+    "platform": {
+        "kind": "root-service",
+        "package_path": ".",
+        "binary": "vapor_platform_server",
+        "unit": "vapor-platform-server.service",
+        "loopback_health": "http://127.0.0.1:7110/healthz",
+        "public_health": "/healthz",
+        "state_name": "platform",
+        "state_backup": "snapshot",
+    },
 }
 
 

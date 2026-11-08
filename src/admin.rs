@@ -3359,7 +3359,7 @@ mod tests {
     fn shared_shell_exposes_the_server_owned_deployment_target_allowlist() {
         let header = super::render_admin_header("/admin/approvals");
         assert!(header.contains(
-            "data-deployment-targets=\"atlas,homepage,docs,identity,diagnostics,registry,artifact,build-cache\""
+        "data-deployment-targets=\"atlas,homepage,docs,identity,diagnostics,registry,artifact,build-cache,platform\""
         ));
     }
 

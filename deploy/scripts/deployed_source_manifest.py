@@ -21,16 +21,7 @@ except ImportError:  # Windows unit tests do not have POSIX group ownership.
     grp = None
 
 
-TARGETS = {
-    "atlas",
-    "homepage",
-    "docs",
-    "identity",
-    "diagnostics",
-    "registry",
-    "artifact",
-    "build-cache",
-}
+TARGETS = set(DEPLOY_TARGETS)
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -142,6 +133,14 @@ def update_all_from_root(path: pathlib.Path, root: pathlib.Path) -> None:
         package = root / package_path
         if package.is_symlink() or not package.is_dir():
             raise ManifestError(f"deployed source is missing for {target}")
+        if mapping["kind"] == "root-service":
+            source_commit = composition_commit
+            entries[target] = {
+                "composition_commit": composition_commit,
+                "source_commit": source_commit,
+                "deployed_at_utc": now,
+            }
+            continue
         source_commit = subprocess.check_output(
             ["git", "-C", str(package), "rev-parse", "HEAD"], text=True
         ).strip()

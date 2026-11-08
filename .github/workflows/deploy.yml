@@ -27,6 +27,7 @@ on:
           - registry
           - artifact
           - build-cache
+          - platform
 
 permissions:
   contents: read
@@ -118,6 +119,7 @@ jobs:
           service_targets = {
               "atlas", "homepage", "docs", "identity", "diagnostics",
               "registry", "artifact", "build-cache",
+              "platform",
           }
           if target != "full" and target not in service_targets:
               raise SystemExit("unsupported deployment target")

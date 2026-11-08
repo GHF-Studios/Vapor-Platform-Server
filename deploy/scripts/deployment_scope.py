@@ -26,6 +26,22 @@ OFFLINE_RECOVERY_PATHS = {
     "deploy/scripts/recover-state-only-host.sh",
     "deploy/scripts/backup-state-only-to-usb.ps1",
 }
+PLATFORM_SERVER_SOURCES = {
+    "src/main.rs",
+    "src/admin.rs",
+    "src/admin_auth.rs",
+    "src/admin_gateway.rs",
+    "src/deploy_request_schema.rs",
+    "src/deploy_requests.rs",
+    "src/emergency_console.rs",
+    "src/operation_history.rs",
+    "src/pagination.rs",
+    "src/platform_ops_client.rs",
+    "src/recovery.rs",
+    "src/ssh_access.rs",
+    "src/ssh_key.rs",
+    "src/ssh_schema.rs",
+}
 
 
 def _is_non_deploy_path(path: str) -> bool:
@@ -58,6 +74,10 @@ def classify_changed_paths(paths: Iterable[str]) -> str:
             path = path[2:]
         path = path.lstrip("/")
         if _is_non_deploy_path(path):
+            continue
+
+        if path in PLATFORM_SERVER_SOURCES:
+            changed_targets.add("platform")
             continue
 
         root = path.partition("/")[0]
