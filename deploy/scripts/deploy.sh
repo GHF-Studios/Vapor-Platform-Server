@@ -275,7 +275,7 @@ fi
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-state-backup.sh"
 
 if [ "${RECOVERY_STAGING}" = "1" ]; then
-  echo "deploy: recovery runtime staged; restore-state.sh owns activation"
+  echo "deploy: recovery runtime staged; restore-state-only.sh owns activation"
   exit 0
 fi
 

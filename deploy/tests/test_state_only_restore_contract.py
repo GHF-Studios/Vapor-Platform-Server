@@ -47,11 +47,26 @@ class StateOnlyRestoreContractTests(unittest.TestCase):
         self.assertLess(restore.index(platform_check), restore.index(lock))
         self.assertLess(restore.index(gateway_check), restore.index(lock))
 
+    def test_fresh_host_restore_reconciles_old_ssh_grants_and_activates_only_after_state_copy(self) -> None:
+        restore = (REPO_ROOT / "deploy/scripts/restore-state-only.sh").read_text()
+        reconcile = 'reconcile-fresh-host-ssh.py" "${BUNDLE_STATE}/platform/platform.sqlite3'
+        copy_state = 'cp -a -- "${source}" "${target}"'
+        activate = 'systemctl enable --now vapor-platform-server.service'
+        health = '"${SCRIPT_DIR}/health-check.sh"'
+        self.assertIn("--fresh-host", restore)
+        self.assertIn(reconcile, restore)
+        self.assertLess(restore.index(reconcile), restore.index(copy_state))
+        self.assertLess(restore.index(copy_state), restore.index(activate))
+        self.assertLess(restore.index(activate), restore.index(health))
+        self.assertIn("services to remain staged and inactive", restore)
+
     def test_state_only_export_is_separate_from_legacy_archive_storage(self) -> None:
         export = (REPO_ROOT / "deploy/scripts/export-state-only.sh").read_text()
         self.assertIn("/state-only", export)
         self.assertIn("vapor-platform-state-", export)
         self.assertIn("state_catalog_version", export)
+        self.assertIn("platform_source_commit", export)
+        self.assertIn("rev-parse --verify 'HEAD^{commit}'", export)
         self.assertNotIn('cp -a "${VAPOR_CONFIG_DIR}', export)
         self.assertNotIn("/etc/caddy", export)
         self.assertNotIn("recovery-kit", export)

@@ -145,14 +145,45 @@ def _read_member(archive: tarfile.TarFile, expected_name: str, limit: int) -> by
 
 
 def read_bundle_source_commit(path: pathlib.Path) -> str:
-    """Read the root revision needed to fetch the bundle's pinned validator."""
+    """Read the exact Platform revision required to rebuild either bundle schema."""
     try:
         with tarfile.open(path, "r:gz") as archive:
             manifest_bytes = _read_member(archive, f"{ROOT}/manifest.toml", MAX_MANIFEST_BYTES)
-            revision_bytes = _read_member(archive, f"{ROOT}/source/root-commit.txt", MAX_REVISION_BYTES)
         manifest = tomllib.loads(manifest_bytes.decode("utf-8", errors="strict"))
+        if manifest.get("schema_version") == 3:
+            with tarfile.open(path, "r:gz") as archive:
+                deployed_sources_bytes = _read_member(
+                    archive, f"{ROOT}/state/operations/deployed-sources.json", MAX_MANIFEST_BYTES
+                )
+            deployed_sources = json.loads(deployed_sources_bytes.decode("utf-8", errors="strict"))
+            targets = deployed_sources.get("targets") if isinstance(deployed_sources, dict) else None
+            if (
+                not isinstance(deployed_sources, dict)
+                or deployed_sources.get("schema_version") != 1
+                or not isinstance(targets, dict)
+                or not targets
+            ):
+                raise MetadataError("legacy state-only snapshot has no usable Platform source revision")
+            revisions = {
+                entry.get("composition_commit")
+                for entry in targets.values()
+                if isinstance(entry, dict)
+            }
+            if len(revisions) != 1:
+                raise MetadataError("legacy state-only snapshot has inconsistent Platform source revisions")
+            revision = next(iter(revisions))
+            if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+                raise MetadataError("legacy state-only Platform source revision is invalid")
+            return revision
+        if manifest.get("schema_version") == 4:
+            revision = manifest.get("platform_source_commit")
+            if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+                raise MetadataError("state-only Platform source revision is invalid")
+            return revision
+        with tarfile.open(path, "r:gz") as archive:
+            revision_bytes = _read_member(archive, f"{ROOT}/source/root-commit.txt", MAX_REVISION_BYTES)
         revision = revision_bytes.decode("ascii", errors="strict").strip()
-    except (OSError, tarfile.TarError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+    except (OSError, tarfile.TarError, UnicodeDecodeError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
         raise MetadataError("bundle bootstrap source pin is unreadable") from error
     declared = manifest.get("deploy_root_commit")
     if manifest.get("schema_version") != 2:

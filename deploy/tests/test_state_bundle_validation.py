@@ -281,8 +281,9 @@ class StateBundleValidationTests(unittest.TestCase):
                 validator.validate_bundle(bundle)
 
     def test_accepts_state_only_schema_with_allowlisted_service_data(self) -> None:
-        manifest = f'''schema_version = 3
+        manifest = f'''schema_version = 4
 created_at_utc = "2026-11-08T00:00:00Z"
+platform_source_commit = "972b86ab60414f12e75132c2bdca4ac63b0a8744"
 state_catalog_version = 1
 secrets_included = false
 archive_encryption = "none"
@@ -310,9 +311,32 @@ included_categories = ["state"]
         ])
         validator.validate_bundle(bundle)
 
-    def test_state_only_schema_rejects_host_config_and_source_categories(self) -> None:
+    def test_accepts_legacy_state_only_schema_three_without_source_revision(self) -> None:
         manifest = b'''schema_version = 3
 created_at_utc = "2026-11-08T00:00:00Z"
+state_catalog_version = 1
+secrets_included = false
+archive_encryption = "none"
+build_outputs_excluded = true
+config_included = false
+host_routing_included = false
+source_pins_included = false
+recovery_kit_included = false
+included_categories = ["state"]
+'''
+        bundle = make_bundle([
+            (ROOT, "dir", None),
+            (f"{ROOT}/manifest.toml", "file", manifest),
+            (f"{ROOT}/state/identity/identity.sqlite3", "file", b"db"),
+            (f"{ROOT}/state/platform/platform.sqlite3", "file", b"db"),
+            (f"{ROOT}/state/registry/registry.sqlite3", "file", b"db"),
+        ])
+        validator.validate_bundle(bundle)
+
+    def test_state_only_schema_rejects_host_config_and_source_categories(self) -> None:
+        manifest = b'''schema_version = 4
+created_at_utc = "2026-11-08T00:00:00Z"
+platform_source_commit = "972b86ab60414f12e75132c2bdca4ac63b0a8744"
 state_catalog_version = 1
 secrets_included = false
 archive_encryption = "none"
@@ -335,8 +359,9 @@ included_categories = ["state"]
             validator.validate_bundle(bundle)
 
     def test_state_only_schema_rejects_unclassified_paths(self) -> None:
-        manifest = b'''schema_version = 3
+        manifest = b'''schema_version = 4
 created_at_utc = "2026-11-08T00:00:00Z"
+platform_source_commit = "972b86ab60414f12e75132c2bdca4ac63b0a8744"
 state_catalog_version = 1
 secrets_included = false
 archive_encryption = "none"
@@ -357,6 +382,32 @@ included_categories = ["state"]
         ])
         with self.assertRaisesRegex(validator.ValidationError, "state-only"):
             validator.validate_bundle(bundle)
+
+    def test_state_only_schema_requires_full_platform_source_revision(self) -> None:
+        for source_commit in ("", "972b86a", "g" * 40):
+            with self.subTest(source_commit=source_commit):
+                manifest = f'''schema_version = 4
+created_at_utc = "2026-11-08T00:00:00Z"
+platform_source_commit = "{source_commit}"
+state_catalog_version = 1
+secrets_included = false
+archive_encryption = "none"
+build_outputs_excluded = true
+config_included = false
+host_routing_included = false
+source_pins_included = false
+recovery_kit_included = false
+included_categories = ["state"]
+'''.encode()
+                bundle = make_bundle([
+                    (ROOT, "dir", None),
+                    (f"{ROOT}/manifest.toml", "file", manifest),
+                    (f"{ROOT}/state/identity/identity.sqlite3", "file", b"db"),
+                    (f"{ROOT}/state/platform/platform.sqlite3", "file", b"db"),
+                    (f"{ROOT}/state/registry/registry.sqlite3", "file", b"db"),
+                ])
+                with self.assertRaisesRegex(validator.ValidationError, "source revision"):
+                    validator.validate_bundle(bundle)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class IdentityOriginConfigurationTests(unittest.TestCase):
+    def test_fresh_bootstrap_persists_owner_entered_provider_credentials_without_echoing_them(self) -> None:
+        bootstrap = (ROOT / "deploy" / "scripts" / "bootstrap-ubuntu.sh").read_text(encoding="utf-8")
+        self.assertIn("VAPOR_IDENTITY_STEAM_WEB_API_KEY=${VAPOR_IDENTITY_STEAM_WEB_API_KEY}", bootstrap)
+        self.assertIn("VAPOR_IDENTITY_GITHUB_CLIENT_ID=${VAPOR_IDENTITY_GITHUB_CLIENT_ID}", bootstrap)
+        self.assertIn("VAPOR_IDENTITY_GITHUB_CLIENT_SECRET=${VAPOR_IDENTITY_GITHUB_CLIENT_SECRET}", bootstrap)
+        self.assertIn("read -r -s -p 'Steam Web API key (hidden): '", (ROOT / "deploy" / "scripts" / "recover-state-only-host.sh").read_text(encoding="utf-8"))
+
     def test_bootstrap_keeps_user_and_operator_origins_distinct(self) -> None:
         bootstrap = (ROOT / "deploy" / "scripts" / "bootstrap-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn("VAPOR_IDENTITY_PUBLIC_ORIGIN=https://${VAPOR_DOMAIN}", bootstrap)

@@ -10,7 +10,7 @@ Make recovery understandable and repeatable without copying the operating system
 
 - Keep frequent scheduled snapshots while pre-alpha state is changing quickly.
 - Make backup status and deliberate snapshot/restore actions visible in the high-security Recovery area.
-- New archives contain durable product state only. Do not include `/etc/vapor-server`, Caddy/systemd files, source checkouts, toolchains, recovery-kit scripts, or private configuration values.
+- New archives contain durable product state only. Do not include `/etc/vapor-server`, Caddy/systemd files, source checkouts, toolchains, recovery-kit scripts, or private configuration values. Schema 4 records only the Platform commit identifier needed to rebuild the source; it does not include source pins or source contents.
 - Keep the owner USB copy unencrypted and physically controlled. This is backup storage, not an authentication key or hardware security module.
 - Preserve currently existing archives until a new-format export and restore have both been validated. Do not silently delete the only existing off-host recovery copies during migration.
 - Rebuild host packages, services, routing, and binaries from the current Platform setup/install flow. Re-enter credentials through that flow; provider credentials are not restored from the state archive.
@@ -23,7 +23,7 @@ The archive is based on the service-owned persistent state root, with explicit i
 - Keep publication data only when it is authoritative, mutable state and cannot be recovered from the official release workflow.
 - Exclude build-cache snapshots, temporary candidates, process/runtime files, generated logs, transient diagnostics, host configuration, and rebuildable application artifacts.
 - Each service must document its state paths and restore behavior. A new persistent path is not silently included merely because it is below a broad directory.
-- The archive manifest may contain schema version, creation time, source revision identifier, category names, and file sizes/checksums. It must not contain credential values. It is not a source or host backup.
+- The archive manifest may contain schema version, creation time, the Platform source revision identifier, category names, and file sizes/checksums. It must not contain credential values. It is not a source or host backup.
 
 ### Current VPS inventory (read-only inspection, 2026-11-08)
 
@@ -58,11 +58,11 @@ The archive is based on the service-owned persistent state root, with explicit i
 
 ## Compatibility and migration
 
-- New exports use schema version 3, a `vapor-platform-state-*` filename, and an isolated `state-only/` index and pointer. They cannot overwrite or age out the current full-host archive generations.
+- Legacy state exports use schema version 3. New exports use schema version 4, which adds an exact Platform source revision identifier, with a `vapor-platform-state-*` filename and isolated `state-only/` index and pointer. Schema 3 remains readable when its deployed-source inventory supplies one consistent Platform revision. Neither state format can overwrite or age out the full-host archive generations.
 - Hourly state exports must not stop application services. Each SQLite database is snapshotted online and validated before publication.
 - The currently retained full-host archives are legacy evidence. Keep them read-only during the transition; deployment disables the old timer so no more secret-bearing full-host archives are created.
 - The restore path must state which format it is handling and must never infer host configuration from a state-only archive.
-- Switch owner USB sync to `state-only/latest.json` only after the owner verifies a new state-only copy. Leave existing USB generations untouched; the new sync writes to a separate `State-Snapshots/` directory.
+- The owner USB sync writes state snapshots to `State-Snapshots/` and a matching source-pinned recovery launcher to `Recovery-Kit/state-only/<commit>/`. It does not prune the legacy generations.
 
 ## Alternatives considered
 
@@ -73,8 +73,9 @@ The archive is based on the service-owned persistent state root, with explicit i
 ## Acceptance
 
 - A new archive has no config, host, source checkout, toolchain, recovery-kit, or credential entries.
+- A schema-4 archive binds the exact Platform source commit used by the matching recovery kit without embedding code or host configuration.
 - The manifest and validator distinguish state-only schema from any retained legacy archive.
-- A clean configured host can import the archive without overwriting host/service configuration.
+- A clean Ubuntu x86_64 host can be rebuilt from the pinned source, prompt for provider credentials without echoing them, and import the archive without restoring host configuration from the archive.
 - Failed import restores the prior state and leaves the pre-restore copy available.
 - The Recovery page exposes compact status and explicit snapshot/download/restore actions with visible consequences and no generic shell access.
 - The Windows USB flow verifies the new format and does not prune old generations during migration.

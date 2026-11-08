@@ -55,6 +55,45 @@ def make_bundle(path: pathlib.Path, *, mode: str = "services", source_commit: st
 
 
 class RecoveryBundleMetadataTests(unittest.TestCase):
+    def test_reads_exact_platform_revision_from_state_only_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = pathlib.Path(temporary) / "state.tar.gz"
+            manifest = (
+                'schema_version = 4\n'
+                'platform_source_commit = "' + COMMIT + '"\n'
+            ).encode()
+            with tarfile.open(bundle, "w:gz") as archive:
+                _file(archive, f"{ROOT}/manifest.toml", manifest)
+
+            self.assertEqual(METADATA.read_bundle_source_commit(bundle), COMMIT)
+
+    def test_reads_platform_revision_from_legacy_state_only_source_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = pathlib.Path(temporary) / "legacy-state.tar.gz"
+            manifest = b'schema_version = 3\n'
+            deployed_sources = (
+                '{"schema_version":1,"targets":{"identity":{"composition_commit":"'
+                + COMMIT
+                + '","source_commit":"'
+                + COMMIT
+                + '","deployed_at_utc":"2026-11-08T00:00:00Z"}}}'
+            ).encode()
+            with tarfile.open(bundle, "w:gz") as archive:
+                _file(archive, f"{ROOT}/manifest.toml", manifest)
+                _file(archive, f"{ROOT}/state/operations/deployed-sources.json", deployed_sources)
+
+            self.assertEqual(METADATA.read_bundle_source_commit(bundle), COMMIT)
+
+    def test_state_only_source_revision_must_be_a_full_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = pathlib.Path(temporary) / "state.tar.gz"
+            manifest = b'schema_version = 4\nplatform_source_commit = "bad"\n'
+            with tarfile.open(bundle, "w:gz") as archive:
+                _file(archive, f"{ROOT}/manifest.toml", manifest)
+
+            with self.assertRaisesRegex(METADATA.MetadataError, "source revision"):
+                METADATA.read_bundle_source_commit(bundle)
+
     def test_recovery_guide_requires_the_bundle_recorded_ubuntu_release(self) -> None:
         guide = " ".join(
             (REPO_ROOT / "deploy" / "scripts" / "README.txt")

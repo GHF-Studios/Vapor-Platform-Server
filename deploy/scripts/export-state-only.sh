@@ -79,14 +79,20 @@ copy_tree updates/releases
 python3 "${SCRIPT_DIR}/validate-state-databases.py" "${BUNDLE_ROOT}/state"
 
 CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-python3 - "${BUNDLE_ROOT}/manifest.toml" "${CREATED}" <<'PY'
+PLATFORM_SOURCE_COMMIT="$(git -C "${SCRIPT_DIR}/../.." rev-parse --verify 'HEAD^{commit}')"
+[[ "${PLATFORM_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "error: Platform checkout does not have a full lowercase source revision" >&2
+  exit 1
+}
+python3 - "${BUNDLE_ROOT}/manifest.toml" "${CREATED}" "${PLATFORM_SOURCE_COMMIT}" <<'PY'
 import json
 import sys
 
-path, created_at = sys.argv[1:]
+path, created_at, source_commit = sys.argv[1:]
 manifest = {
-    "schema_version": 3,
+    "schema_version": 4,
     "created_at_utc": created_at,
+    "platform_source_commit": source_commit,
     "state_catalog_version": 1,
     "secrets_included": False,
     "archive_encryption": "none",
@@ -158,7 +164,7 @@ latest_tmp = root / ".state-latest.json.tmp"
 index_tmp.write_text(json.dumps({"schema_version": 1, "archives": records}, separators=(",", ":")) + "\n", encoding="utf-8")
 latest_tmp.write_text(json.dumps({"schema_version": 1, "archive": incoming, "sha256": digest,
                                  "size_bytes": size, "created_at_utc": created,
-                                 "archive_schema_version": 3}, separators=(",", ":")) + "\n", encoding="utf-8")
+                                 "archive_schema_version": 4}, separators=(",", ":")) + "\n", encoding="utf-8")
 index_tmp.chmod(0o600)
 latest_tmp.chmod(0o600)
 index_tmp.replace(root / "index.json")

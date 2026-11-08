@@ -9,15 +9,17 @@ source "${SCRIPT_DIR}/ssh-expiry-quiescence.sh"
 require_root
 BUNDLE=""
 CONFIRMED=false
+FRESH_HOST=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --bundle) [ "$#" -ge 2 ] || { echo "usage: restore-state-only.sh --bundle PATH --yes" >&2; exit 2; }; BUNDLE="$2"; shift 2 ;;
     --yes) CONFIRMED=true; shift ;;
+    --fresh-host) FRESH_HOST=true; shift ;;
     -h|--help) echo "usage: restore-state-only.sh --bundle PATH --yes"; exit 0 ;;
     *) echo "usage: restore-state-only.sh --bundle PATH --yes" >&2; exit 2 ;;
   esac
 done
-[ -n "${BUNDLE}" ] && [ "${CONFIRMED}" = true ] || { echo "usage: restore-state-only.sh --bundle PATH --yes" >&2; exit 2; }
+[ -n "${BUNDLE}" ] && [ "${CONFIRMED}" = true ] || { echo "usage: restore-state-only.sh --bundle PATH --yes [--fresh-host]" >&2; exit 2; }
 [ -f "${BUNDLE}" ] && [ ! -L "${BUNDLE}" ] || { echo "error: archive is missing or unsafe" >&2; exit 1; }
 python3 "${SCRIPT_DIR}/recovery_bundle_metadata.py" --check-archive-checksum "${BUNDLE}"
 python3 "${SCRIPT_DIR}/state-bundle-validate.py" "${BUNDLE}"
@@ -38,14 +40,23 @@ for required_unit in vapor-platform-server.service caddy.service; do
     exit 1
   }
 done
-systemctl is-active --quiet vapor-platform-server.service || {
-  echo "error: host setup is incomplete; Platform service is not active" >&2
-  exit 1
-}
-systemctl is-active --quiet caddy.service || {
-  echo "error: host setup is incomplete; HTTPS gateway is not active" >&2
-  exit 1
-}
+if [ "${FRESH_HOST}" = true ]; then
+  for unit in vapor-platform-server.service caddy.service; do
+    if systemctl is-active --quiet "${unit}"; then
+      echo "error: fresh-host restore requires services to remain staged and inactive" >&2
+      exit 1
+    fi
+  done
+else
+  systemctl is-active --quiet vapor-platform-server.service || {
+    echo "error: host setup is incomplete; Platform service is not active" >&2
+    exit 1
+  }
+  systemctl is-active --quiet caddy.service || {
+    echo "error: host setup is incomplete; HTTPS gateway is not active" >&2
+    exit 1
+  }
+fi
 if ! command -v flock >/dev/null 2>&1; then echo "error: flock is required for state restore locking" >&2; exit 1; fi
 exec 9>/run/vapor-server-deploy.lock
 if ! flock -n 9; then echo "error: Vapor deploy/state lock is already held; retry restore later" >&2; exit 1; fi
@@ -57,6 +68,9 @@ install_dir root root 0700 "${PRE_RESTORE}"
 tar -xzf "${BUNDLE}" -C "${TMP_DIR}"
 BUNDLE_STATE="${TMP_DIR}/vapor-platform-recovery/state"
 python3 "${SCRIPT_DIR}/validate-state-databases.py" "${BUNDLE_STATE}"
+if [ "${FRESH_HOST}" = true ]; then
+  python3 "${SCRIPT_DIR}/reconcile-fresh-host-ssh.py" "${BUNDLE_STATE}/platform/platform.sqlite3"
+fi
 SERVICES=(
   vapor-homepage.service vapor-docs.service vapor-identity.service
   vapor-diagnostics.service vapor-registry.service vapor-artifact.service
@@ -125,6 +139,13 @@ cleanup() {
     for timer in "${TIMERS[@]}"; do
       if systemctl is-active --quiet "${timer}"; then systemctl stop "${timer}" || ROLLBACK_FAILED=true; fi
     done
+    if [ "${FRESH_HOST}" = true ]; then
+      for unit in "${SERVICES[@]}" caddy.service vapor-platform-ops.socket vapor-state-only-export.timer; do
+        if systemctl cat "${unit}" >/dev/null 2>&1; then
+          systemctl disable --now "${unit}" >/dev/null 2>&1 || ROLLBACK_FAILED=true
+        fi
+      done
+    fi
     if pause_temporary_ssh_expiry; then
       restore_previous || ROLLBACK_FAILED=true
     else
@@ -212,8 +233,20 @@ for path in identity platform registry docs updates operations; do
     chown -R "${VAPOR_USER}:${VAPOR_GROUP}" "${STATE_ROOT}/${path}"
   fi
 done
-for service in "${ACTIVE_SERVICES[@]}"; do systemctl start "${service}"; done
-for timer in "${ACTIVE_TIMERS[@]}"; do systemctl start "${timer}"; done
+if [ "${FRESH_HOST}" = true ]; then
+  if [ "${VAPOR_SERVER_MODE}" = services ]; then
+    systemctl enable --now \
+      vapor-homepage.service vapor-docs.service vapor-identity.service \
+      vapor-diagnostics.service vapor-registry.service vapor-artifact.service \
+      vapor-build-cache.service vapor-platform-server.service
+  else
+    systemctl enable --now vapor-platform-server.service
+  fi
+  systemctl enable --now caddy.service vapor-platform-ops.socket vapor-state-only-export.timer
+else
+  for service in "${ACTIVE_SERVICES[@]}"; do systemctl start "${service}"; done
+  for timer in "${ACTIVE_TIMERS[@]}"; do systemctl start "${timer}"; done
+fi
 restart_temporary_ssh_expiry
 ACTIVE_SSH_EXPIRY_TIMERS=()
 "${SCRIPT_DIR}/health-check.sh"

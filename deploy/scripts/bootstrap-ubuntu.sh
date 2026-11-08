@@ -7,6 +7,21 @@ source "${SCRIPT_DIR}/lib.sh"
 
 require_root
 
+VAPOR_IDENTITY_STEAM_WEB_API_KEY="${VAPOR_IDENTITY_STEAM_WEB_API_KEY:-}"
+VAPOR_IDENTITY_GITHUB_CLIENT_ID="${VAPOR_IDENTITY_GITHUB_CLIENT_ID:-}"
+VAPOR_IDENTITY_GITHUB_CLIENT_SECRET="${VAPOR_IDENTITY_GITHUB_CLIENT_SECRET:-}"
+if [ -n "${VAPOR_IDENTITY_STEAM_WEB_API_KEY}" ] && [[ ! "${VAPOR_IDENTITY_STEAM_WEB_API_KEY}" =~ ^[A-Fa-f0-9]{32}$ ]]; then
+  echo "error: Steam Web API key must be 32 hexadecimal characters" >&2
+  exit 1
+fi
+if [ -n "${VAPOR_IDENTITY_GITHUB_CLIENT_ID}" ] || [ -n "${VAPOR_IDENTITY_GITHUB_CLIENT_SECRET}" ]; then
+  [[ "${VAPOR_IDENTITY_GITHUB_CLIENT_ID}" =~ ^[A-Za-z0-9._-]{1,128}$ ]] \
+    && [[ "${VAPOR_IDENTITY_GITHUB_CLIENT_SECRET}" =~ ^[A-Za-z0-9._-]{1,256}$ ]] || {
+    echo "error: GitHub OAuth client ID and secret must both use the supported character set" >&2
+    exit 1
+  }
+fi
+
 if ! grep -q '^ID=ubuntu$' /etc/os-release; then
   echo "error: bootstrap-ubuntu.sh supports Ubuntu only" >&2
   exit 1
@@ -200,11 +215,10 @@ VAPOR_IDENTITY_COOKIE_SECURE=true
 # Public accounts and root operators have distinct host-only browser sessions.
 VAPOR_IDENTITY_PUBLIC_ORIGIN=https://${VAPOR_DOMAIN}
 VAPOR_IDENTITY_OPERATOR_ORIGIN=${VAPOR_PLATFORM_ADMIN_ORIGIN}
-# Set on the server when available; never commit the value:
-VAPOR_IDENTITY_STEAM_WEB_API_KEY=
-# Set after creating the GitHub OAuth/GitHub App registration:
-VAPOR_IDENTITY_GITHUB_CLIENT_ID=
-VAPOR_IDENTITY_GITHUB_CLIENT_SECRET="
+# Values are supplied by the owner during first-time setup; never commit them:
+VAPOR_IDENTITY_STEAM_WEB_API_KEY=${VAPOR_IDENTITY_STEAM_WEB_API_KEY}
+VAPOR_IDENTITY_GITHUB_CLIENT_ID=${VAPOR_IDENTITY_GITHUB_CLIENT_ID}
+VAPOR_IDENTITY_GITHUB_CLIENT_SECRET=${VAPOR_IDENTITY_GITHUB_CLIENT_SECRET}"
 
 install_secret_env "${VAPOR_CONFIG_DIR}/diagnostics.env" \
 "VAPOR_DIAGNOSTICS_BIND=127.0.0.1:7114

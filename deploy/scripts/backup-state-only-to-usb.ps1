@@ -13,14 +13,26 @@ param(
     [ValidateRange(1MB, 120GB)]
     [long]$MaxStoredBytes = 100GB,
 
-    [switch]$AllowFixedDrive
+    [switch]$AllowFixedDrive,
+
+    [string]$RecoveryRepositoryPath = (Join-Path $PSScriptRoot '..\..')
 )
 
 $ErrorActionPreference = 'Stop'
 $remoteRoot = '/var/backups/vapor-server/state-only'
 $target = "root@$Server"
-$ssh = (Get-Command ssh.exe -CommandType Application -ErrorAction Stop).Source
-$scp = (Get-Command scp.exe -CommandType Application -ErrorAction Stop).Source
+$sshCommand = if ([string]::IsNullOrWhiteSpace($env:VAPOR_USB_TEST_SSH_EXECUTABLE)) {
+    Get-Command ssh.exe -CommandType Application -ErrorAction Stop
+} else {
+    Get-Command -Name $env:VAPOR_USB_TEST_SSH_EXECUTABLE -CommandType Application, ExternalScript -ErrorAction Stop
+}
+$scpCommand = if ([string]::IsNullOrWhiteSpace($env:VAPOR_USB_TEST_SCP_EXECUTABLE)) {
+    Get-Command scp.exe -CommandType Application -ErrorAction Stop
+} else {
+    Get-Command -Name $env:VAPOR_USB_TEST_SCP_EXECUTABLE -CommandType Application, ExternalScript -ErrorAction Stop
+}
+$ssh = $sshCommand.Source
+$scp = $scpCommand.Source
 $keyPath = (Resolve-Path -LiteralPath $SshKey).Path
 $destination = [System.IO.Path]::GetFullPath($UsbPath)
 if ($destination -notmatch '^[A-Za-z]:\\') { throw 'USB destination must be a local drive path.' }
@@ -67,7 +79,7 @@ try {
     $latest = ($latestText -join "`n") | ConvertFrom-Json
     $index = ($indexText -join "`n") | ConvertFrom-Json
 } catch { throw 'The state-only archive index or latest pointer is invalid JSON.' }
-if ($latest.schema_version -ne 1 -or $latest.archive_schema_version -ne 3 -or
+if ($latest.schema_version -ne 1 -or $latest.archive_schema_version -notin @(3, 4) -or
     $latest.archive -notmatch '^vapor-platform-state-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.tar\.gz$' -or
     $latest.sha256 -notmatch '^[0-9a-f]{64}$' -or [long]$latest.size_bytes -le 0) {
     throw 'The latest state-only archive pointer has an unsupported schema.'
@@ -142,4 +154,111 @@ foreach ($metadataPath in @($indexPath, $latestPath, $indexTemp, $latestTemp)) {
 [System.IO.File]::WriteAllText($latestTemp, ($latest | ConvertTo-Json -Depth 4 -Compress) + "`n", [System.Text.UTF8Encoding]::new($false))
 Move-Item -LiteralPath $indexTemp -Destination $indexPath -Force
 Move-Item -LiteralPath $latestTemp -Destination $latestPath -Force
-Write-Output "state-usb-sync: verified $(@($index.archives).Count) generations; copied $copied; $verifiedBytes bytes"
+
+# Keep the recovery launcher and its validators beside the state snapshots,
+# pinned to the root revision recorded inside the latest archive.
+$latestArchivePath = Join-Path $snapshotRoot ([string]$latest.archive)
+$metadataHelper = Join-Path $PSScriptRoot 'recovery_bundle_metadata.py'
+$python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$sourceCommit = & $python $metadataHelper --source-commit $latestArchivePath
+if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40}$') {
+    throw 'The latest state snapshot does not contain a valid Platform source revision.'
+}
+$repositoryRoot = (Resolve-Path -LiteralPath $RecoveryRepositoryPath).Path
+$git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+& $git -C $repositoryRoot cat-file -e "$sourceCommit^{commit}" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    & $git -C $repositoryRoot fetch --no-tags origin $sourceCommit
+    if ($LASTEXITCODE -ne 0) { throw 'Could not retrieve the source-pinned recovery tools.' }
+}
+
+$kitFiles = @(
+    'recover-state-only-host.sh',
+    'restore-state-only.sh',
+    'recovery_bundle_metadata.py',
+    'state-bundle-validate.py',
+    'deployed_source_manifest.py',
+    'service_deploy_map.py',
+    'validate-state-databases.py',
+    'README-state-only-recovery.txt'
+)
+$kitRoot = Join-Path $destination 'Recovery-Kit\state-only'
+$kitFinal = Join-Path $kitRoot $sourceCommit
+$kitStage = Join-Path $incoming "kit-$sourceCommit"
+$kitZip = Join-Path $incoming "kit-$sourceCommit.zip"
+Assert-NoReparsePathComponents $kitRoot
+New-Item -ItemType Directory -Path $kitRoot -Force | Out-Null
+Assert-NoReparsePathComponents $kitRoot
+Assert-NoReparsePathComponents $kitFinal
+Assert-NoReparsePathComponents $kitStage
+Assert-NoReparsePathComponents $kitZip
+$kitHashes = [ordered]@{}
+if (Test-Path -LiteralPath $kitFinal) {
+    $expectedKitEntries = @($kitFiles + 'SHA256SUMS' | Sort-Object)
+    $existingKitEntries = @(Get-ChildItem -LiteralPath $kitFinal -Force | Select-Object -ExpandProperty Name | Sort-Object)
+    if (@($existingKitEntries) -join ',' -cne ($expectedKitEntries -join ',')) {
+        throw 'Existing source-pinned recovery kit has unexpected files; refusing to replace it.'
+    }
+    foreach ($name in $kitFiles) {
+        $path = Join-Path $kitFinal $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Existing source-pinned recovery kit is incomplete.' }
+        $kitHashes[$name] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    $expectedChecksums = foreach ($name in ($kitFiles | Sort-Object)) { "$($kitHashes[$name])  $name" }
+    $actualChecksums = (Get-Content -LiteralPath (Join-Path $kitFinal 'SHA256SUMS') -Raw).TrimEnd("`r", "`n") -split "`r?`n"
+    if (@($actualChecksums) -join "`n" -cne (@($expectedChecksums) -join "`n")) {
+        throw 'Existing source-pinned recovery kit checksum file does not match its contents.'
+    }
+} else {
+    Remove-Item -LiteralPath $kitStage -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $kitZip -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $kitStage | Out-Null
+    $archivePaths = @($kitFiles | ForEach-Object { "deploy/scripts/$_" })
+    & $git -C $repositoryRoot archive --format=zip --output=$kitZip $sourceCommit @archivePaths
+    if ($LASTEXITCODE -ne 0) { throw 'Could not export the source-pinned recovery kit.' }
+    Expand-Archive -LiteralPath $kitZip -DestinationPath $kitStage
+    $sourceScripts = Join-Path $kitStage 'deploy\scripts'
+    foreach ($name in $kitFiles) {
+        $source = Join-Path $sourceScripts $name
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "The source-pinned recovery kit is missing $name."
+        }
+        Copy-Item -LiteralPath $source -Destination (Join-Path $kitStage $name)
+    }
+    Remove-Item -LiteralPath (Join-Path $kitStage 'deploy') -Recurse -Force
+    $checksumLines = foreach ($name in ($kitFiles | Sort-Object)) {
+        $path = Join-Path $kitStage $name
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $kitHashes[$name] = $hash
+        "$hash  $name"
+    }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $kitStage 'SHA256SUMS'),
+        ($checksumLines -join "`n") + "`n",
+        [System.Text.Encoding]::ASCII
+    )
+    Move-Item -LiteralPath $kitStage -Destination $kitFinal
+    Remove-Item -LiteralPath $kitZip -Force
+}
+
+$kitPointerRoot = Join-Path $destination 'Recovery-Kit\state-only'
+if (-not (Test-Path -LiteralPath $kitPointerRoot -PathType Container)) {
+    New-Item -ItemType Directory -Path $kitPointerRoot -Force | Out-Null
+}
+Assert-NoReparsePathComponents $kitPointerRoot
+$kitPointerTemp = Join-Path $incoming 'latest-state-kit.json.partial'
+$kitPointer = [ordered]@{
+    schema_version = 1
+    available = $true
+    source_commit = $sourceCommit
+    archive = [string]$latest.archive
+    archive_sha256 = [string]$latest.sha256
+    files = $kitHashes
+}
+[System.IO.File]::WriteAllText(
+    $kitPointerTemp,
+    ($kitPointer | ConvertTo-Json -Depth 4 -Compress) + "`n",
+    [System.Text.UTF8Encoding]::new($false)
+)
+Move-Item -LiteralPath $kitPointerTemp -Destination (Join-Path $kitPointerRoot 'latest.json') -Force
+Write-Output "state-usb-sync: verified $(@($index.archives).Count) generations; copied $copied; $verifiedBytes bytes; recovery kit $sourceCommit"

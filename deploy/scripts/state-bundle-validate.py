@@ -123,17 +123,27 @@ def validate_manifest_text(
 
 
 def validate_state_only_manifest(manifest: dict[str, object]) -> None:
-    """Reject ambiguous or host-bearing schema-v3 snapshots."""
+    """Reject ambiguous or host-bearing state-only snapshots."""
+    schema_version = manifest.get("schema_version")
     expected_keys = {
-        "schema_version", "created_at_utc", "state_catalog_version",
+        "schema_version", "created_at_utc", "platform_source_commit", "state_catalog_version",
         "secrets_included", "archive_encryption", "build_outputs_excluded",
         "config_included", "host_routing_included", "source_pins_included",
         "recovery_kit_included", "included_categories",
     }
+    if schema_version == 3:
+        expected_keys.remove("platform_source_commit")
+    elif schema_version != 4:
+        raise ValidationError("state-only archive schema is unsupported")
     if set(manifest) != expected_keys:
         raise ValidationError("state-only manifest contains unsupported fields")
     if manifest.get("state_catalog_version") != 1:
         raise ValidationError("state-only catalog version is unsupported")
+    if schema_version == 4 and (
+        not isinstance(manifest.get("platform_source_commit"), str)
+        or not re.fullmatch(r"[0-9a-f]{40}", manifest["platform_source_commit"])
+    ):
+        raise ValidationError("state-only Platform source revision is invalid")
     if manifest.get("secrets_included") is not False:
         raise ValidationError("state-only archive must declare secrets excluded")
     if manifest.get("archive_encryption") != "none":
@@ -204,6 +214,8 @@ def validate_state_only_members(
         raise ValidationError("state-only archive is missing a required service database")
     deployed_sources = members.get(f"{ROOT}/state/operations/deployed-sources.json")
     if deployed_sources is not None:
+        if deployed_sources.size > 64 * 1024:
+            raise ValidationError("state-only deployed-source manifest exceeds its size limit")
         stream = archive.extractfile(deployed_sources)
         if stream is None:
             raise ValidationError("state-only deployed-source manifest cannot be read")
@@ -292,7 +304,7 @@ def validate_bundle(path: pathlib.Path) -> None:
             manifest_text = manifest_file.read(64 * 1024).decode("utf-8", errors="strict")
             manifest_values = tomllib.loads(manifest_text)
 
-            if manifest_values.get("schema_version") == 3:
+            if manifest_values.get("schema_version") in {3, 4}:
                 validate_state_only_members(archive, archive_members, manifest_values)
                 return
 
