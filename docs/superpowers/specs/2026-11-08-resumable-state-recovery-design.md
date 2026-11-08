@@ -45,6 +45,12 @@ copied from USB.
 - `--resume` is accepted only with an existing marker whose schema, digest,
   revision, phase, ownership, and permissions match the supplied archive. A
   markerless non-empty host remains a hard stop.
+- After archive, source, and host platform validation, recovery is serialized by
+  a non-blocking runtime lock. After interruption,
+  the marker helper removes only its exact temporary-file name shape after
+  validating regular-file type, permissions, and ownership. Unknown entries
+  remain a hard stop. An empty marker directory left before the initial marker
+  commit can be safely prepared and initialized again.
 - Resume reuses valid root-owned host configuration if bootstrap already wrote
   it. If setup stopped before configuration was created, the owner is prompted
   again. Existing source paths are reused only when the repository identity,

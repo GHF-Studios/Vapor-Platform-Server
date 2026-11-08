@@ -67,6 +67,12 @@ BUNDLE_SHA256="$(sha256sum "$BUNDLE" | awk '{print $1}')"
 python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
   || fail "Python 3.11 or newer is required to validate this archive"
 
+# Serialize host mutation only after the supplied archive and source pin have
+# passed validation. The lock itself is volatile runtime coordination state.
+[ -d /run/lock ] || fail "runtime lock directory is unavailable"
+exec 9>/run/lock/vapor-state-recovery.lock
+flock -n 9 || fail "another state-only recovery run is active"
+
 marker_phase="building"
 if [ "$RESUME" = true ]; then
   marker_json="$(python3 "$MARKER_TOOL" read --root "$MARKER_ROOT" \
@@ -76,7 +82,9 @@ if [ "$RESUME" = true ]; then
   [ "$CONFIRM_PROVIDER_CHECKS" = false ] || [ "$marker_phase" = awaiting_provider_checks ] \
     || fail "provider-check confirmation is only valid after state restore"
 elif [ -e "$MARKER_ROOT" ] || [ -L "$MARKER_ROOT" ]; then
-  fail "unfinished or unexpected recovery marker exists; inspect it and use --resume"
+  python3 "$MARKER_TOOL" prepare --root "$MARKER_ROOT" --bundle-sha256 "$BUNDLE_SHA256" \
+    --root-commit "$REVISION" >/dev/null \
+    || fail "unfinished or unexpected recovery marker exists; inspect it and use --resume"
 fi
 
 if [ "$RESUME" = true ]; then

@@ -7,7 +7,7 @@
 - Preserve the state-only archive boundary: no `/etc`, secrets, source checkout,
   systemd configuration, or recovery code enters the archive.
 - A retry is bound to the exact archive digest and Platform commit.
-- No non-empty or markerless host is treated as a resumable recovery.
+- No unrelated host data or markerless non-empty host is treated as resumable.
 - Do not delete or overwrite unexpected host data during recovery or cleanup.
 - Final completion requires configured provider readiness and explicit owner
   confirmation after browser sign-in checks.
@@ -21,6 +21,8 @@
 
 - [ ] Add tests for marker creation, strict parsing, allowed phases, digest and
   revision binding, atomic replacement, and completion cleanup.
+- [x] Cover interruption leftovers, safe preparation, and concurrent recovery
+  serialization.
 - [ ] Run tests and observe expected failures before implementation.
 - [ ] Implement a small marker helper with no shell execution and no secret
   fields; reject symlinks, unsafe ownership/modes, duplicate/unknown fields,
@@ -55,6 +57,7 @@
 - [ ] Run the complete Platform test recipe.
 - [ ] Review marker lifecycle, failure cleanup, provider check flow, and archive
   boundaries against the design.
+- [ ] Re-run the disposable-host drill when a clean Ubuntu host is available.
 - [ ] Commit/push only after fresh verification; do not deploy without the
   normal approval flow.
 - [ ] Record that a disposable Ubuntu restore drill remains required before

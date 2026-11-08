@@ -18,7 +18,10 @@ to the archive digest and exact Platform revision, then rebuilds the matching
 checkout and imports only the archive's state. Provider credentials are entered
 without echoing. If setup is interrupted, rerun the same command with `--resume`
 and the same archive; the script validates the marker and staged checkout before
-continuing. It refuses to adopt unrelated host data.
+continuing. If power fails during the initial marker write, rerun the first-run
+command: the helper removes only its validated atomic-write temporary file. If
+two recovery processes overlap, the second exits without changing the host. It
+refuses to adopt unrelated host data.
 
 After restore, complete browser sign-in and verify the owner dashboard, then run:
 

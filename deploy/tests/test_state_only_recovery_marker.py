@@ -102,6 +102,85 @@ class StateOnlyRecoveryMarkerTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
 
+    def test_read_recovers_from_a_stale_atomic_write_temporary_file(self) -> None:
+        self.init()
+        interrupted_write = self.root / ".state-only.abcd1234"
+        interrupted_write.write_text('{"partial":', encoding="utf-8")
+        result = self.run_tool(
+            "read",
+            "--root",
+            str(self.root),
+            "--bundle-sha256",
+            BUNDLE_DIGEST,
+            "--root-commit",
+            ROOT_COMMIT,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(interrupted_write.exists())
+        self.assertEqual(json.loads(result.stdout)["phase"], "building")
+
+    def test_prepare_cleans_interrupted_first_write_and_allows_init(self) -> None:
+        self.root.mkdir()
+        interrupted_write = self.root / ".state-only.abcd1234"
+        interrupted_write.write_text('{"partial":', encoding="utf-8")
+        prepared = self.run_tool(
+            "prepare",
+            "--root",
+            str(self.root),
+            "--bundle-sha256",
+            BUNDLE_DIGEST,
+            "--root-commit",
+            ROOT_COMMIT,
+        )
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        self.assertFalse(interrupted_write.exists())
+        initialized = self.run_tool(
+            "init",
+            "--root",
+            str(self.root),
+            "--bundle-sha256",
+            BUNDLE_DIGEST,
+            "--root-commit",
+            ROOT_COMMIT,
+        )
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+
+    def test_prepare_rejects_unknown_or_symlink_entries(self) -> None:
+        self.root.mkdir()
+        unknown = self.root / ".state-only.not-a-temp"
+        unknown.write_text("preserve", encoding="utf-8")
+        result = self.run_tool(
+            "prepare",
+            "--root",
+            str(self.root),
+            "--bundle-sha256",
+            BUNDLE_DIGEST,
+            "--root-commit",
+            ROOT_COMMIT,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(unknown.read_text(encoding="utf-8"), "preserve")
+
+        unknown.unlink()
+        link = self.root / ".state-only.abcd1234"
+        target = self.root.parent / "target"
+        target.write_text("preserve", encoding="utf-8")
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks are unavailable")
+        result = self.run_tool(
+            "prepare",
+            "--root",
+            str(self.root),
+            "--bundle-sha256",
+            BUNDLE_DIGEST,
+            "--root-commit",
+            ROOT_COMMIT,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(link.is_symlink())
+
     def test_phase_advance_and_completion_are_exact(self) -> None:
         self.init()
         updated = self.run_tool(

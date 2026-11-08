@@ -14,6 +14,7 @@ import tempfile
 
 
 MARKER_NAME = "state-only.json"
+TEMP_MARKER = re.compile(r"\.state-only\.[A-Za-z0-9_]{8}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 PHASES = {"building", "awaiting_provider_checks"}
@@ -30,7 +31,10 @@ def _assert_secure_owner(path: pathlib.Path, info: os.stat_result, expected_mode
         return
     if stat.S_IMODE(info.st_mode) != expected_mode:
         raise MarkerError("recovery marker permissions are invalid")
-    if path == CANONICAL_ROOT or path == CANONICAL_ROOT / MARKER_NAME:
+    if path == CANONICAL_ROOT or (
+        path.parent == CANONICAL_ROOT
+        and (path.name == MARKER_NAME or TEMP_MARKER.fullmatch(path.name))
+    ):
         if not hasattr(os, "getuid") or info.st_uid != 0:
             raise MarkerError("recovery marker ownership is invalid")
 
@@ -47,9 +51,22 @@ def _validate_root(root: pathlib.Path, *, allow_empty: bool = False) -> pathlib.
     if not stat.S_ISDIR(info.st_mode):
         raise MarkerError("recovery marker path is not a directory")
     _assert_secure_owner(root, info, 0o700)
-    entries = {entry.name for entry in root.iterdir()}
-    allowed = {MARKER_NAME} if MARKER_NAME in entries else set()
-    if entries != allowed:
+    entries = list(root.iterdir())
+    for entry in entries:
+        if entry.name == MARKER_NAME:
+            continue
+        if not TEMP_MARKER.fullmatch(entry.name):
+            raise MarkerError("recovery marker directory contains unexpected entries")
+        info = entry.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise MarkerError("stale recovery marker temporary file is not regular")
+        _assert_secure_owner(entry, info, 0o600)
+        entry.unlink()
+    if (root / MARKER_NAME) not in entries and not allow_empty:
+        raise MarkerError("recovery marker is missing")
+    if (root / MARKER_NAME).is_symlink():
+        raise MarkerError("recovery marker must not be a symlink")
+    if (root / MARKER_NAME) not in entries and any(root.iterdir()):
         raise MarkerError("recovery marker directory contains unexpected entries")
     return root
 
@@ -130,7 +147,7 @@ def _write(root: pathlib.Path, value: dict[str, object], *, create: bool) -> Non
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
-    for action in ("init", "read", "set-phase", "complete"):
+    for action in ("init", "prepare", "read", "set-phase", "complete"):
         child = subparsers.add_parser(action)
         child.add_argument("--root", required=True, type=pathlib.Path)
         child.add_argument("--bundle-sha256", required=True)
@@ -146,6 +163,13 @@ def main() -> int:
         raise MarkerError("bundle digest is invalid")
     if not COMMIT.fullmatch(args.root_commit):
         raise MarkerError("Platform source commit is invalid")
+
+    if args.action == "prepare":
+        root = _validate_root(args.root, allow_empty=True)
+        if (root / MARKER_NAME).exists() or (root / MARKER_NAME).is_symlink():
+            raise MarkerError("unfinished recovery marker exists; use --resume")
+        print("ready")
+        return 0
 
     if args.action == "init":
         _write(

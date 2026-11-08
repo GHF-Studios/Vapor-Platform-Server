@@ -20,6 +20,7 @@ class StateOnlyFreshHostContractTests(unittest.TestCase):
         self.assertLess(script.index(checksum), script.index(packages))
         self.assertLess(script.index(validate), script.index(packages))
         self.assertLess(script.index(source), script.index(packages))
+        self.assertLess(script.index(source), script.index("flock -n 9"))
 
     def test_host_must_be_empty_before_bootstrap_and_credentials_are_hidden(self) -> None:
         script = (REPO_ROOT / "deploy/scripts/recover-state-only-host.sh").read_text()
@@ -61,6 +62,14 @@ class StateOnlyFreshHostContractTests(unittest.TestCase):
             script,
         )
         self.assertIn("archive_sha256", script)
+
+    def test_recovery_is_serialized_and_safe_empty_marker_directory_can_restart(self) -> None:
+        script = (REPO_ROOT / "deploy/scripts/recover-state-only-host.sh").read_text()
+        self.assertIn("flock -n 9", script)
+        self.assertIn('"$MARKER_TOOL" prepare --root "$MARKER_ROOT"', script)
+        marker = (REPO_ROOT / "deploy/scripts/state_only_recovery_marker.py").read_text()
+        self.assertIn('TEMP_MARKER = re.compile(r"\\.state-only\\.[A-Za-z0-9_]{8}\\Z")', marker)
+        self.assertIn('entry.unlink()', marker)
 
 
 if __name__ == "__main__":
