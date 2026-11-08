@@ -281,9 +281,13 @@ hashed this run from archive files merely retained on the drive.
 
 ## Temporary SSH operator workflow
 
-The installed `/usr/local/libexec/vapor-platform-ops` helper exposes a closed, root-only local
-operator interface. It never prints the stored public key and requires a real
-terminal for every mutation:
+The installed `/usr/local/libexec/vapor-platform-ops` helper exposes a closed,
+root-only local operator interface. Web operations reach it over the
+root-owned `/run/vapor-platform-ops.sock`, mode `0660` and group `vapor`, with
+one systemd service instance per bounded JSON request. The Platform web
+process keeps `NoNewPrivileges=true`; it never invokes `sudo` to reach the
+helper. The helper never prints the stored public key and requires a real
+terminal for every human CLI mutation:
 
 ```text
 sudo /usr/local/libexec/vapor-platform-ops ssh list

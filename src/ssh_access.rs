@@ -113,6 +113,7 @@ struct RootOperation<'a> {
     expires_at_unix: Option<i64>,
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RootOperationResult {
@@ -122,6 +123,7 @@ struct RootOperationResult {
     detail: String,
 }
 
+#[cfg(test)]
 fn parse_root_operation_output(
     process_succeeded: bool,
     stdout: &[u8],
@@ -763,35 +765,10 @@ async fn revoke_grant(
 }
 
 async fn run_root_operation(payload: &RootOperation<'_>) -> Result<(), String> {
-    let operation_path = std::env::var_os("VAPOR_PLATFORM_OPS_PATH")
-        .unwrap_or_else(|| "/usr/local/libexec/vapor-platform-ops".into());
-    let mut child = tokio::process::Command::new("/usr/bin/sudo")
-        .arg("-n")
-        .arg(operation_path)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| "could not start privileged helper".to_owned())?;
-    let input = serde_json::to_vec(payload)
-        .map_err(|_| "could not encode privileged operation".to_owned())?;
-    if input.len() > 4096 {
-        return Err("privileged operation input exceeds its size limit".to_owned());
-    }
-    if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        stdin
-            .write_all(&input)
+    let output: crate::platform_ops_client::OperationResult =
+        crate::platform_ops_client::request(payload)
             .await
-            .map_err(|_| "could not send privileged operation".to_owned())?;
-    } else {
-        return Err("privileged helper input is unavailable".to_owned());
-    }
-    let output = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
-        .await
-        .map_err(|_| "privileged helper timed out".to_owned())?
-        .map_err(|_| "could not collect privileged helper result".to_owned())?;
+            .map_err(str::to_owned)?;
     let expected_success_state = match payload.operation {
         "dispatch_deploy" => "queued",
         "reconcile_deploy" => "failed",
@@ -799,12 +776,20 @@ async fn run_root_operation(payload: &RootOperation<'_>) -> Result<(), String> {
         "revoke_ssh" => "revoked",
         _ => return Err("unsupported privileged operation".to_owned()),
     };
-    parse_root_operation_output(
-        output.status.success(),
-        &output.stdout,
-        payload.request_id,
-        expected_success_state,
-    )
+    if output.operation_id != payload.request_id
+        || output.detail.is_empty()
+        || output.detail.len() > 256
+        || output.detail.chars().any(char::is_control)
+        || (output.ok && output.state != expected_success_state)
+        || (!output.ok && output.state != "failed")
+    {
+        return Err("privileged helper returned a mismatched result".to_owned());
+    }
+    if output.ok {
+        Ok(())
+    } else {
+        Err("privileged helper rejected the operation".to_owned())
+    }
 }
 
 async fn require_root(state: &SshAccessState, headers: &HeaderMap) -> Result<String, Response> {

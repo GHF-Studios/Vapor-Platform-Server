@@ -4,7 +4,7 @@
 
 **Goal:** Give root operators a task-focused view of VPS backup freshness and explicit recovery evidence gaps.
 
-**Architecture:** A fixed, read-only `recovery-status` subcommand in the root-owned Platform helper reports a small JSON summary. A root-protected Platform route invokes that exact command and validates the bounded response; the shared dashboard renders the summary and its evidence limitations. No arbitrary command, archive read, restore, or destructive operation is exposed.
+**Architecture:** A root-owned, systemd socket-activated Platform helper reports a small JSON summary for the fixed `recovery_status` operation. A root-protected Platform route sends bounded JSON through the local `vapor`-group socket and validates the bounded response; the shared dashboard renders the summary and its evidence limitations. The web service retains `NoNewPrivileges=true` and does not invoke `sudo`. No arbitrary command, archive read, restore, or destructive operation is exposed.
 
 **Tech Stack:** Rust, Tokio/Axum, serde, systemd, existing Rust and Python test recipes, embedded admin JavaScript.
 
@@ -38,12 +38,12 @@
 - Test: `src/recovery_status.rs` unit tests and `deploy/tests/test_platform_ops_installer.py`
 
 **Interfaces:**
-- Produces: exact helper invocation `/usr/local/libexec/vapor-platform-ops recovery-status`; no additional arguments are accepted.
+- Produces: exact local socket operation `{"operation":"recovery_status"}`; unknown fields and other operations are rejected.
 - JSON fields: `schema_version`, `archive_root_state` (`available`, `missing`, or `unavailable`), `timer_state`, bounded `next_run_display`, `archive_count`, `latest_archive` (`modified_at_unix`, `size_bytes`, `commit_short`, `checksum_sidecar_present`), and `freshness` (`recent`, `stale`, or `unknown`). A timestamp over five minutes in the future is unknown. Recent means recent by mtime only, not validated.
 
 - [ ] Cover missing archive root, valid archive + sidecar, symlink exclusion, future/stale timestamps, malformed/missing metadata, and fixed-path command output.
 - [ ] Implement fixed-path, bounded archive enumeration and systemd timer observation; emit only the documented JSON fields.
-- [ ] Add one exact sudoers command allowance for the fixed subcommand, retaining the existing no-argument stdin-only allowance for interactive operations.
+- [ ] Install the root-owned socket and per-connection helper unit; retire only the exact prior Platform sudoers file.
 - [ ] Run focused Rust and installer tests.
 - [ ] Commit the helper slice.
 
@@ -56,7 +56,7 @@
 
 **Interfaces:**
 - Produces: `GET /api/admin/recovery/status`.
-- Consumes: validated root session and fixed helper JSON.
+- Consumes: validated root session and fixed socket-helper JSON.
 - Rejects non-root before starting the helper; timeout and response size are bounded.
 
 - [ ] Cover missing/unknown JSON fields, oversized output, helper failure, private no-store cache headers, and authorization-before-helper ordering.

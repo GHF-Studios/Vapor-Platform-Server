@@ -300,7 +300,7 @@ if systemctl is-active --quiet vapor-deploy.service; then DEPLOY_SERVICE_WAS_ACT
 restore_previous_host_files() {
   mkdir -p /etc/systemd/system || return 1
   find /etc/systemd/system -maxdepth 1 \( -type f -o -type l \) \
-    \( -name 'vapor-*.service' -o -name 'vapor-*.timer' \) -delete || return 1
+    \( -name 'vapor-*.service' -o -name 'vapor-*.timer' -o -name 'vapor-*.socket' \) -delete || return 1
   if [ -d "${PRE_RESTORE_PATH}/host/systemd" ]; then
     cp -a "${PRE_RESTORE_PATH}/host/systemd/." /etc/systemd/system/ || return 1
   fi
@@ -444,7 +444,7 @@ fi
 if [ -f /etc/caddy/Caddyfile ]; then
   cp -a /etc/caddy/Caddyfile "${PRE_RESTORE_PATH}/host/caddy/Caddyfile"
 fi
-for unit in /etc/systemd/system/vapor-*.service /etc/systemd/system/vapor-*.timer; do
+for unit in /etc/systemd/system/vapor-*.service /etc/systemd/system/vapor-*.timer /etc/systemd/system/vapor-*.socket; do
   [ -f "${unit}" ] && [ ! -L "${unit}" ] || continue
   cp -a "${unit}" "${PRE_RESTORE_PATH}/host/systemd/"
 done
@@ -468,7 +468,7 @@ install -D -o root -g root -m 0644 \
   "${BUNDLE_ROOT}/host/caddy/Caddyfile" /etc/caddy/Caddyfile
 UNITS_INSTALLED="true"
 find /etc/systemd/system -maxdepth 1 \( -type f -o -type l \) \
-  \( -name 'vapor-*.service' -o -name 'vapor-*.timer' \) -delete
+  \( -name 'vapor-*.service' -o -name 'vapor-*.timer' -o -name 'vapor-*.socket' \) -delete
 for unit in "${BUNDLE_ROOT}"/host/systemd/vapor-*; do
   [ -f "${unit}" ] || continue
   if [ "${FRESH_HOST_RESTORE}" = "true" ]; then
@@ -486,6 +486,7 @@ done
 systemctl daemon-reload
 caddy validate --config /etc/caddy/Caddyfile
 systemctl enable --now caddy.service
+systemctl enable --now vapor-platform-ops.socket
 for service in "${STATEFUL_SERVICES[@]}"; do
   if [[ ! " ${TARGET_SERVICES[*]} " =~ " ${service} " ]]; then
     systemctl disable --now "${service}" >/dev/null 2>&1 || true

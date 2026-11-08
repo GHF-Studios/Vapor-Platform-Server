@@ -1,0 +1,14 @@
+[Unit]
+Description=Local Vapor Platform root-operations socket
+
+[Socket]
+ListenStream=/run/vapor-platform-ops.sock
+SocketUser=root
+SocketGroup=vapor
+SocketMode=0660
+Accept=yes
+MaxConnections=8
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

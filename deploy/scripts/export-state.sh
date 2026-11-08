@@ -167,7 +167,7 @@ if [ ! -f "${BUNDLE_ROOT}/host/caddy/Caddyfile" ]; then
   exit 1
 fi
 HOST_UNIT_COUNT=0
-for unit in /etc/systemd/system/vapor-*.service /etc/systemd/system/vapor-*.timer; do
+for unit in /etc/systemd/system/vapor-*.service /etc/systemd/system/vapor-*.timer /etc/systemd/system/vapor-*.socket; do
   [ -e "${unit}" ] || continue
   if [ ! -f "${unit}" ] || [ -L "${unit}" ]; then
     echo "error: a Vapor systemd unit is not a regular file; refusing incomplete recovery archive" >&2

@@ -14,7 +14,6 @@ use std::time::Duration;
 const SESSION_SECONDS: i64 = 20 * 60;
 const COOKIE_NAME: &str = "vapor_emergency_console";
 const COOKIE_PATH: &str = "/emergency-terminal/";
-const HELPER: &str = "/usr/local/libexec/vapor-platform-ops";
 const GATEWAY_MARKER: &str = "CaddyEmergencyTerminalV1";
 static LIFECYCLE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -193,7 +192,7 @@ fn state() -> ConsoleState {
 }
 
 async fn status(state: axum::extract::State<ConsoleState>, headers: HeaderMap) -> Response {
-    let (state, profile_id) = match authorized_profile(&state.0, &headers).await {
+    let (state, profile_id, identity_token) = match authorized_profile(&state.0, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -203,7 +202,9 @@ async fn status(state: axum::extract::State<ConsoleState>, headers: HeaderMap) -
         // Stop even if the state write failed: the host flag already denies
         // authorization and this clears any orphaned backend process.
         let state_disabled = disable_internal(&state, &profile_id, now).await.is_ok();
-        let backend_stopped = helper_action("emergency-console-stop").await.is_ok();
+        let backend_stopped = helper_action("emergency-console-stop", &identity_token)
+            .await
+            .is_ok();
         if !state_disabled || !backend_stopped {
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -288,7 +289,7 @@ async fn enable(
     headers: HeaderMap,
     Json(request): Json<ConfirmRequest>,
 ) -> Response {
-    let (state, profile_id) = match authorized_profile(&state.0, &headers).await {
+    let (state, profile_id, _identity_token) = match authorized_profile(&state.0, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -303,9 +304,10 @@ async fn enable(
         Ok(transaction) => transaction,
         Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable"),
     };
-    let enabled = sqlx::query("UPDATE platform_emergency_console_config SET enabled=1 WHERE slot=1")
-        .execute(&mut *transaction)
-        .await;
+    let enabled =
+        sqlx::query("UPDATE platform_emergency_console_config SET enabled=1 WHERE slot=1")
+            .execute(&mut *transaction)
+            .await;
     if !enabled.is_ok_and(|result| result.rows_affected() == 1) {
         return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
     }
@@ -332,7 +334,7 @@ async fn disable(
     headers: HeaderMap,
     Json(request): Json<ConfirmRequest>,
 ) -> Response {
-    let (state, profile_id) = match authorized_profile(&state.0, &headers).await {
+    let (state, profile_id, identity_token) = match authorized_profile(&state.0, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -342,7 +344,9 @@ async fn disable(
     let _lifecycle = LIFECYCLE_LOCK.lock().await;
     let now = unix_now();
     let state_disabled = disable_internal(&state, &profile_id, now).await.is_ok();
-    let backend_stopped = helper_action("emergency-console-stop").await.is_ok();
+    let backend_stopped = helper_action("emergency-console-stop", &identity_token)
+        .await
+        .is_ok();
     if !state_disabled || !backend_stopped {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -357,7 +361,7 @@ async fn arm(
     headers: HeaderMap,
     Json(request): Json<ArmRequest>,
 ) -> Response {
-    let (state, profile_id) = match authorized_profile(&state.0, &headers).await {
+    let (state, profile_id, _identity_token) = match authorized_profile(&state.0, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -436,10 +440,13 @@ async fn arm(
     if transaction.commit().await.is_err() {
         return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
     }
-    if helper_action("emergency-console-start").await.is_err() {
-        let _ = helper_action("emergency-console-stop").await;
-        let _ = finish_session_start_failure(&state.pool, &session_id, &profile_id, unix_now())
-            .await;
+    if helper_action("emergency-console-start", &identity_token)
+        .await
+        .is_err()
+    {
+        let _ = helper_action("emergency-console-stop", &identity_token).await;
+        let _ =
+            finish_session_start_failure(&state.pool, &session_id, &profile_id, unix_now()).await;
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "console_backend_unavailable",
@@ -458,7 +465,7 @@ async fn arm(
     .await
     .is_ok_and(|count| count == 1);
     if !grant_still_active {
-        let _ = helper_action("emergency-console-stop").await;
+        let _ = helper_action("emergency-console-stop", &identity_token).await;
         let _ = transition_active_session(
             &state.pool,
             &session_id,
@@ -498,7 +505,7 @@ async fn end_session(
     headers: HeaderMap,
     Json(request): Json<ConfirmRequest>,
 ) -> Response {
-    let (state, profile_id) = match authorized_profile(&state.0, &headers).await {
+    let (state, profile_id, identity_token) = match authorized_profile(&state.0, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -547,7 +554,9 @@ async fn end_session(
     if transaction.commit().await.is_err() {
         return error(StatusCode::SERVICE_UNAVAILABLE, "console_state_unavailable");
     }
-    let stopped = helper_action("emergency-console-stop").await.is_ok();
+    let stopped = helper_action("emergency-console-stop", &identity_token)
+        .await
+        .is_ok();
     if !stopped {
         if let Some(session_id) = session_id.as_deref() {
             let _ = record_event(
@@ -687,7 +696,7 @@ async fn authorize_terminal(
 async fn authorized_profile(
     state: &ConsoleState,
     headers: &HeaderMap,
-) -> Result<(ConsoleState, String), Response> {
+) -> Result<(ConsoleState, String, String), Response> {
     match crate::admin_auth::authorize_root_profile_with_client(
         headers,
         state.identity_authz_token.as_deref(),
@@ -696,7 +705,13 @@ async fn authorized_profile(
     )
     .await
     {
-        Ok(profile) => Ok((state.clone(), profile)),
+        Ok(profile) => Ok((
+            state.clone(),
+            profile,
+            crate::admin_auth::session_token(headers)
+                .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sign_in_required"))?
+                .to_owned(),
+        )),
         Err(failure) => Err(error(failure.status(), "root_identity_required")),
     }
 }
@@ -791,20 +806,32 @@ async fn expire_sessions(pool: &SqlitePool, now: i64) -> Result<(), ()> {
     transaction.commit().await.map_err(|_| ())
 }
 
-async fn helper_action(action: &'static str) -> Result<(), ()> {
-    let mut child = tokio::process::Command::new("/usr/bin/sudo")
-        .args(["-n", HELPER, action])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| ())?;
-    let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+async fn helper_action(action: &'static str, session_token: &str) -> Result<(), ()> {
+    let operation = match action {
+        "emergency-console-start" => "emergency_console_start",
+        "emergency-console-stop" => "emergency_console_stop",
+        _ => return Err(()),
+    };
+    let result: crate::platform_ops_client::OperationResult =
+        crate::platform_ops_client::request(&serde_json::json!({
+            "operation":operation,
+            "session_token":session_token
+        }))
         .await
-        .map_err(|_| ())?
         .map_err(|_| ())?;
-    status.success().then_some(()).ok_or(())
+    let expected_state = if operation == "emergency_console_start" {
+        "started"
+    } else {
+        "stopped"
+    };
+    (result.ok
+        && result.operation_id == "emergency-console"
+        && result.state == expected_state
+        && !result.detail.is_empty()
+        && result.detail.len() <= 256
+        && !result.detail.chars().any(char::is_control))
+    .then_some(())
+    .ok_or(())
 }
 
 async fn record_event(

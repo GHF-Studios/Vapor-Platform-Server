@@ -86,7 +86,7 @@ Linux/Windows VM builder remains a separate follow-on phase below.
 - Modify: `Cargo.toml` if Tokio's `process` feature is needed by Platform
 
 **Interfaces:**
-- Platform invokes `/usr/bin/sudo -n /usr/local/libexec/vapor-platform-ops` with one bounded JSON object on stdin and no command-line arguments.
+- Platform submits one bounded JSON object to the root-owned systemd-activated `/run/vapor-platform-ops.sock`; the Platform web unit retains `NoNewPrivileges=true` and no sudoers grant.
 - Helper operations are a closed enum: `dispatch_deploy`, `reconcile_deploy`, `grant_ssh`, `revoke_ssh`, `expire_ssh`.
 - Every user-initiated operation includes the current Identity session token, which the helper verifies directly against the loopback Identity authorization endpoint for the `root` role.
 - The helper returns bounded JSON `{ ok, operation_id, state, detail }`; it never logs keys or authorization tokens.

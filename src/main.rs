@@ -6,6 +6,7 @@ mod deploy_requests;
 mod emergency_console;
 mod operation_history;
 mod pagination;
+mod platform_ops_client;
 mod recovery;
 mod recovery_status;
 mod ssh_access;

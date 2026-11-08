@@ -705,7 +705,9 @@ async fn retire_dispatch(
         )
             .into_response(),
         Err(error) => {
-            eprintln!("deploy request {id}: stage=retire category=database_update_failed error={error}");
+            eprintln!(
+                "deploy request {id}: stage=retire category=database_update_failed error={error}"
+            );
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     }
@@ -1198,8 +1200,7 @@ async fn retire_failed_dispatch(
 mod dispatch_tests {
     use super::{
         begin_dispatch_attempt, expire_requests, finish_dispatch_attempt,
-        normalize_stale_dispatches, retire_failed_dispatch, retry_eligible,
-        worker_has_progressed,
+        normalize_stale_dispatches, retire_failed_dispatch, retry_eligible, worker_has_progressed,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Row;
@@ -1555,38 +1556,21 @@ async fn invoke_platform_ops(
     expected_id: &str,
     expected_success_state: &str,
 ) -> Result<PlatformOperationResult, DispatchFailure> {
-    let operation_path = std::env::var_os("VAPOR_PLATFORM_OPS_PATH")
-        .unwrap_or_else(|| "/usr/local/libexec/vapor-platform-ops".into());
-    let mut child = platform_ops_command(operation_path)
-        .spawn()
+    let result: PlatformOperationResult = crate::platform_ops_client::request(operation)
+        .await
         .map_err(|_| DispatchFailure {
             state: "failed",
             category: "helper_start_failed",
-            technical: "failed to start fixed platform helper",
+            technical: "failed to contact fixed Platform operations socket",
             public_message: "Approval is saved, but the deployment helper could not be started.",
         })?;
-    let bytes = encode_platform_ops_request(operation)?;
-    if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        stdin.write_all(&bytes).await.map_err(|_| DispatchFailure { state: "unknown", category: "helper_request_write_failed", technical: "could not write helper request", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
-    } else {
-        return Err(DispatchFailure {
-            state: "failed",
-            category: "helper_stdin_unavailable",
-            technical: "helper stdin was unavailable",
-            public_message: "Approval is saved, but the deployment helper could not be started.",
-        });
-    }
-    let result = tokio::time::timeout(Duration::from_secs(10), child.wait_with_output())
-        .await
-        .map_err(|_| DispatchFailure { state: "unknown", category: "helper_timeout", technical: "helper wait exceeded ten-second timeout", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?
-        .map_err(|_| DispatchFailure { state: "unknown", category: "helper_wait_failed", technical: "could not collect helper result", public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying." })?;
-    interpret_platform_ops_result(
-        result.status.success(),
-        &result.stdout,
-        expected_id,
-        expected_success_state,
-    )
+    let bytes = serde_json::to_vec(&result).map_err(|_| DispatchFailure {
+        state: "unknown",
+        category: "helper_response_invalid",
+        technical: "operation socket returned an invalid result",
+        public_message: "Approval is saved, but the dispatch result is uncertain. Reload the request before retrying.",
+    })?;
+    interpret_platform_ops_result(result.ok, &bytes, expected_id, expected_success_state)
 }
 
 fn interpret_platform_ops_result(
@@ -1659,18 +1643,6 @@ fn interpret_platform_ops_result(
     }
 }
 
-fn platform_ops_command(operation_path: std::ffi::OsString) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new("/usr/bin/sudo");
-    command
-        .arg("-n")
-        .arg(operation_path)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    command
-}
-
 fn helper_interactive_argv_mismatch(result: &PlatformOperationResult) -> bool {
     !result.ok
         && result.operation_id.is_empty()
@@ -1678,59 +1650,9 @@ fn helper_interactive_argv_mismatch(result: &PlatformOperationResult) -> bool {
         && result.detail == "arguments are not accepted for interactive operations"
 }
 
-fn encode_platform_ops_request(operation: &impl Serialize) -> Result<Vec<u8>, DispatchFailure> {
-    let bytes = serde_json::to_vec(operation).map_err(|_| DispatchFailure {
-        state: "failed",
-        category: "helper_request_encoding_failed",
-        technical: "could not encode helper request",
-        public_message: "Approval is saved, but the deployment request could not be prepared.",
-    })?;
-    if bytes.len() > 4096 {
-        return Err(DispatchFailure {
-            state: "failed",
-            category: "helper_request_too_large",
-            technical: "helper request exceeded size limit",
-            public_message: "Approval is saved, but the deployment request could not be prepared.",
-        });
-    }
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod platform_ops_contract_tests {
     use super::*;
-    use std::ffi::OsString;
-
-    #[test]
-    fn helper_is_called_without_operation_arguments() {
-        let command = platform_ops_command(OsString::from("/test/vapor-platform-ops"));
-        let args = command
-            .as_std()
-            .get_args()
-            .map(|value| value.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(args, ["-n", "/test/vapor-platform-ops"]);
-    }
-
-    #[test]
-    fn operation_payload_is_bounded_json_for_stdin() {
-        #[derive(Serialize)]
-        struct Request<'a> {
-            operation: &'static str,
-            request_id: &'a str,
-        }
-        let bytes = encode_platform_ops_request(&Request {
-            operation: "dispatch_deploy",
-            request_id: "request-123",
-        })
-        .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
-            serde_json::json!({"operation":"dispatch_deploy","request_id":"request-123"})
-        );
-        assert!(bytes.len() <= 4096);
-        assert!(encode_platform_ops_request(&"x".repeat(5000)).is_err());
-    }
 
     #[tokio::test]
     async fn failed_dispatch_response_exposes_only_the_static_safe_message() {

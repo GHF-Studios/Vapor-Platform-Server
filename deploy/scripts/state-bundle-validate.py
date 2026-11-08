@@ -291,6 +291,11 @@ def validate_bundle(path: pathlib.Path) -> None:
                 raise ValidationError("bundle runtime mode is unsupported")
             if not expected_units.issubset(service_units):
                 raise ValidationError("bundle is missing service units for its runtime mode")
+            if not {
+                "vapor-platform-ops.socket",
+                "vapor-platform-ops@.service",
+            }.issubset(service_units):
+                raise ValidationError("bundle is missing the local root-operations socket units")
             if not declared_categories.issubset(categories_seen):
                 raise ValidationError("bundle category declaration does not match its contents")
     except (tarfile.TarError, UnicodeDecodeError) as error:

@@ -66,19 +66,38 @@ fi
 
 install -d -o root -g root -m 0755 /usr/local/libexec
 install -o root -g root -m 0750 "${HELPER}" /usr/local/libexec/vapor-platform-ops
+
+# The web process must not elevate through sudo: its systemd unit sets
+# NoNewPrivileges=true. Accept bounded JSON only over a root-owned Unix socket
+# accessible to the dedicated Platform service account.
+install -m 0644 "${DEPLOY_DIR}/systemd/vapor-platform-ops.socket" \
+  /etc/systemd/system/vapor-platform-ops.socket
+install -m 0644 "${DEPLOY_DIR}/systemd/vapor-platform-ops@.service" \
+  /etc/systemd/system/vapor-platform-ops@.service
+
+# Remove the exact prior Platform sudo policy. Do not guess at or overwrite an
+# administrator-edited policy file.
+legacy_platform_sudoers=/etc/sudoers.d/vapor-platform-ops
+expected_platform_sudoers=""
+if [ -e "${legacy_platform_sudoers}" ] || [ -L "${legacy_platform_sudoers}" ]; then
+  if [ ! -f "${legacy_platform_sudoers}" ] || [ -L "${legacy_platform_sudoers}" ]; then
+    echo "error: unexpected Platform sudoers path; preserving it" >&2
+    exit 1
+  fi
+  expected_platform_sudoers="$(mktemp /tmp/vapor-platform-sudoers.XXXXXX)"
+  trap 'rm -f -- "${expected_platform_sudoers}"; cleanup' EXIT
+  printf '%s\n' \
+    'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""' \
+    'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops recovery-status' \
+    'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-start' \
+    'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-stop' \
+    > "${expected_platform_sudoers}"
+  if ! cmp -s -- "${expected_platform_sudoers}" "${legacy_platform_sudoers}"; then
+    echo "error: Platform sudoers file differs from the retired exact policy; preserving it" >&2
+    exit 1
+  fi
+fi
 install -d -o root -g root -m 0755 /etc/sudoers.d
-temporary_sudoers="$(mktemp /etc/sudoers.d/vapor-platform-ops.XXXXXX)"
-trap 'rm -f -- "${temporary_sudoers}"; cleanup' EXIT
-printf '%s\n' \
-  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops ""' \
-  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops recovery-status' \
-  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-start' \
-  'vapor ALL=(root) NOPASSWD: /usr/local/libexec/vapor-platform-ops emergency-console-stop' \
-  > "${temporary_sudoers}"
-chown root:root "${temporary_sudoers}"
-chmod 0440 "${temporary_sudoers}"
-visudo -cf "${temporary_sudoers}"
-mv -f -- "${temporary_sudoers}" /etc/sudoers.d/vapor-platform-ops
 
 install -o root -g root -m 0750 "${DEPLOY_DIR}/scripts/vapor-ssh-deploy" /usr/local/sbin/vapor-ssh-deploy
 install -o root -g root -m 0750 "${DEPLOY_DIR}/scripts/vapor-ssh-service-control" /usr/local/sbin/vapor-ssh-service-control
@@ -87,6 +106,7 @@ install -o root -g root -m 0750 "${DEPLOY_DIR}/scripts/vapor-ssh-service-control
 # are granted by each request's own sudoers file; a group-wide rule would let
 # every temporary account exceed its approved capability set.
 legacy_sudoers=/etc/sudoers.d/vapor-temporary-access
+retire_legacy_sudoers=0
 if [ -e "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ]; then
   if [ ! -f "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ] || \
     [ "$(wc -l < "${legacy_sudoers}")" -ne 1 ] || \
@@ -94,7 +114,7 @@ if [ -e "${legacy_sudoers}" ] || [ -L "${legacy_sudoers}" ]; then
     echo "error: unexpected legacy temporary-access sudoers file; preserving it" >&2
     exit 1
   fi
-  rm -- "${legacy_sudoers}"
+  retire_legacy_sudoers=1
 fi
 if include_directives="$(grep -RInE '^[[:space:]]*(@include(dir)?|#include(dir)?)[[:space:]]+' \
   /etc/sudoers /etc/sudoers.d 2>/dev/null)"; then
@@ -149,9 +169,28 @@ if ! systemctl reload "${SSH_SERVICE}"; then
 fi
 
 systemctl daemon-reload
-install -d -o root -g root -m 0750 /etc/vapor-server
-temporary_flag="$(mktemp /etc/vapor-server/ssh-access-enabled.XXXXXX)"
-chown root:root "${temporary_flag}"
-chmod 0644 "${temporary_flag}"
-mv -f -- "${temporary_flag}" /etc/vapor-server/ssh-access-enabled
+if [ "${VAPOR_RECOVERY_STAGING:-0}" != "1" ]; then
+  systemctl enable --now vapor-platform-ops.socket
+  systemctl is-active --quiet vapor-platform-ops.socket
+  install -d -o root -g root -m 0750 /etc/vapor-server
+  temporary_flag="$(mktemp /etc/vapor-server/ssh-access-enabled.XXXXXX)"
+  chown root:root "${temporary_flag}"
+  chmod 0644 "${temporary_flag}"
+  mv -f -- "${temporary_flag}" /etc/vapor-server/ssh-access-enabled
+
+  # Retire the previous sudo entry points only after the replacement socket is
+  # active and the SSH policy has been installed. Until this point, any failure
+  # leaves the old Platform path available for recovery.
+  if [ -e "${legacy_platform_sudoers}" ]; then
+    rm -- "${legacy_platform_sudoers}"
+  fi
+  if [ "${retire_legacy_sudoers}" = "1" ]; then
+    rm -- "${legacy_sudoers}"
+  fi
+fi
+if [ -n "${expected_platform_sudoers}" ]; then
+  rm -f -- "${expected_platform_sudoers}"
+  trap 'cleanup' EXIT
+fi
+visudo -c >/dev/null
 echo "platform-ops: fixed helper and temporary SSH access policy installed"

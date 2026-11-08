@@ -152,6 +152,13 @@ mod unix_impl {
         host_admin_confirmed: Option<bool>,
     }
 
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LocalOperation {
+        operation: String,
+        session_token: String,
+    }
+
     #[derive(Serialize)]
     struct Output<'a> {
         ok: bool,
@@ -182,6 +189,10 @@ mod unix_impl {
 
     pub async fn run_entry() {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
+        if unsafe { libc::geteuid() } != 0 {
+            emit(false, "", "failed", "root privileges required");
+            std::process::exit(1);
+        }
         if args.as_slice() == ["emergency-console-start"] {
             let version = command_output("/usr/bin/ttyd", &["--version"]).await;
             if !version.is_ok_and(|output| ttyd_version_is_approved(&output)) {
@@ -305,13 +316,115 @@ mod unix_impl {
             );
             std::process::exit(2);
         }
-        let result = run().await;
+        let mut bytes = Vec::new();
+        if std::io::stdin()
+            .take((MAX_INPUT + 1) as u64)
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.is_empty()
+            || bytes.len() > MAX_INPUT
+        {
+            emit(false, "", "failed", "invalid operation request size");
+            std::process::exit(2);
+        }
+        if let Ok(operation) = serde_json::from_slice::<LocalOperation>(&bytes) {
+            match operation.operation.as_str() {
+                "recovery_status" | "emergency_console_start" | "emergency_console_stop" => {
+                    if !authorize_root(&operation.session_token).await {
+                        emit(false, "", "failed", "root Identity authorization failed");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {}
+            }
+            match operation.operation.as_str() {
+                "recovery_status" => match recovery_status().await {
+                    Ok(status) if status.validate() => {
+                        println!("{}", serde_json::to_string(&status).unwrap_or_default());
+                        return;
+                    }
+                    _ => {
+                        emit(
+                            false,
+                            "recovery-status",
+                            "failed",
+                            "recovery status unavailable",
+                        );
+                        std::process::exit(1);
+                    }
+                },
+                "emergency_console_start" | "emergency_console_stop" => {
+                    let state = match console_action(operation.operation.as_str()).await {
+                        Ok(state) => state,
+                        Err(detail) => {
+                            emit(false, "emergency-console", "failed", detail);
+                            std::process::exit(1);
+                        }
+                    };
+                    emit(
+                        true,
+                        "emergency-console",
+                        state,
+                        if state == "started" {
+                            "emergency console started"
+                        } else {
+                            "emergency console stopped"
+                        },
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+        let result = run(bytes).await;
         match result {
             Ok((id, state, detail)) => emit(true, &id, state, detail),
             Err((id, detail)) => {
                 emit(false, &id, "failed", detail);
                 std::process::exit(1);
             }
+        }
+    }
+
+    async fn console_action(operation: &str) -> Result<&'static str, &'static str> {
+        match operation {
+            "emergency_console_start" => {
+                let version = command_output("/usr/bin/ttyd", &["--version"]).await;
+                if !version.is_ok_and(|output| ttyd_version_is_approved(&output)) {
+                    return Err("ttyd version is not approved for root console access");
+                }
+                run_command(
+                    "/usr/bin/systemctl",
+                    &["restart", "vapor-emergency-console.service"],
+                )
+                .await
+                .map_err(|_| "emergency console could not start")?;
+                Ok("started")
+            }
+            "emergency_console_stop" => {
+                let load_state = command_output(
+                    "/usr/bin/systemctl",
+                    &[
+                        "show",
+                        "--property=LoadState",
+                        "--value",
+                        "vapor-emergency-console.service",
+                    ],
+                )
+                .await
+                .map_err(|_| "could not inspect emergency console service")?;
+                if load_state.trim() == "not-found" {
+                    return Ok("stopped");
+                }
+                run_command(
+                    "/usr/bin/systemctl",
+                    &["stop", "vapor-emergency-console.service"],
+                )
+                .await
+                .map_err(|_| "emergency console could not stop")?;
+                Ok("stopped")
+            }
+            _ => Err("unsupported local operation"),
         }
     }
 
@@ -930,17 +1043,11 @@ mod unix_impl {
         }
     }
 
-    async fn run() -> Result<(String, &'static str, &'static str), (String, &'static str)> {
+    async fn run(
+        bytes: Vec<u8>,
+    ) -> Result<(String, &'static str, &'static str), (String, &'static str)> {
         if unsafe { libc::geteuid() } != 0 {
             return Err((String::new(), "root privileges required"));
-        }
-        let mut bytes = Vec::new();
-        std::io::stdin()
-            .take((MAX_INPUT + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|_| (String::new(), "could not read operation request"))?;
-        if bytes.is_empty() || bytes.len() > MAX_INPUT {
-            return Err((String::new(), "invalid operation request size"));
         }
         let input: Input = serde_json::from_slice(&bytes)
             .map_err(|_| (String::new(), "invalid operation request"))?;
@@ -1292,6 +1399,7 @@ mod unix_impl {
             "/usr/sbin/useradd",
             &[
                 "--create-home",
+                "--no-log-init",
                 "--gid",
                 "vapor-temp-ssh",
                 "--shell",
