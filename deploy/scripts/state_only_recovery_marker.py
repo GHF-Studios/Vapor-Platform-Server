@@ -101,9 +101,15 @@ def _write(root: pathlib.Path, value: dict[str, object], *, create: bool) -> Non
     descriptor, temporary_name = tempfile.mkstemp(prefix=".state-only.", dir=root)
     temporary = pathlib.Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
         payload = json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n"
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            if callable(getattr(os, "fchmod", None)):
+                os.fchmod(stream.fileno(), 0o600)
+            else:
+                # Windows Python does not expose fchmod. The recovery marker
+                # is created on Linux in production; chmod(path) keeps local
+                # Windows execution and its recovery-kit tests portable.
+                os.chmod(temporary, 0o600)
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
