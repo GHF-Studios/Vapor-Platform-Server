@@ -4127,7 +4127,7 @@ mod tests {
         assert!(page.contains("id=\"server-fleet-refresh\""));
         assert!(page.contains("Enroll a server"));
         assert!(page.contains("Create enrollment"));
-        assert!(page.contains("one-time reporter credential"));
+        assert!(page.contains("Copy this credential now."));
         assert!(page.contains("no shell access or service control"));
     }
 
