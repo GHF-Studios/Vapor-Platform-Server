@@ -99,6 +99,31 @@
   safely be invented. Keep local source builds as the fallback and preserve
   the dirty checkout.
 
+## Steam app-root inventory and payload decision (2026-11-09 11:58 UTC)
+
+- Read-only inventory of the installed Loo Cast directory found 39,711,106,627
+  bytes (39.71 GB decimal) across the Steam app root. The largest entries are
+  `output` (28,781,730,980 bytes), `rustup-home` (3,772,556,115), `content`
+  (4,287,400,175), `cargo-home` (915,911,545), and `tools` (1,109,175,632).
+  Vapor build/cache/toolchain data therefore dominate the local footprint.
+- Steam's `appmanifest_2122620.acf` lists only depots `2122621` and `2122623`,
+  sized 75,298,219 and 243,241,642 bytes. Their 318,539,861-byte sum exactly
+  matches Steam's `SizeOnDisk`; the remaining roughly 39.39 GB is outside
+  Steam's recorded depot payload. This makes the current mixed-ownership app
+  directory measurable rather than an assumption.
+- The installed root still has a loose `App.vapor.toml`; it names three
+  Workshop IDs for the Spacetime Engine, Loo Cast Game, and Loo Cast
+  Packagepack. That manifest does not reflect the owner's stated removal of
+  those Workshop items and must not be reused unchanged for the replacement.
+- Confirmed target: one self-contained executable artifact in the Steam depot,
+  embedding `App.vapor.toml` and the Engine, Game, and Packagepack payloads.
+  Steam must not contain a standalone Vapor runtime, compiler/toolchains,
+  build outputs, caches, checkouts, or user state. The executable may hand off
+  to a separately installed Vapor tools selector; it must not bundle Vapor.
+- This inventory did not move or delete anything. Migration remains a
+  previewable, exportable Client-owned operation; the exact source files and
+  package contents need classification before a clean-room purge.
+
 ## Historical checkpoint (2026-11-08)
 
 - Main VPS exports remain available and an owner USB is mounted at `E:` (`BACKUPS`), with recovery files under `E:\VaporRecovery`.
