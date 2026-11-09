@@ -816,9 +816,12 @@ const JS: &str = r#"
       header.append(title, state); card.append(header);
       const selectionValid = validDeploymentSelection(item);
       const orderReady = item.approval_order_ready === true;
+      const orderBlocker = item.approval_order_blocker && typeof item.approval_order_blocker.id === 'string' ? item.approval_order_blocker : null;
+      const blockerStage = orderBlocker ? orderBlocker.status === 'pending' ? 'same revision pending' : orderBlocker.status === 'executing' ? 'deployment running' : ({ queued: 'queued', dispatching: 'starting', unknown: 'outcome uncertain', claimed: 'worker running', completed: 'finished', failed: 'dispatch failed', expired: 'expired before start' })[orderBlocker.dispatch_state] || orderBlocker.status : null;
       const currentMain = typeof item.current_main_commit === 'string' ? item.current_main_commit.toLowerCase() : null;
       const revisionCurrent = currentMain !== null && String(item.commit || '').toLowerCase() === currentMain;
-      state.textContent = !currentMain ? 'Current revision unknown' : deployIsSuperseded(item) ? 'Superseded' : !selectionValid ? 'Invalid target' : orderReady ? 'Ready to approve' : 'Waiting for prior deployment';
+      state.textContent = !currentMain ? 'Current revision unknown' : deployIsSuperseded(item) ? 'Superseded' : !selectionValid ? 'Invalid target' : orderReady ? 'Ready to approve' : orderBlocker ? `Blocked by ${orderBlocker.id.slice(0, 8)} · ${blockerStage}` : 'Waiting for prior deployment';
+      if (orderBlocker) state.title = `Blocking request ${orderBlocker.id} · ${orderBlocker.commit} · ${orderBlocker.status}/${orderBlocker.dispatch_state}`;
       state.classList.add(!currentMain || !selectionValid ? 'state-danger' : deployIsSuperseded(item) ? 'state-muted' : orderReady ? 'state-success' : 'state-warning');
       const primary = document.createElement('div'); primary.className = 'approval-deploy-primary';
       const shortCommit = String(item.commit || 'unknown').slice(0, 12);
@@ -833,6 +836,7 @@ const JS: &str = r#"
       const evidenceBody = document.createElement('div');
       appendText(evidenceBody, 'p', `Requested revision: ${item.commit || 'unknown'}${currentMain ? ` · current main: ${currentMain}` : ''}`, 'muted');
       appendText(evidenceBody, 'p', `Requester: ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · expires ${humanTime(item.expires_at_unix)}`, 'muted');
+      if (orderBlocker) appendText(evidenceBody, 'p', `Order blocker: ${orderBlocker.id} · ${orderBlocker.commit} · ${orderBlocker.status}/${orderBlocker.dispatch_state}`, 'muted');
       try {
         const ciUrl = new URL(item.workflow_url);
         if (ciUrl.protocol === 'https:' && ciUrl.hostname === 'github.com' && ciUrl.pathname.startsWith('/GHF-Studios/')) {
@@ -1943,7 +1947,9 @@ const JS: &str = r#"
     const nodeSecretPanel = document.querySelector('#server-node-secret');
     const nodeSecretValue = document.querySelector('#server-node-secret-value');
     const nodeSecretCopy = document.querySelector('#server-node-secret-copy');
+    const nodeSecretDownload = document.querySelector('#server-node-secret-download');
     const nodeSecretClose = document.querySelector('#server-node-secret-close');
+    let createdNodeConfig = null;
   if (fleetList && fleetSummary) {
     const formatBytes = value => {
       let amount = Number(value);
@@ -2056,8 +2062,9 @@ const JS: &str = r#"
       try {
         const created = await postNodeApi('/api/admin/server-nodes', { label: nodeLabel.value, role: nodeRole.value });
         nodeSecretValue.textContent = created.reporter_credential;
+        createdNodeConfig = { id: created.id, credential: created.reporter_credential };
         nodeSecretPanel.hidden = false;
-        nodeStatus.textContent = `Enrollment created for ${created.label}. Copy the secret into the node agent configuration now.`;
+        nodeStatus.textContent = `Enrollment created for ${created.label}. Download its config or copy the credential now; the secret will not be shown again.`;
         nodeForm.reset(); await refreshNodeManagement(); await refreshFleet();
       } catch (error) { nodeStatus.textContent = error.message || 'Could not create server enrollment.'; }
       finally { submit.disabled = false; }
@@ -2066,7 +2073,25 @@ const JS: &str = r#"
       try { await navigator.clipboard.writeText(nodeSecretValue.textContent); nodeStatus.textContent = 'Reporter credential copied. Store it only in the node agent’s protected configuration.'; }
       catch { nodeStatus.textContent = 'Clipboard access was denied. Select and copy the one-time credential manually.'; }
     });
-    nodeSecretClose?.addEventListener('click', () => { nodeSecretValue.textContent = ''; nodeSecretPanel.hidden = true; });
+    nodeSecretDownload?.addEventListener('click', () => {
+      const current = createdNodeConfig;
+      const origin = new URL(window.location.origin);
+      const credentialParts = String(current?.credential || '').split('.');
+      const validId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(current?.id || '');
+      if (!current || origin.protocol !== 'https:' || !validId || credentialParts.length !== 4 || credentialParts[0] !== 'v1' || credentialParts[1] !== current.id || !/^[0-9a-f]{32}$/i.test(credentialParts[2]) || !/^[0-9a-f]{32}$/i.test(credentialParts[3])) {
+        nodeStatus.textContent = 'The one-time enrollment data is unavailable or invalid. Create a new enrollment.';
+        return;
+      }
+      const quote = value => JSON.stringify(value);
+      const config = `platform_origin = ${quote(origin.origin)}\nnode_id = ${quote(current.id)}\nreporter_credential = ${quote(current.credential)}\n`;
+      const url = URL.createObjectURL(new Blob([config], { type: 'application/toml' }));
+      const link = document.createElement('a'); link.href = url; link.download = `vapor-node-${current.id}.toml`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      nodeStatus.textContent = 'Config downloaded. It contains the node secret; transfer it privately, install it as root-owned and readable only by the agent group, then delete the extra copy.';
+    });
+    const clearCreatedNodeSecret = () => { nodeSecretValue.textContent = ''; createdNodeConfig = null; nodeSecretPanel.hidden = true; };
+    nodeSecretClose?.addEventListener('click', clearCreatedNodeSecret);
+    window.addEventListener('pagehide', clearCreatedNodeSecret, { once: true });
     refreshNodeManagement();
   }
 
@@ -2437,7 +2462,7 @@ fn server_fleet_page_content() -> &'static str {
     concat!(
         "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<section class=\"card\"><h2>Enroll a server</h2><p class=\"muted\">Enrollment lets a host report CPU, memory, load, and uptime only. It grants no shell access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Create enrollment</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>Copy this credential now.</strong> It will not be shown again.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading enrolled servers…</p><div id=\"server-node-management\"></div></section>",
+        "<section class=\"card\"><h2>Enroll a server</h2><p class=\"muted\">Enrollment lets a host report CPU, memory, load, and uptime only. It grants no shell access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Create enrollment</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading enrolled servers…</p><div id=\"server-node-management\"></div></section>",
         "<p class=\"muted\">Remote enrollment is separate from SSH access and never enables arbitrary commands.</p>"
     )
 }
@@ -4135,7 +4160,8 @@ mod tests {
         assert!(page.contains("id=\"server-fleet-refresh\""));
         assert!(page.contains("Enroll a server"));
         assert!(page.contains("Create enrollment"));
-        assert!(page.contains("Copy this credential now."));
+        assert!(page.contains("This file contains the one-time credential."));
+        assert!(page.contains("id=\"server-node-secret-download\""));
         assert!(page.contains("no shell access or service control"));
     }
 
@@ -4234,6 +4260,8 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
         assert!(script.contains("item.approval_order_ready === true"));
+        assert!(script.contains("item.approval_order_blocker && typeof item.approval_order_blocker.id === 'string'"));
+        assert!(script.contains("Blocked by ${orderBlocker.id.slice(0, 8)}"));
         assert!(script.contains("Waiting for prior deployment"));
         assert!(script.contains("created_at_unix || 0) - Number(b.created_at_unix || 0)"));
         let deployments = script

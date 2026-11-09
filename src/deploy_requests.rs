@@ -108,7 +108,16 @@ struct DeployRequestSummary {
     dispatch_detail: Option<String>,
     retry_eligible: bool,
     approval_order_ready: bool,
+    approval_order_blocker: Option<ApprovalOrderBlocker>,
     current_main_commit: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ApprovalOrderBlocker {
+    id: String,
+    commit: String,
+    status: String,
+    dispatch_state: String,
 }
 
 #[derive(Serialize)]
@@ -548,6 +557,9 @@ async fn list_requests(
                             is_current_main_revision(&row.get::<String, _>("commit_hash"), main)
                         }),
                 approval_order_ready: row.get("approval_order_ready"),
+                approval_order_blocker: row
+                    .get::<Option<String>, _>("approval_order_blocker_json")
+                    .and_then(|value| serde_json::from_str(&value).ok()),
                 current_main_commit: current_main_commit.clone(),
             })
         })
@@ -565,18 +577,31 @@ async fn fetch_request_rows(
     cursor: Option<&PageCursor>,
     page_size: usize,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
-    let query = "SELECT id, requester_profile_id, requester_credential_id, repository, branch, commit_hash, tree_hash, submodules_json, request_json, workflow_url,
+    let query = "WITH request_rows AS (
+                        SELECT platform_deploy_requests.*,
+                               (SELECT json_object(
+                            'id', older.id,
+                            'commit', older.commit_hash,
+                            'status', older.status,
+                            'dispatch_state', older.dispatch_state
+                         )
+                         FROM platform_deploy_requests older
+                         WHERE (older.created_at_unix < platform_deploy_requests.created_at_unix
+                           OR (older.created_at_unix = platform_deploy_requests.created_at_unix AND older.id < platform_deploy_requests.id))
+                           AND older.expires_at_unix > strftime('%s','now')
+                           AND (older.status <> 'pending' OR older.commit_hash = platform_deploy_requests.commit_hash)
+                           AND (older.status IN ('pending','executing')
+                             OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))
+                         ORDER BY older.created_at_unix, older.id
+                         LIMIT 1) AS approval_order_blocker_json
+                        FROM platform_deploy_requests
+                 )
+                 SELECT id, requester_profile_id, requester_credential_id, repository, branch, commit_hash, tree_hash, submodules_json, request_json, workflow_url,
                         summary, status, version, created_at_unix, expires_at_unix, decided_at_unix, decision_reason, result_detail,
                         dispatch_state, dispatch_attempts, dispatch_attempted_at_unix, dispatch_detail,
-                        NOT EXISTS (SELECT 1 FROM platform_deploy_requests older
-                          WHERE (older.created_at_unix < platform_deploy_requests.created_at_unix
-                            OR (older.created_at_unix = platform_deploy_requests.created_at_unix AND older.id < platform_deploy_requests.id))
-                            AND older.expires_at_unix > strftime('%s','now')
-                            AND (older.status <> 'pending' OR older.commit_hash = platform_deploy_requests.commit_hash)
-                            AND (older.status IN ('pending','executing')
-                              OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))
-                        ) AS approval_order_ready
-                 FROM platform_deploy_requests";
+                        approval_order_blocker_json IS NULL AS approval_order_ready,
+                        approval_order_blocker_json
+                 FROM request_rows";
     let limit = (page_size + 1) as i64;
     let cursor_clause = " AND (created_at_unix < ? OR (created_at_unix = ? AND id < ?))";
     let order_limit = " ORDER BY created_at_unix DESC, id DESC LIMIT ?";
@@ -2598,6 +2623,79 @@ mod tests {
             vec!["a"]
         );
         assert!(second.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn deployment_approval_page_identifies_the_exact_order_blocker() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE platform_deploy_requests (id TEXT, requester_profile_id TEXT, requester_credential_id TEXT, repository TEXT, branch TEXT, commit_hash TEXT, tree_hash TEXT, submodules_json TEXT, request_json TEXT, workflow_url TEXT, summary TEXT, status TEXT, version INTEGER, created_at_unix INTEGER, expires_at_unix INTEGER, decided_at_unix INTEGER, decision_reason TEXT, result_detail TEXT, dispatch_state TEXT, dispatch_attempts INTEGER, dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT)")
+            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO platform_deploy_requests
+             (id, commit_hash, status, created_at_unix, expires_at_unix, dispatch_state)
+             VALUES ('earlier-request', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'approved', 10, 20000000000, 'dispatching'),
+                    ('unrelated-pending', 'cccccccccccccccccccccccccccccccccccccccc', 'pending', 11, 20000000000, 'not_attempted'),
+                    ('same-commit-pending', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'pending', 15, 20000000000, 'not_attempted'),
+                    ('current-request', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'pending', 20, 20000000000, 'not_attempted')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let rows = fetch_request_rows(&pool, None, None, 10).await.unwrap();
+        let current = rows
+            .iter()
+            .find(|row| row.get::<String, _>("id") == "current-request")
+            .unwrap();
+        assert!(!current.get::<bool, _>("approval_order_ready"));
+        let blocker: serde_json::Value = serde_json::from_str(
+            current
+                .get::<Option<String>, _>("approval_order_blocker_json")
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(blocker["id"], "earlier-request");
+        assert_eq!(
+            blocker["commit"],
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(blocker["status"], "approved");
+        assert_eq!(blocker["dispatch_state"], "dispatching");
+
+        sqlx::query("UPDATE platform_deploy_requests SET status='succeeded', dispatch_state='completed' WHERE id='earlier-request'")
+            .execute(&pool).await.unwrap();
+        let rows = fetch_request_rows(&pool, None, None, 10).await.unwrap();
+        let current = rows
+            .iter()
+            .find(|row| row.get::<String, _>("id") == "current-request")
+            .unwrap();
+        assert!(!current.get::<bool, _>("approval_order_ready"));
+        let blocker: serde_json::Value = serde_json::from_str(
+            current
+                .get::<Option<String>, _>("approval_order_blocker_json")
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(blocker["id"], "same-commit-pending");
+
+        sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='same-commit-pending'")
+            .execute(&pool).await.unwrap();
+        let rows = fetch_request_rows(&pool, None, None, 10).await.unwrap();
+        let current = rows
+            .iter()
+            .find(|row| row.get::<String, _>("id") == "current-request")
+            .unwrap();
+        assert!(current.get::<bool, _>("approval_order_ready"));
+        assert_eq!(
+            current.get::<Option<String>, _>("approval_order_blocker_json"),
+            None
+        );
     }
 
     #[test]

@@ -46,6 +46,12 @@ sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin va
 sudo install -d -o root -g vapor-node-agent -m 0750 /etc/vapor
 ```
 
+The root-only **Servers** page can download the one-time TOML config immediately
+after enrollment. Treat that download like a password: transfer it directly to
+the enrolled host, install it with the ownership and mode below, and remove the
+extra copy from the workstation. The page clears its copy when the enrollment
+panel is closed; it cannot retrieve the credential again.
+
 Create `/etc/vapor/node-agent.toml` as `root:vapor-node-agent`, mode `0640`:
 
 ```toml

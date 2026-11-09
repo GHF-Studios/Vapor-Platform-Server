@@ -86,13 +86,15 @@ is defined in [`vapor-content-and-build-domain-contract.md`](vapor-content-and-b
 ## Admin authority, request lifecycle, and history
 
 The Platform also exposes a private `/admin/servers` inventory for physical
-hosts. The first slice reports only the current Platform host, sampling Linux
-CPU, memory, load, and uptime on a background interval and serving a cached
-snapshot through a root-authorized API. This is intentionally distinct from
-Hosting, which reports service processes. It is not yet a multi-host fleet:
-there is no enrollment protocol, remote agent, or remote operation channel.
-Additional nodes must register explicitly and report bounded telemetry; the
-web dashboard must not turn into an SSH polling or arbitrary-command surface.
+hosts. It samples the current Platform host's CPU, memory, load, and uptime on
+a background interval and serves a cached snapshot through a root-authorized
+API. Additional nodes can be explicitly enrolled and report bounded telemetry
+through the Linux node agent; Platform stores a digest of each telemetry-only
+credential and keeps the last validated sample. This is intentionally distinct
+from Hosting, which reports service processes. The fleet still has no remote
+operation channel: the web dashboard must not turn into SSH polling or an
+arbitrary-command surface. Until a second host is enrolled and reports, the
+live fleet remains the Platform host alone.
 
 The public site, signed-in personal dashboard, authorized Project workspaces,
 and private Platform operator shell are separate audience scopes. The admin
