@@ -14,6 +14,7 @@ mod ssh_access;
 mod ssh_key;
 mod ssh_policy;
 mod ssh_schema;
+mod server_fleet;
 
 use axum::Router;
 use std::env;
@@ -28,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ssh_access::initialize().await?;
     operation_history::initialize().await?;
     emergency_console::initialize().await?;
+    server_fleet::initialize();
 
     let app = if env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services") {
         // In independent-services mode Platform remains the shared operator

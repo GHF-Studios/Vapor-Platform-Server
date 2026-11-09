@@ -136,6 +136,14 @@ const MODULES: &[AdminSection] = &[
         state: SectionState::Implemented,
     },
     AdminSection {
+        group: "Infrastructure",
+        name: "Servers",
+        path: Some("/admin/servers"),
+        description: "Machine inventory and private host telemetry",
+        service_ids: &["platform"],
+        state: SectionState::Implemented,
+    },
+    AdminSection {
         group: "Operate",
         name: "History",
         path: Some("/admin/history"),
@@ -310,6 +318,36 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .approval-source[open] > summary::after { content:'−'; }
 .approval-source-count { order:1; margin-left:auto; color:#9eacba; font-size:12px; font-weight:500; }
 .approval-source-body { padding:0 14px 12px; }
+.approval-deploy { padding:10px 12px; margin:8px 0; }
+.approval-deploy-header { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.approval-deploy-header h3 { margin:0; font-size:14px; overflow-wrap:anywhere; }
+.approval-deploy-primary { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:5px 0; }
+.approval-deploy-primary p { margin:0; }
+.approval-deploy-summary { margin:5px 0; color:#cbd6df; }
+.approval-deploy-details { margin-top:5px; font-size:12px; }
+.approval-deploy-actions { display:flex; gap:6px; align-items:center; margin-top:8px; }
+.approval-deploy-actions button { padding:4px 8px; font-size:12px; }
+.approval-state { display:inline-flex; align-items:center; padding:2px 7px; border:1px solid #40536a; border-radius:999px; white-space:nowrap; font-size:11px; }
+.approval-state.state-success { color:#93d9a7; border-color:#39754a; }
+.approval-state.state-warning { color:#e5cb78; border-color:#7a6932; }
+.approval-state.state-danger { color:#f08b92; border-color:#83444a; }
+.approval-state.state-muted { color:#9eacba; }
+.approval-deploy-details > summary { cursor:pointer; color:#9eacba; font-size:12px; }
+.approval-deploy-details p { margin:6px 0; overflow-wrap:anywhere; }
+.server-fleet-toolbar { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+.server-fleet-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:10px; }
+.server-node { padding:12px; }
+.server-node-header { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+.server-node-header h3 { margin:0; font-size:15px; }
+.server-node-role { color:#9eacba; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+.server-node-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0 0; }
+.server-node-metrics > div { min-width:0; background:#111821; border-radius:4px; padding:8px; }
+.server-node-metrics dt { color:#9eacba; font-size:11px; }
+.server-node-metrics dd { margin:3px 0 0; font-size:14px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.server-node-status { color:#93d9a7; font-size:12px; }
+.server-node-status.stale { color:#e5cb78; }
+.server-node-status.unavailable { color:#f08b92; }
+.server-fleet-note { margin:8px 0 0; color:#9eacba; font-size:12px; }
 .table-scroll { max-width:100%; overflow-x:auto; }
 .table-scroll:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
 .skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; background:#fff; color:#111; }
@@ -763,38 +801,60 @@ const JS: &str = r#"
       await refreshInbox();
     };
     const renderDeploy = (item, card) => {
-      appendText(card, 'h3', `${item.repository || 'Unknown repository'} · ${item.branch || 'unknown branch'}`);
+      card.classList.add('approval-deploy');
+      const header = document.createElement('div'); header.className = 'approval-deploy-header';
+      const title = document.createElement('h3'); title.textContent = `${item.repository || 'Unknown repository'} · ${item.branch || 'unknown branch'}`;
+      const state = document.createElement('span'); state.className = 'approval-state';
+      header.append(title, state); card.append(header);
       const selectionValid = validDeploymentSelection(item);
       const orderReady = item.approval_order_ready === true;
-      appendText(card, 'p', `Commit ${item.commit || 'unknown'} · ${deploymentSelectionLabel(item)}`, selectionValid ? 'muted' : 'error');
-      appendText(card, 'p', item.summary || 'No request summary provided.');
-      const metadata = document.createElement('p'); metadata.className = 'muted';
-      metadata.textContent = `Submitted by ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'}`;
-      card.append(requestMetadata(metadata));
-      appendText(card, 'p', `Expires ${humanTime(item.expires_at_unix)}`, 'muted');
+      const currentMain = typeof item.current_main_commit === 'string' ? item.current_main_commit.toLowerCase() : null;
+      const revisionCurrent = currentMain !== null && String(item.commit || '').toLowerCase() === currentMain;
+      state.textContent = !currentMain ? 'Current revision unknown' : deployIsSuperseded(item) ? 'Superseded' : !selectionValid ? 'Invalid target' : orderReady ? 'Ready to approve' : 'Waiting for prior deployment';
+      state.classList.add(!currentMain || !selectionValid ? 'state-danger' : deployIsSuperseded(item) ? 'state-muted' : orderReady ? 'state-success' : 'state-warning');
+      const primary = document.createElement('div'); primary.className = 'approval-deploy-primary';
+      const shortCommit = String(item.commit || 'unknown').slice(0, 12);
+      const commit = appendText(primary, 'code', shortCommit); commit.title = item.commit || 'Commit unavailable';
+      appendText(primary, 'span', deploymentSelectionLabel(item), selectionValid ? '' : 'error');
+      if (item.created_at_unix) appendText(primary, 'span', `Requested ${humanTime(item.created_at_unix)}`, 'muted');
+      card.append(primary);
+      appendText(card, 'p', item.summary || 'No request summary provided.', 'approval-deploy-summary');
+
+      const evidence = document.createElement('details'); evidence.className = 'approval-deploy-details';
+      const evidenceSummary = document.createElement('summary'); evidenceSummary.textContent = 'Revision, requester, and CI evidence';
+      const evidenceBody = document.createElement('div');
+      appendText(evidenceBody, 'p', `Requested revision: ${item.commit || 'unknown'}${currentMain ? ` · current main: ${currentMain}` : ''}`, 'muted');
+      appendText(evidenceBody, 'p', `Requester: ${item.requester_kind || 'unknown'} · profile ${item.requester_profile_id || 'unknown'} · expires ${humanTime(item.expires_at_unix)}`, 'muted');
       try {
         const ciUrl = new URL(item.workflow_url);
         if (ciUrl.protocol === 'https:' && ciUrl.hostname === 'github.com' && ciUrl.pathname.startsWith('/GHF-Studios/')) {
           const link = document.createElement('a'); link.href = ciUrl.href; link.rel = 'noopener noreferrer';
-          link.textContent = 'Open successful CI run'; card.append(link);
+          link.textContent = 'Successful CI run'; evidenceBody.append(link);
         }
       } catch (_) {}
       const pins = document.createElement('details');
       const summary = document.createElement('summary'); summary.textContent = `${Array.isArray(item.submodules) ? item.submodules.length : 0} pinned service revisions`;
       const list = document.createElement('ul');
       for (const pin of (Array.isArray(item.submodules) ? item.submodules : [])) appendText(list, 'li', `${pin.path}: ${pin.commit}`);
-      pins.append(summary, list); card.append(pins);
-      const currentMain = typeof item.current_main_commit === 'string' ? item.current_main_commit.toLowerCase() : null;
-      const revisionCurrent = currentMain !== null && String(item.commit || '').toLowerCase() === currentMain;
-      if (!currentMain) appendText(card, 'p', 'Could not verify GitHub main. Approval is disabled until the current revision can be checked.', 'approval-state-warning');
-      else if (deployIsSuperseded(item)) appendText(card, 'p', `This request is for an older main revision (${currentMain.slice(0, 12)} is current). No decision is needed.`, 'approval-state-warning');
-      else if (orderReady) appendText(card, 'p', 'Current main · ready for review.', 'muted');
-      else appendText(card, 'p', 'Waiting for an earlier deploy request to be decided or completed.', 'muted');
+      pins.append(summary, list); evidenceBody.append(pins); evidence.append(evidenceSummary, evidenceBody); card.append(evidence);
+      if (!currentMain) appendText(card, 'p', 'Approval is disabled until current main can be verified.', 'approval-state-warning');
+      else if (deployIsSuperseded(item)) appendText(card, 'p', `No decision needed · main advanced to ${currentMain.slice(0, 12)}.`, 'approval-state-warning');
       if (deployIsSuperseded(item)) return;
-      const approveForm = confirmationForm(item, 'I reviewed this exact revision and target', 'Approve and queue', button => submitDecision(button, 'deploy', item, 'approve', { expected_version: item.version, confirmed: true, reason: 'approved in Platform Approvals' }));
-      if (!orderReady || !selectionValid || !revisionCurrent) approveForm.querySelector('button').disabled = true;
-      card.append(approveForm);
-      card.append(confirmationForm(item, 'I intend to reject this request', 'Reject', button => submitDecision(button, 'deploy', item, 'reject', { expected_version: item.version, confirmed: true, reason: 'rejected in Platform Approvals' })));
+      const actions = document.createElement('div'); actions.className = 'approval-deploy-actions';
+      const approve = document.createElement('button'); approve.type = 'button'; approve.textContent = 'Approve current main commit';
+      approve.disabled = !currentMain || !orderReady || !selectionValid || !revisionCurrent || isExpiredByTime(item);
+      approve.title = approve.disabled ? 'Approval requires a current revision, valid target, unexpired request, and correct queue order.' : `Approve ${item.commit} for ${deploymentSelectionLabel(item)}`;
+      approve.addEventListener('click', () => {
+        if (!window.confirm(`Queue ${item.repository || 'repository'} ${item.commit || 'unknown commit'} (${deploymentSelectionLabel(item)}) now?`)) return;
+        submitDecision(approve, 'deploy', item, 'approve', { expected_version: item.version, confirmed: true, reason: 'approved current main in Platform Approvals' });
+      });
+      const reject = document.createElement('button'); reject.type = 'button'; reject.textContent = 'Reject';
+      reject.addEventListener('click', () => {
+        if (!window.confirm(`Reject ${item.repository || 'repository'} ${shortCommit}?`)) return;
+        submitDecision(reject, 'deploy', item, 'reject', { expected_version: item.version, confirmed: true, reason: 'rejected in Platform Approvals' });
+      });
+      actions.append(approve, reject);
+      card.append(actions);
     };
     const renderSsh = (item, card) => {
       appendText(card, 'h3', `${item.fingerprint || 'Unknown key'} · ${capabilityList(item.requested_capabilities) || 'Shell access'}`);
@@ -1856,6 +1916,70 @@ const JS: &str = r#"
     });
   }
 
+  const fleetList = document.querySelector('#server-fleet-list');
+  const fleetSummary = document.querySelector('#server-fleet-summary');
+  const fleetRefresh = document.querySelector('#server-fleet-refresh');
+  if (fleetList && fleetSummary) {
+    const formatBytes = value => {
+      let amount = Number(value);
+      if (!Number.isFinite(amount) || amount < 0) return 'Unavailable';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB']; let index = 0;
+      while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index++; }
+      return `${amount.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+    };
+    const formatUptime = value => {
+      const seconds = Number(value);
+      if (!Number.isFinite(seconds) || seconds < 0) return 'Unavailable';
+      const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+    };
+    const metric = (parent, label, value) => {
+      const cell = document.createElement('div'); const term = document.createElement('dt'); const detail = document.createElement('dd');
+      term.textContent = label; detail.textContent = value; cell.append(term, detail); parent.append(cell);
+    };
+    const renderFleet = data => {
+      if (data?.schema_version !== 1 || data?.scope !== 'local-platform-host-only' || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
+      fleetList.replaceChildren();
+      const reporting = data.nodes.filter(node => node.state === 'online').length;
+      fleetSummary.textContent = `${reporting} of ${data.nodes.length} registered ${data.nodes.length === 1 ? 'server is' : 'servers are'} reporting · sampled ${new Date(Number(data.observed_at_unix) * 1000).toLocaleTimeString()}`;
+      for (const node of data.nodes) {
+        const card = document.createElement('article'); card.className = 'server-node card';
+        const header = document.createElement('div'); header.className = 'server-node-header';
+        const title = document.createElement('h3'); title.textContent = node.label || node.id || 'Unnamed server';
+        const status = document.createElement('span'); status.className = `server-node-status${node.state === 'online' ? '' : ' unavailable'}`;
+        status.textContent = node.state === 'online' ? 'Online' : 'Unavailable';
+        header.append(title, status); card.append(header);
+        const role = document.createElement('p'); role.className = 'server-node-role'; role.textContent = `${node.role || 'server'} · ${node.id || 'identity unavailable'}`; card.append(role);
+        const metrics = document.createElement('dl'); metrics.className = 'server-node-metrics';
+        metric(metrics, 'CPU', Number.isFinite(node.cpu_percent) ? `${Number(node.cpu_percent).toFixed(1)}% · ${node.logical_cpu_count || '?'} cores` : `Sampling · ${node.logical_cpu_count || '?'} cores`);
+        metric(metrics, 'Memory', node.memory_total_bytes != null && node.memory_available_bytes != null ? `${formatBytes(Number(node.memory_total_bytes) - Number(node.memory_available_bytes))} used / ${formatBytes(node.memory_total_bytes)}` : 'Unavailable');
+        metric(metrics, 'Uptime', formatUptime(node.uptime_seconds));
+        metric(metrics, 'Load · 1 min', Number.isFinite(node.load_average_1m) ? Number(node.load_average_1m).toFixed(2) : 'Unavailable');
+        card.append(metrics);
+        const freshness = document.createElement('p'); freshness.className = 'server-fleet-note';
+        const age = Math.max(0, Math.floor(Date.now() / 1000) - Number(node.observed_at_unix || data.observed_at_unix));
+        if (age > 30) { status.textContent = 'Stale'; status.classList.add('stale'); }
+        freshness.textContent = `Observed ${age < 5 ? 'just now' : `${age}s ago`} · metrics ${node.metrics_state || 'unknown'}`;
+        card.append(freshness); fleetList.append(card);
+      }
+      if (data.nodes.length === 0) fleetList.append(appendText(document.createElement('div'), 'p', 'No servers are enrolled yet.', 'muted'));
+    };
+    const refreshFleet = async () => {
+      if (fleetRefresh) fleetRefresh.disabled = true;
+      fleetSummary.textContent = 'Refreshing server inventory…';
+      try {
+        const response = await fetch('/api/admin/servers', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required to view infrastructure.' : `Server inventory is unavailable (HTTP ${response.status}).`);
+        renderFleet(data);
+      } catch (error) {
+        fleetList.replaceChildren(); fleetSummary.textContent = error.message || 'Server inventory is unavailable.';
+      } finally { if (fleetRefresh) fleetRefresh.disabled = false; }
+    };
+    fleetRefresh?.addEventListener('click', refreshFleet); refreshFleet();
+  }
+
   const consoleStatus = document.querySelector('#emergency-console-status');
   const consoleEvents = document.querySelector('#emergency-console-events');
   const consoleRefresh = document.querySelector('#emergency-console-refresh');
@@ -1909,10 +2033,12 @@ pub fn router() -> Router {
         .route("/admin/deployments", get(deployments))
         .route("/admin/ssh-access", get(temporary_access))
         .route("/admin/hosting", get(hosting))
+        .route("/admin/servers", get(server_fleet_page))
         .route("/admin/history", get(history))
         .route("/admin/recovery", get(recovery_page))
         .route("/admin/emergency-console", get(emergency_console_page))
         .route("/api/admin/overview", get(overview))
+        .route("/api/admin/servers", get(crate::server_fleet::admin_snapshot))
         .route("/api/admin/platform-healthz", get(platform_healthz))
         .route("/api/admin/operations", get(operations_status))
         .merge(crate::recovery::router())
@@ -2140,7 +2266,7 @@ fn render_admin_navigation(current_path: &str) -> String {
         "<nav aria-label=\"Platform administration\"><p class=\"brand\">Vapor Platform</p>",
     );
     html.push_str("<div class=\"workspace-bridges\"><p>Vapor workspaces</p><a href=\"/\">Public site</a><a href=\"/dashboard\">Your Projects</a></div>");
-    let group_order = ["Operate", "Ecosystem", "Accounts", "Emergency"];
+    let group_order = ["Operate", "Infrastructure", "Ecosystem", "Accounts", "Emergency"];
     for group in group_order {
         let sections: Vec<_> = MODULES
             .iter()
@@ -2201,6 +2327,18 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 async fn landing() -> Response {
     let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><p class=\"page-intro\">Service health and work that needs an operator decision. Sign in with an authorized Steam-linked Vapor account to load protected information.</p><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Service health</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Approvals and execution follow-up</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts describe loaded records; “shown” means older pages remain. Awaiting approval means a decision is still needed. Execution follow-up means approval is already saved, but deployment dispatch needs attention. Active SSH grants, running deployments, and past decisions have their own work areas.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section>";
     admin_page_response(StatusCode::OK, fragment)
+}
+
+async fn server_fleet_page() -> Response {
+    admin_page_response(StatusCode::OK, server_fleet_page_content())
+}
+
+fn server_fleet_page_content() -> &'static str {
+    concat!(
+        "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
+        "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
+        "<p class=\"muted\">Currently reporting: the Platform host only. Additional servers appear after they are explicitly enrolled; no remote shell or arbitrary command interface is exposed here.</p>"
+    )
 }
 
 async fn operations(
@@ -3873,6 +4011,21 @@ mod tests {
         assert!(page.contains("id=\"pending-identity-count\""));
         assert!(page.contains("id=\"approvals-more-identity\""));
         assert!(!page.contains("limited to the newest 200 requests"));
+        let script = super::JS;
+        assert!(script.contains("approval-deploy-header"));
+        assert!(script.contains("Approve current main commit"));
+        assert!(!script.contains("I reviewed this exact revision and target"));
+    }
+
+    #[test]
+    fn server_fleet_is_a_distinct_private_page_and_navigation_destination() {
+        let page = super::server_fleet_page_content();
+        let nav = super::render_admin_navigation("/admin/servers");
+        assert!(nav.contains("href=\"/admin/servers\""));
+        assert!(nav.contains("Infrastructure"));
+        assert!(page.contains("id=\"server-fleet-list\""));
+        assert!(page.contains("id=\"server-fleet-refresh\""));
+        assert!(page.contains("Currently reporting: the Platform host only"));
     }
 
     #[test]
@@ -3970,7 +4123,7 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
         assert!(script.contains("item.approval_order_ready === true"));
-        assert!(script.contains("Waiting for an earlier deploy request to be decided or completed."));
+        assert!(script.contains("Waiting for prior deployment"));
         assert!(script.contains("created_at_unix || 0) - Number(b.created_at_unix || 0)"));
         let deployments = script
             .split("const deployRequests = document.querySelector('#deploy-requests');")
@@ -4005,7 +4158,7 @@ mod tests {
             .split("const operationHistory =")
             .next()
             .unwrap();
-        assert!(approvals.contains("Approve and queue"));
+        assert!(approvals.contains("Approve current main commit"));
         assert!(approvals.contains("Approve selected access"));
         assert!(approvals.contains("approvals-more-deploy"));
         assert!(approvals.contains("approvals-more-ssh"));
