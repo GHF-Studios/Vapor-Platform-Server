@@ -62,7 +62,7 @@ The archive is based on the service-owned persistent state root, with explicit i
 - Hourly state exports must not stop application services. Each SQLite database is snapshotted online and validated before publication.
 - The currently retained full-host archives are legacy evidence. Keep them read-only during the transition; deployment disables the old timer so no more secret-bearing full-host archives are created.
 - The restore path must state which format it is handling and must never infer host configuration from a state-only archive.
-- The owner USB sync writes state snapshots to `State-Snapshots/` and a source-pinned recovery launcher to `Recovery-Kit/state-only/<recovery-kit-commit>/`. The kit is refreshed from current Platform `main` (or a clean checked-out revision during manual runs), independently of the older `platform_source_commit` stored in the archive. `Recovery-Kit/state-only/latest.json` records both `recovery_kit_commit` and `archive_source_commit`; recovery tools rebuild the exact archived application revision. It does not prune legacy generations.
+- The owner USB sync writes state snapshots to `State-Snapshots/` and a source-pinned recovery launcher to `Recovery-Kit/state-only/<recovery-kit-commit>/`. The kit is selected from the latest commit on current Platform `main` that changed a kit file (or the equivalent clean-checkout history during manual runs), independently of the older `platform_source_commit` stored in the archive. Unrelated Platform changes do not create duplicate kit versions. `Recovery-Kit/state-only/latest.json` records both `recovery_kit_commit` and `archive_source_commit`; recovery tools rebuild the exact archived application revision. It does not prune legacy generations.
 
 ## Alternatives considered
 

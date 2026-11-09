@@ -55,6 +55,9 @@ exit 0
     & $git -C $sourceRoot add deploy/scripts/state_only_recovery_marker.py
     & $git -C $sourceRoot commit --quiet -m 'Fixture current recovery-kit revision'
     $recoveryKitCommit = (& $git -C $sourceRoot rev-parse HEAD).Trim()
+    Set-Content -LiteralPath (Join-Path $scriptFolder 'deployment_scope.py') -Value 'unrelated deployment-scope source' -Encoding utf8
+    & $git -C $sourceRoot add deploy/scripts/deployment_scope.py
+    & $git -C $sourceRoot commit --quiet -m 'Fixture unrelated main update'
     $repositoryCache = Join-Path $testRoot 'Vapor-Platform-Server.git'
     & $git clone --quiet --bare $sourceRoot $repositoryCache
 

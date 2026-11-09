@@ -62,6 +62,7 @@ class StateOnlyFreshHostContractTests(unittest.TestCase):
             script,
         )
         self.assertIn("fetch --no-tags origin main", script)
+        self.assertIn("log -1 --format=%H $sourceRef -- @archivePaths", script)
         self.assertIn("recovery_kit_commit = $recoveryKitCommit", script)
         self.assertIn("archive_source_commit = $archiveSourceCommit", script)
         self.assertIn("archive_sha256", script)

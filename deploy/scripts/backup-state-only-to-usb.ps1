@@ -165,6 +165,18 @@ $archiveSourceCommit = & $python $metadataHelper --source-commit $latestArchiveP
 if ($LASTEXITCODE -ne 0 -or $archiveSourceCommit -notmatch '^[0-9a-f]{40}$') {
     throw 'The latest state snapshot does not contain a valid Platform source revision.'
 }
+$kitFiles = @(
+    'recover-state-only-host.sh',
+    'state_only_recovery_marker.py',
+    'restore-state-only.sh',
+    'recovery_bundle_metadata.py',
+    'state-bundle-validate.py',
+    'deployed_source_manifest.py',
+    'service_deploy_map.py',
+    'validate-state-databases.py',
+    'README-state-only-recovery.txt'
+)
+$archivePaths = @($kitFiles | ForEach-Object { "deploy/scripts/$_" })
 $repositoryRoot = (Resolve-Path -LiteralPath $RecoveryRepositoryPath).Path
 $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $isBare = (& $git -C $repositoryRoot rev-parse --is-bare-repository).Trim()
@@ -177,34 +189,24 @@ if ($isBare -ceq 'true') {
     # having been produced by the same application revision.
     & $git -C $repositoryRoot fetch --no-tags origin main
     if ($LASTEXITCODE -ne 0) { throw 'Could not update recovery tools from Platform main.' }
-    $recoveryKitCommit = (& $git -C $repositoryRoot rev-parse 'FETCH_HEAD^{commit}').Trim()
+    $sourceRef = 'FETCH_HEAD'
 } else {
     $dirty = & $git -C $repositoryRoot status --porcelain --untracked-files=all
     if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the recovery-tool checkout.' }
     if (-not [string]::IsNullOrWhiteSpace(($dirty -join "`n"))) {
         throw 'The recovery-tool checkout has local changes; use a clean checkout or bare repository cache.'
     }
-    $recoveryKitCommit = (& $git -C $repositoryRoot rev-parse 'HEAD^{commit}').Trim()
+    $sourceRef = 'HEAD'
 }
+$recoveryKitCommit = (& $git -C $repositoryRoot log -1 --format=%H $sourceRef -- @archivePaths).Trim()
 if ($recoveryKitCommit -notmatch '^[0-9a-f]{40}$') {
-    throw 'Could not identify a valid recovery-tool source revision.'
+    throw 'Could not identify the latest commit containing the recovery-tool files.'
 }
 & $git -C $repositoryRoot cat-file -e "$recoveryKitCommit^{commit}" 2>$null
 if ($LASTEXITCODE -ne 0) {
     throw 'The selected recovery-tool revision is unavailable in the repository.'
 }
 
-$kitFiles = @(
-    'recover-state-only-host.sh',
-    'state_only_recovery_marker.py',
-    'restore-state-only.sh',
-    'recovery_bundle_metadata.py',
-    'state-bundle-validate.py',
-    'deployed_source_manifest.py',
-    'service_deploy_map.py',
-    'validate-state-databases.py',
-    'README-state-only-recovery.txt'
-)
 $kitRoot = Join-Path $destination 'Recovery-Kit\state-only'
 $kitFinal = Join-Path $kitRoot $recoveryKitCommit
 $kitStage = Join-Path $incoming "kit-$recoveryKitCommit"
@@ -236,7 +238,6 @@ if (Test-Path -LiteralPath $kitFinal) {
     Remove-Item -LiteralPath $kitStage -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $kitZip -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $kitStage | Out-Null
-    $archivePaths = @($kitFiles | ForEach-Object { "deploy/scripts/$_" })
     & $git -C $repositoryRoot archive --format=zip --output=$kitZip $recoveryKitCommit @archivePaths
     if ($LASTEXITCODE -ne 0) { throw 'Could not export the selected recovery kit.' }
     Expand-Archive -LiteralPath $kitZip -DestinationPath $kitStage

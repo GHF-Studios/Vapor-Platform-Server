@@ -3,8 +3,9 @@ Vapor Platform recovery kits
 For new state-only snapshots, use the recovery kit under
 `Recovery-Kit/state-only/<recovery-kit-commit>/`. The latest pointer records
 both `recovery_kit_commit` and `archive_source_commit`: the kit comes from the
-current Platform `main`, while the state archive records the exact application
-revision that the recovery script will rebuild. These revisions can differ.
+latest Platform `main` commit that changed a recovery-kit file, while the state
+archive records the exact application revision that the recovery script will
+rebuild. These revisions can differ.
 The archive contains no host configuration or provider credentials; the
 recovery script asks for domain and provider settings during setup. See
 `README-state-only-recovery.txt` in that kit.
