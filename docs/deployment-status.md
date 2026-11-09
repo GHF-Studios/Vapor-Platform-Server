@@ -1,12 +1,14 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-09 01:23 UTC)
+## Current verified state (2026-11-09 01:25 UTC)
 
 - The repaired state-only USB sync completed successfully at
-  `2026-11-09T01:22:54Z`. It fetched canonical Platform `main`, verified all
-  eight indexed generations and their recovery-kit files, and reported success
-  to Platform. The installed scheduled-task script matches the tested
-  repository copy.
+  `2026-11-09T01:22:54Z`, then a fresh-destination USB run completed at
+  `2026-11-09T01:25:23Z`. The fresh run fetched all eight generations from the
+  VPS (38,389,881 bytes), verified archive, sidecar, and recovery-kit hashes,
+  and reported success to Platform. The installed scheduled-task script
+  matches the tested repository copy. Existing recovery data was preserved;
+  the fresh run used a separate USB destination.
 - The latest owner-held archive is
   `vapor-platform-state-20261109T010116Z-34f63ec46441.tar.gz` with SHA-256
   `edd21e88ec907b1108914f15561e0201629af14c4b865cd29da876c3bc9a53e9`. Its
@@ -30,7 +32,7 @@
   without a current snapshot. The optional worker path still lacks the
   canonical ecosystem/toolchain lock. Local source builds remain the available
   fallback; no clean-host restore drill has been completed yet.
-- Platform `main` is at `62615c9d0869df3b515a6be771daf9b2c8911536`; commits
+- Platform `main` is at `64d048f5bcc93d987c4400b5597494a1a9e69e28`; commits
   after deployed composition `78722c2641b42bfdf493d45b6b92461dccd3e87f` are
   documentation and USB recovery-sync changes, so no service deployment was
   needed. The archive and recovery kit are checksum-verified on USB, but
