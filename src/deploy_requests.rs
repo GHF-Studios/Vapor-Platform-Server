@@ -280,7 +280,7 @@ async fn create_request(
                 .into_response();
         }
     };
-    if request.commit != current_main_commit {
+    if !is_current_main_revision(&request.commit, &current_main_commit) {
         return (
             StatusCode::CONFLICT,
             format!(
@@ -708,7 +708,7 @@ async fn decide_request(
                     .into_response();
             }
         };
-        if stored_request.0 != current_main_commit {
+        if !is_current_main_revision(&stored_request.0, &current_main_commit) {
             return (
                 StatusCode::CONFLICT,
                 format!(
@@ -788,6 +788,8 @@ async fn decide_request(
 }
 
 const MAX_GITHUB_REF_RESPONSE_BYTES: usize = 8192;
+const GITHUB_MAIN_COMMIT_URL: &str =
+    "https://api.github.com/repos/GHF-Studios/Vapor-Platform-Server/commits/main";
 
 #[derive(Deserialize)]
 struct GithubCommitResponse {
@@ -795,8 +797,12 @@ struct GithubCommitResponse {
 }
 
 async fn fetch_current_main_commit(client: &reqwest::Client) -> Result<String, ()> {
+    fetch_main_commit_at(client, GITHUB_MAIN_COMMIT_URL).await
+}
+
+async fn fetch_main_commit_at(client: &reqwest::Client, url: &str) -> Result<String, ()> {
     let mut response = client
-        .get("https://api.github.com/repos/GHF-Studios/Vapor-Platform-Server/commits/main")
+        .get(url)
         .header(reqwest::header::USER_AGENT, "Vapor-Platform-Server")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .send()
@@ -821,6 +827,10 @@ async fn fetch_current_main_commit(client: &reqwest::Client) -> Result<String, (
         return Err(());
     }
     Ok(commit.sha.to_ascii_lowercase())
+}
+
+fn is_current_main_revision(request_commit: &str, current_main_commit: &str) -> bool {
+    request_commit.eq_ignore_ascii_case(current_main_commit)
 }
 
 async fn has_earlier_open_request(
@@ -2177,9 +2187,10 @@ async fn no_store(request: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_request_rows, read_bounded_identity_response, request_scope, request_server_mode,
-        request_service_target, same_request_shape, validate_request, CreateDeployRequest,
-        IdentityCredentialDecision, SubmodulePin, SERVICE_DEPLOY_TARGETS, SUBMODULES,
+        fetch_main_commit_at, fetch_request_rows, is_current_main_revision,
+        read_bounded_identity_response, request_scope, request_server_mode, request_service_target,
+        same_request_shape, validate_request, CreateDeployRequest, IdentityCredentialDecision,
+        SubmodulePin, SERVICE_DEPLOY_TARGETS, SUBMODULES,
     };
     use crate::pagination::{Page, PageCursor};
     use axum::routing::get;
@@ -2208,6 +2219,72 @@ mod tests {
                 .to_string(),
             summary: "Composed Platform CI passed.".to_string(),
         }
+    }
+
+    #[test]
+    fn request_freshness_is_exact_and_case_insensitive() {
+        let current = "0123456789abcdef0123456789abcdef01234567";
+        assert!(is_current_main_revision(current, current));
+        assert!(is_current_main_revision(
+            "0123456789ABCDEF0123456789ABCDEF01234567",
+            current
+        ));
+        assert!(!is_current_main_revision(
+            "1123456789abcdef0123456789abcdef01234567",
+            current
+        ));
+    }
+
+    #[tokio::test]
+    async fn current_main_lookup_accepts_only_a_bounded_full_commit_sha() {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let valid_app = Router::new().route(
+            "/ref",
+            get(move || async move { axum::Json(serde_json::json!({"sha": expected})) }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, valid_app).await.unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        assert_eq!(
+            fetch_main_commit_at(&client, &format!("http://{address}/ref")).await,
+            Ok(expected.to_string())
+        );
+        server.abort();
+
+        let invalid_app = Router::new().route(
+            "/ref",
+            get(|| async { axum::Json(serde_json::json!({"sha": "not-a-commit"})) }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, invalid_app).await.unwrap();
+        });
+        assert!(
+            fetch_main_commit_at(&client, &format!("http://{address}/ref"))
+                .await
+                .is_err()
+        );
+        server.abort();
+
+        let oversized_app = Router::new().route("/ref", get(|| async { "x".repeat(8193) }));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, oversized_app).await.unwrap();
+        });
+        assert!(
+            fetch_main_commit_at(&client, &format!("http://{address}/ref"))
+                .await
+                .is_err()
+        );
+        server.abort();
     }
 
     #[tokio::test]

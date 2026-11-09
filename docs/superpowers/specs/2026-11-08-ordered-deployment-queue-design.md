@@ -47,6 +47,8 @@ separate stages.
 
 Required automated coverage includes stale queued work, older-request gating
 at approval and claim, ordered wake-up after a worker completes, stale dispatch
-recovery, and the worker's current-main guard. Current-main checks at request
-creation and approval must also be covered before this change is considered
-fully verified. The host is checked after each sequential live deployment.
+recovery, and the worker's current-main guard. The new lookup parser and exact
+SHA comparison have unit coverage; route-level tests that assert stale request
+creation and approval leave the database unchanged remain required before this
+change is fully verified. The host is checked after each sequential live
+deployment.
