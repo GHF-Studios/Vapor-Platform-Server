@@ -168,6 +168,9 @@ body { margin:0; min-height:100vh; }
 .shell { min-height:100vh; display:grid; grid-template-columns:220px 1fr; }
 .shell > nav { padding:22px 14px; background:#182330; border-right:1px solid #2b3a4b; }
 .brand { margin:0 0 18px; font-size:16px; letter-spacing:.03em; }
+.workspace-bridges { margin:0 0 18px; padding:10px 8px; border:1px solid #304254; border-radius:6px; background:#141e29; }
+.workspace-bridges > p { margin:0 2px 5px; color:#8fa1b2; font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+.workspace-bridges a { padding:5px 7px !important; margin:1px 0 !important; font-size:13px; }
 .nav-group { margin:19px 10px 6px; color:#8092a5; font-size:10px; letter-spacing:.11em; text-transform:uppercase; }
 .nav-section { margin:12px 0 0; }
 .nav-section > summary { cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between; padding:5px 10px; }
@@ -1940,7 +1943,7 @@ fn admin_shell_auth_response(failure: crate::admin_auth::AuthFailure) -> Respons
         ),
     };
     let body = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title></head><body><main><h1>{}</h1><p>{}</p>{}</main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><style>body{{margin:0;background:#10161d;color:#eef3f7;font:16px/1.55 system-ui,sans-serif}}main{{width:min(620px,calc(100% - 40px));margin:12vh auto;padding:30px;border:1px solid #34434a;border-radius:10px;background:#151f2a}}a{{color:#a9d8cb}}nav{{display:flex;gap:18px;margin-top:24px}}.eyebrow{{color:#9fe1ce;font-size:12px;letter-spacing:.12em;text-transform:uppercase}}</style></head><body><main><p class=\"eyebrow\"><a href=\"/\">Vapor</a> · Access</p><h1>{}</h1><p>{}</p>{}<nav aria-label=\"Other Vapor workspaces\"><a href=\"/\">Public site</a><a href=\"/dashboard\">Your Projects</a></nav></main></body></html>",
         escape_html(title),
         escape_html(title),
         escape_html(message),
@@ -2089,6 +2092,7 @@ fn render_admin_navigation(current_path: &str) -> String {
     let mut html = String::from(
         "<nav aria-label=\"Platform administration\"><p class=\"brand\">Vapor Platform</p>",
     );
+    html.push_str("<div class=\"workspace-bridges\"><p>Vapor workspaces</p><a href=\"/\">Public site</a><a href=\"/dashboard\">Your Projects</a></div>");
     let group_order = ["Operate", "Ecosystem", "Accounts", "Emergency"];
     for group in group_order {
         let sections: Vec<_> = MODULES
