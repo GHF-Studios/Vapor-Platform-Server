@@ -228,7 +228,9 @@ def verify_queue(runner: CommandRunner, env: dict[str, str], commit: str, target
         raise DeploymentError("service deployment requires an approved services-mode request")
     if env.get("VAPOR_SERVICE_TARGET") != target:
         raise DeploymentError("requested service target does not match the deploy argument")
-    database = env.get("VAPOR_PLATFORM_DB") or str(pathlib.Path(env.get("VAPOR_PLATFORM_STATE", str(pathlib.Path(env["VAPOR_STATE_ROOT"]) / "platform"))) / "platform.sqlite3")
+    state_root = pathlib.Path(env.get("VAPOR_STATE_ROOT", "/var/lib/vapor-server"))
+    platform_state = pathlib.Path(env.get("VAPOR_PLATFORM_STATE", str(state_root / "platform")))
+    database = env.get("VAPOR_PLATFORM_DB") or str(platform_state / "platform.sqlite3")
     run_checked(runner, [
         sys.executable, str(SCRIPT_DIR / "deploy-request-queue.py"),
         "--database", database, "verify", "--id", request_id,
@@ -286,6 +288,10 @@ def deploy_service(args: argparse.Namespace, runner: CommandRunner | None = None
         pathlib.Path(env.get("VAPOR_STATE_ROOT", "/var/lib/vapor-server")),
         "state root",
     )
+    # The systemd deployment unit intentionally supplies only the approved
+    # request context. Normalize the documented state default for every
+    # downstream helper that shares this environment.
+    env.setdefault("VAPOR_STATE_ROOT", str(state_root))
     if not source_root.is_absolute() or not source_root.is_dir() or source_root.is_symlink():
         raise DeploymentError("approved detached source worktree is missing or unsafe")
     target = target_map(args.target)

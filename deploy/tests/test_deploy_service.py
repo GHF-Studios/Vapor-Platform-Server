@@ -89,6 +89,22 @@ class FakeRunner:
 
 
 class DeployServiceTests(unittest.TestCase):
+    def test_queue_verification_accepts_platform_database_without_state_root(self) -> None:
+        runner = FakeRunner()
+        environment = {
+            "VAPOR_PLATFORM_DB": "/var/lib/vapor-server/platform/platform.sqlite3",
+            "VAPOR_APPROVED_DEPLOY_ID": REQUEST,
+            "VAPOR_APPROVED_DEPLOY_VERSION": "3",
+            "VAPOR_SERVER_MODE": "services",
+            "VAPOR_DEPLOYMENT_SCOPE": "service",
+            "VAPOR_SERVICE_TARGET": "identity",
+        }
+
+        DEPLOY.verify_queue(runner, environment, ROOT_COMMIT, "identity")
+
+        database_argument = runner.calls[0][runner.calls[0].index("--database") + 1]
+        self.assertEqual(database_argument, environment["VAPOR_PLATFORM_DB"])
+
     def test_rejects_configured_root_that_crosses_a_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
