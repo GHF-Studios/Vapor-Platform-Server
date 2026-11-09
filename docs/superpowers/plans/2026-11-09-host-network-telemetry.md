@@ -14,7 +14,7 @@
 
 - Diagnostics telemetry is Platform-owned operational data, not player Diagnostics uploads.
 - Keep periodic telemetry to bounded interface counters and aggregate TCP state counts; do not collect peers, payloads, process names, or hostnames.
-- Support old schema-version 1 agent reports without network fields while new agents send schema version 2.
+- Current release contract: schema version 3 includes network aggregates and the required fixed service snapshot; older schema versions are rejected. Rebuild and install the server and node agent together.
 - Enforce a 16-interface maximum, at most 10 seconds of timestamp skew, the existing 30-second report freshness/rate limits, and seven-day sample retention.
 - Keep per-node sample storage bounded at 20,160 rows and downsample history responses to at most 1,008 points.
 - Return private, no-store responses only after existing root authorization.
@@ -24,7 +24,7 @@
 ## Review Focus
 
 - Malformed, oversized, duplicate, or counter-reset proc values never panic or produce negative rates.
-- Legacy schema-version 1 agents remain accepted and show network data as unavailable.
+- Outdated schema-version 1/2 agents fail closed rather than silently omitting current telemetry families.
 - Revoked credentials, stale/out-of-order samples, and cross-node IDs cannot write history.
 - History queries cannot exceed the fixed time-window, sample-count, or response-size limits.
 - UI text and charts must render with DOM text APIs and never interpret telemetry as markup.
@@ -56,12 +56,12 @@
 - Test: inline unit tests in the agent module
 
 **Interfaces:**
-- Schema 2 adds `network: NetworkSnapshot` to the existing report.
+- Schema 3 includes `network: Option<NetworkSnapshot>` and required `services: Vec<ServiceMetrics>`.
 - The agent samples cumulative counters every existing 30-second interval; it does not calculate rates or collect peers.
 
-- [x] Test schema 2 network serialization and the unchanged legacy schema 1 shape.
+- [x] Test the current schema-3 report shape, including network serialization.
 - [x] Make missing proc sources omit the network family rather than fabricate zeros.
-- [x] Implement schema 2 reporting through the shared parser.
+- [x] Implement current schema-3 reporting through shared parsers.
 - [ ] Build the Linux node-agent package and verify its archive contains the updated version.
 
 ### Task 3: Validated ingest and bounded persisted history
@@ -72,11 +72,11 @@
 - Test: `src/node_fleet.rs` telemetry API tests
 
 **Interfaces:**
-- `TelemetryReport.network` is optional for schema 1 and required/validated for schema 2.
+- `TelemetryReport.network` must be present as a field, may be null when collection is unavailable, and is validated when present. `services` is required and fixed-shape in schema 3.
 - `GET /api/admin/server-nodes/{id}/network?window=1h|6h|24h|7d` returns fixed-schema aggregate samples.
 - `record_network_sample(node_id, sampled_at_unix, snapshot)` stores in `platform_server_network_samples`.
 
-- [x] Test schema 1 compatibility and valid schema 2 ingest; existing tests cover stale time, cross-node IDs, and revoked credentials for the shared authenticated endpoint.
+- [x] Test strict schema-3 ingest; schema 1/2 and unknown versions are rejected. Existing tests cover stale time, cross-node IDs, and revoked credentials for the shared authenticated endpoint.
 - [ ] Add explicit tests for malformed network metrics, seven-day pruning, and each allowed query window/sample ceiling.
 - [x] Implement idempotent SQLite migration, authenticated ingest, local sampler recording, and fixed-window query route.
 - [x] Add server-side rate derivation in the view; first samples and counter resets render unavailable rather than negative.

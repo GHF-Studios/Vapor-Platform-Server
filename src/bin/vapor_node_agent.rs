@@ -1,6 +1,9 @@
 #[cfg(target_os = "linux")]
 #[path = "../network_telemetry.rs"]
 mod network_telemetry;
+#[cfg(target_os = "linux")]
+#[path = "../service_telemetry.rs"]
+mod service_telemetry;
 
 #[cfg(target_os = "linux")]
 use reqwest::Url;
@@ -40,6 +43,7 @@ struct TelemetryReport {
     load_average_1m: f64,
     agent_version: String,
     network: Option<network_telemetry::NetworkSnapshot>,
+    services: Vec<service_telemetry::ServiceMetrics>,
 }
 
 #[cfg(target_os = "linux")]
@@ -98,6 +102,8 @@ struct CpuTimes {
 #[cfg(target_os = "linux")]
 struct Sampler {
     previous_cpu: Option<CpuTimes>,
+    previous_services: Vec<service_telemetry::ServiceMetrics>,
+    previous_service_sample: std::time::Instant,
 }
 
 #[tokio::main]
@@ -150,6 +156,12 @@ async fn run() -> Result<(), String> {
         }
         let mut sampler = Sampler {
             previous_cpu: read_cpu_times(),
+            previous_services: service_telemetry::read_service_snapshot(
+                std::path::Path::new("/sys/fs/cgroup/system.slice"),
+                None,
+                Duration::ZERO,
+            ),
+            previous_service_sample: std::time::Instant::now(),
         };
         tokio::time::sleep(Duration::from_secs(1)).await;
         if once {
@@ -426,8 +438,16 @@ fn sample(sampler: &mut Sampler) -> Result<Option<TelemetryReport>, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| "system clock is before the Unix epoch")?
         .as_secs() as i64;
+    let service_sample_at = std::time::Instant::now();
+    let services = service_telemetry::read_service_snapshot(
+        std::path::Path::new("/sys/fs/cgroup/system.slice"),
+        Some(&sampler.previous_services),
+        service_sample_at.saturating_duration_since(sampler.previous_service_sample),
+    );
+    sampler.previous_services = services.clone();
+    sampler.previous_service_sample = service_sample_at;
     Ok(Some(TelemetryReport {
-        schema_version: 2,
+        schema_version: 3,
         sampled_at_unix,
         cpu_percent,
         logical_cpu_count,
@@ -437,6 +457,7 @@ fn sample(sampler: &mut Sampler) -> Result<Option<TelemetryReport>, String> {
         load_average_1m,
         agent_version: VERSION.to_owned(),
         network: network_telemetry::read_network_snapshot(),
+        services,
     }))
 }
 
@@ -555,13 +576,14 @@ fn read_load_average() -> Result<f64, String> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod network_report_tests {
-    use super::network_telemetry::{InterfaceCounters, NetworkSnapshot, TcpStateCounts};
     use super::TelemetryReport;
+    use super::network_telemetry::{InterfaceCounters, NetworkSnapshot, TcpStateCounts};
+    use super::service_telemetry::ServiceMetrics;
 
     #[test]
-    fn schema_two_report_contains_aggregate_network_data_without_peer_details() {
+    fn schema_three_report_contains_current_telemetry_without_peer_details() {
         let report = TelemetryReport {
-            schema_version: 2,
+            schema_version: 3,
             sampled_at_unix: 1_700_000_000,
             cpu_percent: 5.0,
             logical_cpu_count: 2,
@@ -588,10 +610,32 @@ mod network_report_tests {
                     ..Default::default()
                 },
             }),
+            services: [
+                "homepage",
+                "docs",
+                "identity",
+                "diagnostics",
+                "registry",
+                "artifact",
+                "build-cache",
+                "platform",
+                "caddy",
+            ]
+            .into_iter()
+            .map(|service_id| ServiceMetrics {
+                service_id: service_id.to_owned(),
+                available: false,
+                cpu_usage_usec: None,
+                cpu_millicores: None,
+                memory_current_bytes: None,
+                io_read_bytes: None,
+                io_write_bytes: None,
+            })
+            .collect(),
         };
         let value = serde_json::to_value(report).unwrap();
 
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
         assert_eq!(value["network"]["interfaces"][0]["rx_bytes"], 100);
         assert_eq!(value["network"]["tcp_states"]["established"], 3);
         assert!(value.get("remote_address").is_none());

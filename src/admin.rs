@@ -354,6 +354,9 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .server-network-interface { border:1px solid #33414e; border-radius:6px; padding:8px 10px; background:#111820; }
 .server-network-interface p { margin:4px 0 0; font-size:12px; color:#b7c3cf; }
 .server-network-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.server-service-resource-table { margin:8px 0 14px; font-size:12px; }
+.server-service-resource-table th,.server-service-resource-table td { padding:5px 8px; }
+.server-service-resource-table td:not(:first-child),.server-service-resource-table th:not(:first-child) { text-align:right; }
 .server-network-chart { display:block; width:100%; height:120px; margin:10px 0; border:1px solid #33414e; border-radius:6px; background:#111820; }
 .server-node-connect-form { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
 .server-node-form { padding:12px; margin:12px 0; border:1px solid #34404e; border-radius:6px; background:#111821; }
@@ -1975,6 +1978,13 @@ const JS: &str = r#"
   const fleetRefresh = document.querySelector('#server-fleet-refresh');
   const serverActionTarget = document.querySelector('#server-action-target');
   const serverModuleActions = document.querySelector('#server-module-actions');
+  const serverServicesPanel = document.querySelector('#server-panel-services');
+  const serverServiceIntro = serverServicesPanel?.querySelector('p');
+  const serverServiceMetrics = document.createElement('section');
+  serverServiceMetrics.id = 'server-service-metrics';
+  serverServiceMetrics.setAttribute('aria-live', 'polite');
+  if (serverModuleActions?.parentElement) serverModuleActions.before(serverServiceMetrics);
+  if (serverServiceIntro) serverServiceIntro.textContent = 'CPU, memory, and block I/O are sampled from fixed service cgroups. Missing or unsupported readings stay unavailable; this view does not restart services.';
   const serverRebootButton = document.querySelector('#server-action-reboot');
   const serverActionStatus = document.querySelector('#server-action-status');
   const serverOperationList = document.querySelector('#server-operation-list');
@@ -2046,6 +2056,7 @@ const JS: &str = r#"
         metric(metrics, 'Load · 1 min', Number.isFinite(node.load_average_1m) ? Number(node.load_average_1m).toFixed(2) : 'Unavailable');
         selectedServerOverview.append(metrics);
       }
+      renderServiceResources(node);
       for (const button of fleetList.querySelectorAll('[data-node-id]')) button.setAttribute('aria-pressed', String(button.dataset.nodeId === selectedServerId));
       if (serverActionTarget) {
         const option = [...serverActionTarget.options].find(candidate => candidate.value === node.id);
@@ -2073,6 +2084,39 @@ const JS: &str = r#"
     const metric = (parent, label, value) => {
       const cell = document.createElement('div'); const term = document.createElement('dt'); const detail = document.createElement('dd');
       term.textContent = label; detail.textContent = value; cell.append(term, detail); parent.append(cell);
+    };
+    const renderServiceResources = node => {
+      if (!serverServiceMetrics) return;
+      serverServiceMetrics.replaceChildren();
+      const title = document.createElement('h4'); title.textContent = 'Per-service resource use';
+      const status = document.createElement('p'); status.className = 'muted';
+      const sampledAt = Number(node.service_metrics_sampled_at_unix || 0);
+      const age = sampledAt > 0 ? Math.max(0, Math.floor(Date.now() / 1000) - sampledAt) : null;
+      const isStale = age == null || age > 90 || node.state === 'stale';
+      status.textContent = age == null ? 'No service sample received.' : `Sample ${isStale ? 'is stale' : 'is current'} · ${age < 5 ? 'just now' : `${age}s ago`}. CPU is reported in cores; totals are since service start.`;
+      serverServiceMetrics.append(title, status);
+      const metrics = Array.isArray(node.service_metrics) ? node.service_metrics.slice(0, 9) : [];
+      if (!metrics.length) {
+        const unavailable = document.createElement('p'); unavailable.className = 'muted'; unavailable.textContent = 'Service resource readings are unavailable for this host.';
+        serverServiceMetrics.append(unavailable);
+        return;
+      }
+      const table = document.createElement('table'); table.className = 'server-service-resource-table';
+      const head = document.createElement('thead'); const header = document.createElement('tr');
+      for (const label of ['Service', 'CPU', 'Memory', 'Read', 'Written']) { const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label; header.append(cell); }
+      head.append(header); const body = document.createElement('tbody');
+      for (const item of metrics) {
+        const row = document.createElement('tr');
+        const name = document.createElement('th'); name.scope = 'row'; name.textContent = String(item.service_id || 'Unknown');
+        const cpu = item.available && item.cpu_millicores != null && Number.isFinite(Number(item.cpu_millicores)) ? `${(Number(item.cpu_millicores) / 1000).toFixed(2)} cores` : 'Unavailable';
+        const memory = item.available && item.memory_current_bytes != null && Number.isFinite(Number(item.memory_current_bytes)) ? formatBytes(item.memory_current_bytes) : 'Unavailable';
+        const read = item.available && item.io_read_bytes != null && Number.isFinite(Number(item.io_read_bytes)) ? formatBytes(item.io_read_bytes) : 'Unavailable';
+        const written = item.available && item.io_write_bytes != null && Number.isFinite(Number(item.io_write_bytes)) ? formatBytes(item.io_write_bytes) : 'Unavailable';
+        row.append(name);
+        for (const value of [cpu, memory, read, written]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }
+        body.append(row);
+      }
+      table.append(head, body); serverServiceMetrics.append(table);
     };
     const renderFleet = data => {
       if (data?.schema_version !== 1 || !['local-platform-host-only', 'platform-host-and-enrolled-nodes'].includes(data?.scope) || typeof data.local_node_id !== 'string' || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
@@ -2821,7 +2865,7 @@ fn server_fleet_page_content() -> &'static str {
         "<section class=\"card\" aria-labelledby=\"server-machines-title\"><div class=\"server-fleet-toolbar\"><h2 id=\"server-machines-title\">Machines</h2><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div></div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
         "<section class=\"card server-room\" aria-label=\"Selected server tools\"><header class=\"server-room-selected\"><div><p class=\"eyebrow\">Selected machine</p><h2 id=\"server-selected-name\">Core server</h2></div><p id=\"server-selected-state\" class=\"muted\">Waiting for inventory…</p></header><div class=\"server-room-tabs\" role=\"tablist\" aria-label=\"Server tools\"><button id=\"server-tab-overview\" type=\"button\" role=\"tab\" aria-selected=\"true\" aria-controls=\"server-panel-overview\" tabindex=\"0\" data-server-tab=\"overview\">Overview</button><button id=\"server-tab-services\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-services\" tabindex=\"-1\" data-server-tab=\"services\">Services</button><button id=\"server-tab-diagnostics\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-diagnostics\" tabindex=\"-1\" data-server-tab=\"diagnostics\">Diagnostics</button><button id=\"server-tab-access\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-access\" tabindex=\"-1\" data-server-tab=\"access\">SSH access</button><button id=\"server-tab-activity\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-activity\" tabindex=\"-1\" data-server-tab=\"activity\">Activity</button><button id=\"server-tab-console\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-console\" tabindex=\"-1\" data-server-tab=\"console\">Console</button><button id=\"server-tab-connections\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-connections\" tabindex=\"-1\" data-server-tab=\"connections\">Connections</button></div>",
         "<section id=\"server-panel-overview\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-overview\" data-server-panel=\"overview\"><h3>Host overview</h3><p class=\"muted\">CPU, memory, load, and uptime below describe the selected machine as a whole. Service-by-service readings are not collected yet.</p><div id=\"server-selected-overview\" class=\"server-selected-overview\" role=\"status\">Select a machine to inspect its latest sample.</div></section>",
-        "<section id=\"server-panel-services\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-services\" data-server-panel=\"services\" hidden><h3>Services and modules</h3><p class=\"muted\">Choose a named module on the selected machine. Current health and process-level resource readings are not collected per machine yet. <a href=\"/admin/hosting\">View service health</a>.</p><div class=\"server-operation-controls\"><label>Machine<select id=\"server-action-target\"><option value=\"\">Loading hosts…</option></select></label></div><div id=\"server-module-actions\" class=\"server-module-actions\"><button type=\"button\" data-service=\"homepage\" data-label=\"Homepage\">Restart Homepage</button><button type=\"button\" data-service=\"docs\" data-label=\"Docs\">Restart Docs</button><button type=\"button\" data-service=\"identity\" data-label=\"Identity\">Restart Identity</button><button type=\"button\" data-service=\"diagnostics\" data-label=\"Diagnostics\">Restart Diagnostics</button><button type=\"button\" data-service=\"registry\" data-label=\"Registry\">Restart Registry</button><button type=\"button\" data-service=\"artifact\" data-label=\"Artifact\">Restart Artifact</button><button type=\"button\" data-service=\"build_cache\" data-label=\"Build Cache\">Restart Build Cache</button><button type=\"button\" data-service=\"caddy\" data-label=\"Web gateway\">Restart Web gateway</button></div><p class=\"muted\">Restarting the machine or web gateway is currently limited to the core server.</p><button id=\"server-action-reboot\" type=\"button\">Restart machine…</button><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for server inventory…</p></section>",
+        "<section id=\"server-panel-services\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-services\" data-server-panel=\"services\" hidden><h3>Services and modules</h3><p class=\"muted\">Choose a named module on the selected machine. Read CPU, memory, and block I/O from fixed service cgroups; missing readings stay unavailable. <a href=\"/admin/hosting\">View service health</a>.</p><div class=\"server-operation-controls\"><label>Machine<select id=\"server-action-target\"><option value=\"\">Loading hosts…</option></select></label></div><div id=\"server-module-actions\" class=\"server-module-actions\"><button type=\"button\" data-service=\"homepage\" data-label=\"Homepage\">Restart Homepage</button><button type=\"button\" data-service=\"docs\" data-label=\"Docs\">Restart Docs</button><button type=\"button\" data-service=\"identity\" data-label=\"Identity\">Restart Identity</button><button type=\"button\" data-service=\"diagnostics\" data-label=\"Diagnostics\">Restart Diagnostics</button><button type=\"button\" data-service=\"registry\" data-label=\"Registry\">Restart Registry</button><button type=\"button\" data-service=\"artifact\" data-label=\"Artifact\">Restart Artifact</button><button type=\"button\" data-service=\"build_cache\" data-label=\"Build Cache\">Restart Build Cache</button><button type=\"button\" data-service=\"caddy\" data-label=\"Web gateway\">Restart Web gateway</button></div><p class=\"muted\">Restarting the machine or web gateway is currently limited to the core server.</p><button id=\"server-action-reboot\" type=\"button\">Restart machine…</button><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for server inventory…</p></section>",
         "<section id=\"server-panel-diagnostics\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-diagnostics\" data-server-panel=\"diagnostics\" hidden><div class=\"server-network-toolbar\"><h3>Network traffic</h3><label>History<select id=\"server-network-range\"><option value=\"1h\">1 hour</option><option value=\"6h\">6 hours</option><option value=\"24h\">24 hours</option><option value=\"7d\">7 days</option></select></label><button id=\"server-network-refresh\" type=\"button\">Refresh</button></div><p id=\"server-network-status\" class=\"muted\" role=\"status\" aria-live=\"polite\">Choose a server to inspect network counters.</p><canvas id=\"server-network-chart\" class=\"server-network-chart\" height=\"120\" aria-label=\"Inbound traffic history chart\"></canvas><div id=\"server-network-details\"></div><p class=\"muted\">Traffic history excludes loopback from totals. The agent reports interface counters and TCP state counts; it does not retain peer addresses or packet contents.</p></section>",
         "<section id=\"server-panel-access\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-access\" data-server-panel=\"access\" hidden><h3>SSH authorizations</h3><p class=\"muted\">Review temporary SSH requests and active grants for the core server. Remote-host SSH management is not connected to this workbench yet.</p><a class=\"button-link\" href=\"/admin/ssh-access\">Open SSH access manager</a></section>",
         "<section id=\"server-panel-activity\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-activity\" data-server-panel=\"activity\" hidden><h3>Recent server actions</h3><p class=\"muted\">Every action is recorded before it is sent to a machine. An uncertain result is shown for review and is never silently repeated.</p><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></section>",
@@ -4539,7 +4583,7 @@ mod tests {
         assert!(page.contains("machine you already own"));
         assert!(page.contains("id=\"server-node-secret-download\""));
         assert!(page.contains("id=\"server-node-secret-value\" hidden"));
-        assert!(page.contains("process-level resource readings are not collected per machine yet"));
+        assert!(page.contains("Read CPU, memory, and block I/O from fixed service cgroups"));
         assert!(page.contains("/admin/ssh-access"));
         assert!(page.contains("/admin/emergency-console"));
         assert!(page.contains("/admin/hosting"));
@@ -4550,6 +4594,11 @@ mod tests {
         assert!(page.contains("id=\"server-operation-list\""));
         assert!(page.contains("limited to the core server"));
         assert!(!page.contains("<option value=\"platform\">Platform</option>"));
+        let script = super::JS;
+        assert!(script.contains("Per-service resource use"));
+        assert!(script.contains("server-service-resource-table"));
+        assert!(script.contains("node.service_metrics_sampled_at_unix"));
+        assert!(!script.contains("server-service-metrics.innerHTML"));
     }
 
     #[tokio::test]

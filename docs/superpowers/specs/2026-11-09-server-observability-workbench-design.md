@@ -12,9 +12,9 @@ player-submitted Diagnostics reports.
 
 - Platform owns the selected-server control room, the local `/proc` sampler,
   node inventory, outbound node agent, and typed server operations.
-- The node agent currently reports CPU, memory, uptime, and load every 30s;
-  the work in progress adds an optional schema-2 network family and bounded
-  aggregate trend history. Existing schema-1 agents remain accepted.
+- The node agent reports CPU, memory, uptime, load, network aggregates, and
+  fixed-service cgroup readings every 30s using the current schema-3 contract.
+  Older report schemas are rejected; server and agent are released together.
 - The Diagnostics service explicitly owns opt-in player diagnostics upload,
   storage, retention, and export. Its own instructions prohibit converting it
   into host telemetry or collecting persistent machine identity.
@@ -30,6 +30,8 @@ player-submitted Diagnostics reports.
 
 - Show per-server interface traffic totals and rates, packet/error/drop
   counters, TCP state counts, and bounded recent trends.
+- Show current memory, interval CPU, and cumulative block-I/O for each fixed
+  Vapor service unit on a host.
 - Provide an on-demand connection view with local/remote endpoints and process
   attribution where the host can provide it.
 - Surface concise security and service evidence: SSH authentication outcomes,
@@ -96,7 +98,8 @@ focused views:
 - Platform owns collection configuration, node inventory binding, freshness,
   retention, operator authorization, typed operation audit, and rendering.
 - The local collector reads bounded kernel counters. The Linux node agent sends
-  schema-versioned aggregates to the existing authenticated telemetry endpoint.
+  schema-versioned aggregate and fixed-service telemetry to the existing
+  authenticated telemetry endpoint.
 - A bounded Platform-owned history stores aggregate samples only (seven-day
   rolling window; cleanup during writes and on startup). It stores at most
   20,160 rows per node and returns at most 1,008 time-bucketed samples per
@@ -125,8 +128,9 @@ focused views:
 ## Delivery Sequence
 
 1. Add aggregate network metrics, server-side rates/history, and the Traffic
-   view for local and enrolled nodes. This implementation is the first slice;
-   detailed connection and security panels remain follow-on work.
+   view for local and enrolled nodes. Complete the current schema-3 report as
+   one versioned contract; detailed connection and security panels remain
+   follow-on work.
 2. Add typed one-shot connection snapshots and the Connections view.
 3. Add bounded SSH/service security summaries and the Security view.
 4. Add the volatile, audited packet-capture lifecycle and the Capture view only

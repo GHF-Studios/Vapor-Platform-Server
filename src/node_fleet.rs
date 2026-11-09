@@ -64,8 +64,8 @@ pub(crate) struct TelemetryReport {
     uptime_seconds: i64,
     load_average_1m: f64,
     agent_version: String,
-    #[serde(default)]
     network: Option<crate::network_telemetry::NetworkSnapshot>,
+    services: Vec<crate::service_telemetry::ServiceMetrics>,
 }
 
 #[derive(Serialize)]
@@ -195,7 +195,9 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
             load_average_1m REAL,
             agent_version TEXT,
             network_json TEXT,
-            network_sampled_at_unix INTEGER
+            network_sampled_at_unix INTEGER,
+            services_json TEXT,
+            services_sampled_at_unix INTEGER
         )",
     )
     .execute(&pool)
@@ -318,6 +320,24 @@ async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
     }
+    if !columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "services_json")
+    {
+        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN services_json TEXT")
+            .execute(pool)
+            .await?;
+    }
+    if !columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "services_sampled_at_unix")
+    {
+        sqlx::query(
+            "ALTER TABLE platform_server_nodes ADD COLUMN services_sampled_at_unix INTEGER",
+        )
+        .execute(pool)
+        .await?;
+    }
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS platform_server_slots (
             id TEXT PRIMARY KEY,
@@ -392,7 +412,8 @@ pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error
     let rows = sqlx::query(
         "SELECT id,slot_id,label,role,status,created_at_unix,last_report_received_at_unix,
                 sampled_at_unix,cpu_percent,logical_cpu_count,memory_total_bytes,
-                memory_available_bytes,uptime_seconds,load_average_1m,network_json
+                memory_available_bytes,uptime_seconds,load_average_1m,network_json,
+                services_json,services_sampled_at_unix
          FROM platform_server_nodes ORDER BY status,label,id",
     )
     .fetch_all(&state.pool)
@@ -451,6 +472,18 @@ pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error
                     .get::<Option<String>, _>("network_json")
                     .and_then(|value| serde_json::from_str(&value).ok())
                     .filter(crate::network_telemetry::valid_network_snapshot),
+                service_metrics: row
+                    .get::<Option<String>, _>("services_json")
+                    .and_then(|value| {
+                        serde_json::from_str::<Vec<crate::service_telemetry::ServiceMetrics>>(
+                            &value,
+                        )
+                        .ok()
+                    })
+                    .filter(|metrics| crate::service_telemetry::valid_service_snapshot(metrics)),
+                service_metrics_sampled_at_unix: row
+                    .get::<Option<i64>, _>("services_sampled_at_unix")
+                    .and_then(|value| u64::try_from(value).ok()),
             }
         })
         .collect())
@@ -551,7 +584,7 @@ async fn create_node(
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "server_node_state_unavailable",
-            )
+            );
         }
     };
     let slot_version = if new_slot {
@@ -574,14 +607,14 @@ async fn create_node(
                 return error(
                     StatusCode::CONFLICT,
                     "server_slot_not_vacant_or_details_changed",
-                )
+                );
             }
             Ok(None) => return error(StatusCode::NOT_FOUND, "server_slot_not_found"),
             Err(_) => {
                 return error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "server_node_state_unavailable",
-                )
+                );
             }
         }
     };
@@ -690,7 +723,7 @@ async fn revoke_node(
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "server_node_state_unavailable",
-            )
+            );
         }
     };
     let row = sqlx::query(
@@ -707,13 +740,13 @@ async fn revoke_node(
             return error(
                 StatusCode::CONFLICT,
                 "server_node_changed_or_already_revoked",
-            )
+            );
         }
         Err(_) => {
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "server_node_state_unavailable",
-            )
+            );
         }
     };
     let label: String = row.get("label");
@@ -788,13 +821,14 @@ async fn report_telemetry(
         .network
         .as_ref()
         .and_then(|snapshot| serde_json::to_string(snapshot).ok());
+    let services_json = serde_json::to_string(&report.services).ok();
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => {
             return error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "server_node_state_unavailable",
-            )
+            );
         }
     };
     let updated = sqlx::query(
@@ -803,7 +837,9 @@ async fn report_telemetry(
              logical_cpu_count=?,memory_total_bytes=?,memory_available_bytes=?,
              uptime_seconds=?,load_average_1m=?,agent_version=?,
              network_json=COALESCE(?,network_json),
-             network_sampled_at_unix=CASE WHEN ? IS NULL THEN network_sampled_at_unix ELSE ? END
+             network_sampled_at_unix=CASE WHEN ? IS NULL THEN network_sampled_at_unix ELSE ? END,
+             services_json=COALESCE(?,services_json),
+             services_sampled_at_unix=CASE WHEN ? IS NULL THEN services_sampled_at_unix ELSE ? END
          WHERE id=? AND status='active' AND credential_sha256=?
            AND (last_report_received_at_unix IS NULL OR last_report_received_at_unix<=?)
            AND (sampled_at_unix IS NULL OR sampled_at_unix<?)",
@@ -820,6 +856,9 @@ async fn report_telemetry(
     .bind(&network_json)
     .bind(&network_json)
     .bind(&network_json.as_ref().map(|_| report.sampled_at_unix))
+    .bind(&services_json)
+    .bind(&services_json.as_ref().map(|_| report.sampled_at_unix))
+    .bind(&services_json.as_ref().map(|_| report.sampled_at_unix))
     .bind(&id)
     .bind(&credential_sha256)
     .bind(now.saturating_sub(REPORT_MIN_INTERVAL_SECONDS))
@@ -896,12 +935,12 @@ async fn report_telemetry(
 }
 
 fn valid_report(report: &TelemetryReport, now: i64) -> bool {
-    (report.schema_version == 1 && report.network.is_none()
-        || report.schema_version == 2
-            && report
-                .network
-                .as_ref()
-                .map_or(true, crate::network_telemetry::valid_network_snapshot))
+    report.schema_version == 3
+        && report
+            .network
+            .as_ref()
+            .map_or(true, crate::network_telemetry::valid_network_snapshot)
+        && crate::service_telemetry::valid_service_snapshot(&report.services)
         && report.sampled_at_unix >= now.saturating_sub(REPORT_FRESHNESS_SECONDS)
         && report.sampled_at_unix <= now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
         && report.cpu_percent.is_finite()
@@ -1025,7 +1064,7 @@ async fn node_network(
                 return error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "server_node_state_unavailable",
-                )
+                );
             }
         };
         let network = row
@@ -1301,18 +1340,18 @@ fn unix_now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{router_with_state, sha256_hex, NodeState};
+    use super::{NodeState, router_with_state, sha256_hex};
     use axum::body::Body;
-    use axum::http::{header, Request, StatusCode};
+    use axum::http::{Request, StatusCode, header};
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::{Row, SqlitePool};
     use std::time::Duration;
     use tower::ServiceExt;
 
     #[test]
-    fn telemetry_schema_accepts_v1_and_optional_v2_but_rejects_unknown_or_invalid_networks() {
+    fn telemetry_schema_accepts_only_current_schema_and_rejects_invalid_families() {
         let now = super::unix_now();
-        let base = serde_json::json!({
+        let mut base = serde_json::json!({
             "sampled_at_unix": now,
             "cpu_percent": 1.0,
             "logical_cpu_count": 2,
@@ -1320,21 +1359,55 @@ mod tests {
             "memory_available_bytes": 512,
             "uptime_seconds": 10,
             "load_average_1m": 0.1,
-            "agent_version": "test"
+            "agent_version": "test",
+            "network": null
         });
-        for version in [1, 2] {
-            let mut value = base.clone();
-            value["schema_version"] = serde_json::json!(version);
-            let report: super::TelemetryReport = serde_json::from_value(value).unwrap();
-            assert!(super::valid_report(&report, now));
+        let service_ids = [
+            "homepage",
+            "docs",
+            "identity",
+            "diagnostics",
+            "registry",
+            "artifact",
+            "build-cache",
+            "platform",
+            "caddy",
+        ];
+        let service_snapshot = || {
+            service_ids
+                .iter()
+                .map(|service_id| {
+                    serde_json::json!({
+                        "service_id": service_id,
+                        "available": false,
+                        "cpu_usage_usec": null,
+                        "cpu_millicores": null,
+                        "memory_current_bytes": null,
+                        "io_read_bytes": null,
+                        "io_write_bytes": null
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        base["services"] = serde_json::json!(service_snapshot());
+        for version in [1, 2, 4] {
+            let mut outdated = base.clone();
+            outdated["schema_version"] = serde_json::json!(version);
+            let report: super::TelemetryReport = serde_json::from_value(outdated).unwrap();
+            assert!(!super::valid_report(&report, now));
         }
-        let mut unsupported = base.clone();
-        unsupported["schema_version"] = serde_json::json!(3);
-        let report: super::TelemetryReport = serde_json::from_value(unsupported).unwrap();
+        let mut current = base.clone();
+        current["schema_version"] = serde_json::json!(3);
+        current["services"] = serde_json::json!(service_snapshot());
+        let report: super::TelemetryReport = serde_json::from_value(current.clone()).unwrap();
+        assert!(super::valid_report(&report, now));
+
+        current["services"][0]["service_id"] = serde_json::json!("../../etc/passwd");
+        let report: super::TelemetryReport = serde_json::from_value(current.clone()).unwrap();
         assert!(!super::valid_report(&report, now));
 
-        let mut invalid = base;
-        invalid["schema_version"] = serde_json::json!(2);
+        let mut invalid = current;
+        invalid["schema_version"] = serde_json::json!(3);
         invalid["network"] = serde_json::json!({
             "interfaces": (0..17).map(|index| serde_json::json!({
                 "name": format!("eth{index}"), "loopback": false,
@@ -1409,7 +1482,9 @@ mod tests {
                 load_average_1m REAL,
                 agent_version TEXT,
                 network_json TEXT,
-                network_sampled_at_unix INTEGER
+                network_sampled_at_unix INTEGER,
+                services_json TEXT,
+                services_sampled_at_unix INTEGER
             )",
         )
         .execute(&pool)
@@ -1623,34 +1698,40 @@ mod tests {
         authz_task.abort();
     }
 
-    fn telemetry_request(node_id: &str, credential: &str, sampled_at_unix: i64) -> Request<Body> {
-        let body = serde_json::json!({
-            "schema_version": 1,
-            "sampled_at_unix": sampled_at_unix,
-            "cpu_percent": 24.5,
-            "logical_cpu_count": 8,
-            "memory_total_bytes": 16_000_000_000i64,
-            "memory_available_bytes": 8_000_000_000i64,
-            "uptime_seconds": 1234,
-            "load_average_1m": 1.25,
-            "agent_version": "1.0.0"
-        });
-        Request::builder()
-            .method("POST")
-            .uri(format!("/api/fleet/v1/nodes/{node_id}/telemetry"))
-            .header(header::AUTHORIZATION, format!("Bearer {credential}"))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap()
-    }
-
-    fn telemetry_request_v2(
+    fn telemetry_request_v3(
         node_id: &str,
         credential: &str,
         sampled_at_unix: i64,
+        invalid_service_id: bool,
     ) -> Request<Body> {
+        let ids = [
+            "homepage",
+            "docs",
+            "identity",
+            "diagnostics",
+            "registry",
+            "artifact",
+            "build-cache",
+            "platform",
+            "caddy",
+        ];
+        let services = ids
+            .iter()
+            .enumerate()
+            .map(|(index, service_id)| {
+                serde_json::json!({
+                    "service_id": if invalid_service_id && index == 0 { "not-a-service" } else { service_id },
+                    "available": index == 1,
+                    "cpu_usage_usec": if index == 1 { serde_json::json!(3000000_u64) } else { serde_json::Value::Null },
+                    "cpu_millicores": if index == 1 { serde_json::json!(1000_u32) } else { serde_json::Value::Null },
+                    "memory_current_bytes": if index == 1 { serde_json::json!(4096_u64) } else { serde_json::Value::Null },
+                    "io_read_bytes": if index == 1 { serde_json::json!(10_u64) } else { serde_json::Value::Null },
+                    "io_write_bytes": if index == 1 { serde_json::json!(20_u64) } else { serde_json::Value::Null }
+                })
+            })
+            .collect::<Vec<_>>();
         let body = serde_json::json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "sampled_at_unix": sampled_at_unix,
             "cpu_percent": 24.5,
             "logical_cpu_count": 8,
@@ -1662,7 +1743,8 @@ mod tests {
             "network": {
                 "interfaces": [{"name":"eth0","loopback":false,"rx_bytes":300,"rx_packets":3,"rx_errors":0,"rx_dropped":0,"tx_bytes":200,"tx_packets":2,"tx_errors":0,"tx_dropped":0}],
                 "tcp_states": {"established":2,"syn_sent":0,"syn_received":0,"fin_wait_1":0,"fin_wait_2":0,"time_wait":1,"close":0,"close_wait":0,"last_ack":0,"listen":1,"closing":0,"other":0}
-            }
+            },
+            "services": services
         });
         Request::builder()
             .method("POST")
@@ -1674,7 +1756,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_two_network_report_is_stored_and_available_only_to_root() {
+    async fn current_network_report_is_stored_and_available_only_to_root() {
         let pool = test_pool().await;
         let node_id = uuid::Uuid::new_v4().to_string();
         let credential = format!("v1.{node_id}.{}.{}", "a".repeat(32), "b".repeat(32));
@@ -1699,7 +1781,7 @@ mod tests {
         });
         let accepted = app
             .clone()
-            .oneshot(telemetry_request_v2(&node_id, &credential, now))
+            .oneshot(telemetry_request_v3(&node_id, &credential, now, false))
             .await
             .unwrap();
         assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
@@ -1753,6 +1835,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn schema_three_service_snapshot_is_stored_only_after_valid_report() {
+        let pool = test_pool().await;
+        let node_id = uuid::Uuid::new_v4().to_string();
+        let credential = format!("v1.{node_id}.{}.{}", "a".repeat(32), "b".repeat(32));
+        let now = super::unix_now();
+        sqlx::query(
+            "INSERT INTO platform_server_nodes
+             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+             VALUES (?, 'Test node', 'general', 'active', ?, 1, ?, 'test-profile')",
+        )
+        .bind(&node_id)
+        .bind(sha256_hex(credential.as_bytes()))
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let app = router_with_state(NodeState {
+            pool: pool.clone(),
+            authz_endpoint: String::new(),
+            service_token: None,
+            client: reqwest::Client::new(),
+        });
+        let accepted = app
+            .clone()
+            .oneshot(telemetry_request_v3(&node_id, &credential, now, false))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+        let (stored_json, stored_at): (String, i64) = sqlx::query_as(
+            "SELECT services_json,services_sampled_at_unix FROM platform_server_nodes WHERE id=?",
+        )
+        .bind(&node_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let stored: Vec<serde_json::Value> = serde_json::from_str(&stored_json).unwrap();
+        assert_eq!(stored_at, now);
+        assert_eq!(stored.len(), 9);
+        assert_eq!(stored[1]["cpu_millicores"], 1000);
+
+        let rejected = app
+            .oneshot(telemetry_request_v3(&node_id, &credential, now + 1, true))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let preserved: i64 = sqlx::query_scalar(
+            "SELECT services_sampled_at_unix FROM platform_server_nodes WHERE id=?",
+        )
+        .bind(&node_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(preserved, now);
+    }
+
+    #[tokio::test]
     async fn telemetry_endpoint_accepts_one_sample_then_enforces_throttle_and_revocation() {
         let pool = test_pool().await;
         let node_id = uuid::Uuid::new_v4().to_string();
@@ -1785,14 +1923,19 @@ mod tests {
         let invalid_credential = credential.replace('a', "c");
         let rejected = app
             .clone()
-            .oneshot(telemetry_request(&node_id, &invalid_credential, now))
+            .oneshot(telemetry_request_v3(
+                &node_id,
+                &invalid_credential,
+                now,
+                false,
+            ))
             .await
             .unwrap();
         assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
 
         let accepted = app
             .clone()
-            .oneshot(telemetry_request(&node_id, &credential, now))
+            .oneshot(telemetry_request_v3(&node_id, &credential, now, false))
             .await
             .unwrap();
         assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
@@ -1803,7 +1946,7 @@ mod tests {
 
         let throttled = app
             .clone()
-            .oneshot(telemetry_request(&node_id, &credential, now + 1))
+            .oneshot(telemetry_request_v3(&node_id, &credential, now + 1, false))
             .await
             .unwrap();
         assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -1836,7 +1979,7 @@ mod tests {
         .unwrap();
         let out_of_order = app
             .clone()
-            .oneshot(telemetry_request(&node_id, &credential, now))
+            .oneshot(telemetry_request_v3(&node_id, &credential, now, false))
             .await
             .unwrap();
         assert_eq!(out_of_order.status(), StatusCode::CONFLICT);
@@ -1855,7 +1998,7 @@ mod tests {
             .await
             .unwrap();
         let revoked = app
-            .oneshot(telemetry_request(&node_id, &credential, now + 2))
+            .oneshot(telemetry_request_v3(&node_id, &credential, now + 2, false))
             .await
             .unwrap();
         assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);

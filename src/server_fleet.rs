@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Serialize;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -37,6 +37,8 @@ pub(crate) struct ServerNode {
     pub(crate) uptime_seconds: Option<u64>,
     pub(crate) load_average_1m: Option<f64>,
     pub(crate) network: Option<crate::network_telemetry::NetworkSnapshot>,
+    pub(crate) service_metrics: Option<Vec<crate::service_telemetry::ServiceMetrics>>,
+    pub(crate) service_metrics_sampled_at_unix: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,13 +47,22 @@ struct CpuTimes {
     idle: u64,
 }
 
-#[derive(Default)]
 struct Sampler {
     previous_cpu: Option<CpuTimes>,
+    previous_services: Vec<crate::service_telemetry::ServiceMetrics>,
+    previous_service_sample: std::time::Instant,
 }
 
 pub fn initialize() {
-    let mut sampler = Sampler::default();
+    let mut sampler = Sampler {
+        previous_cpu: None,
+        previous_services: crate::service_telemetry::read_service_snapshot(
+            std::path::Path::new("/sys/fs/cgroup/system.slice"),
+            None,
+            Duration::ZERO,
+        ),
+        previous_service_sample: std::time::Instant::now(),
+    };
     let initial = sampler.snapshot();
     let shared = Arc::new(RwLock::new(initial));
     let _ = FLEET_SNAPSHOT.set(shared.clone());
@@ -104,6 +115,14 @@ impl Sampler {
         let load_average_1m = read_load_average();
         let network = crate::network_telemetry::read_network_snapshot();
         let observed_at_unix = unix_now();
+        let service_sample_at = std::time::Instant::now();
+        let service_metrics = crate::service_telemetry::read_service_snapshot(
+            std::path::Path::new("/sys/fs/cgroup/system.slice"),
+            Some(&self.previous_services),
+            service_sample_at.saturating_duration_since(self.previous_service_sample),
+        );
+        self.previous_services = service_metrics.clone();
+        self.previous_service_sample = service_sample_at;
         let has_metrics = cpu.is_some() || memory.is_some() || uptime.is_some();
         let node = ServerNode {
             id: crate::server_operation_schema::local_node_id(),
@@ -126,6 +145,8 @@ impl Sampler {
             uptime_seconds: uptime,
             load_average_1m,
             network,
+            service_metrics: Some(service_metrics),
+            service_metrics_sampled_at_unix: Some(observed_at_unix),
         };
         ServerFleetSnapshot {
             schema_version: 1,

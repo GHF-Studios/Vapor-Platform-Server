@@ -102,11 +102,21 @@ sudo systemctl enable --now vapor-node-agent.service
 
 The service sends one report every 30 seconds, uses normal HTTPS certificate
 validation, refuses redirects, and has bounded connection/request timeouts.
-Network fields use report schema 2. Platform continues to accept schema-1
-agents; network metrics are marked unavailable until a schema-2 agent checks
-in. The root-only Server Diagnostics view retains aggregate, non-loopback
-traffic samples for at most seven days in Platform state. Per-interface
-counters are held only as the latest sample. No player Diagnostics data is
+The current report schema is 3; reports from older agent builds are rejected.
+Install the server and agent from the same release. It includes bounded interface/TCP aggregates
+and current resource readings for nine fixed systemd units (`homepage`,
+`docs`, `identity`, `diagnostics`, `registry`, `artifact`, `build-cache`,
+`platform`, and `caddy`). Service readings come from cgroup v2; missing
+controllers, stopped units, and unsupported cgroup layouts remain unavailable.
+CPU is interval usage expressed as millicores (1000 means one fully occupied
+core); memory is current usage and block I/O totals are cumulative since the
+unit started. The agent does not enumerate arbitrary cgroups or invoke
+`systemctl` while sampling. Platform stores only the latest service snapshot.
+
+The root-only Server Diagnostics view retains aggregate, non-loopback traffic
+samples for at most seven days in Platform state. Per-interface counters and
+per-service resource values are held only as the latest sample. No peer
+addresses, process names, packet contents, or player Diagnostics data are
 involved.
 Revoke the node in Platform to stop accepting reports; removing the unit and
 configuration from the host is a separate cleanup step.
