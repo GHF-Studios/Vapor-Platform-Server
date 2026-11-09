@@ -28,10 +28,10 @@ if [ -e "${BACKUP_ROOT}/${BUNDLE_NAME}" ] || [ -e "${BACKUP_ROOT}/${BUNDLE_NAME}
 fi
 
 exec 9>/run/vapor-server-deploy.lock
-if ! flock -n 9; then
-  echo "error: Vapor deploy/state lock is already held; retry the export" >&2
-  exit 1
-fi
+# Serialize the snapshot after an active deployment or restore. A routine
+# deployment must not turn the hourly backup into a failed run and leave the
+# owner copy one interval behind.
+flock 9
 
 TMP_DIR="$(mktemp -d "${BACKUP_ROOT}/.state-export.XXXXXX")"
 BUNDLE_ROOT="${TMP_DIR}/vapor-platform-recovery"

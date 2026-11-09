@@ -74,6 +74,13 @@ class StateOnlyRestoreContractTests(unittest.TestCase):
         self.assertNotIn("systemctl stop", export)
         self.assertNotIn("pause_temporary_ssh_expiry", export)
 
+    def test_state_export_waits_for_deployment_lock_without_a_short_service_timeout(self) -> None:
+        export = (REPO_ROOT / "deploy/scripts/export-state-only.sh").read_text()
+        unit = (REPO_ROOT / "deploy/systemd/vapor-state-only-export.service").read_text()
+        self.assertIn("flock 9", export)
+        self.assertNotIn("flock -n 9", export)
+        self.assertIn("TimeoutStartSec=infinity", unit)
+
 
 if __name__ == "__main__":
     unittest.main()
