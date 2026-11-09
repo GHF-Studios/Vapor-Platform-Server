@@ -43,6 +43,11 @@ host.” It does not launch restore, export, wipe, or shell operations.
 - Timer activity and its next scheduled time are shown as bounded display
   strings reported by systemd. Missing or unreadable state is “Unknown” or
   “Unavailable,” never “healthy.”
+- The latest state-export service outcome is shown independently from archive
+  freshness. `running`, `failed`, `never run`, and `unknown` must not be
+  presented as a recent successful snapshot. A completed successful run may
+  show its bounded systemd start timestamp; archive freshness continues to be
+  derived only from the published archive mtime.
 - Archive-root state distinguishes a readable folder, a missing folder, and an
   unavailable folder. A permission or I/O error must not be presented as “no
   archive found.”
@@ -78,6 +83,8 @@ host.” It does not launch restore, export, wipe, or shell operations.
   VPS archive, timer, owner USB, and fresh-host drill statuses.
 - A missing helper, inactive timer, missing archive, malformed response, or
   stale archive cannot render as ready.
+- A failed or in-progress latest export attempt remains visible even if an
+  older archive is still recent.
 - Non-root and unauthenticated requests cannot invoke the privileged helper.
 - The deployed source remains independently testable in both supported
   platform paths; no direct production restore or destructive action is added.

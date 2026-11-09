@@ -96,6 +96,19 @@
 
 ## Follow-on work
 
+### Latest export attempt visibility (2026-11-09)
+
+- [x] Report systemd export result (`succeeded`, `failed`, `running`, `never`,
+  `unknown`) independently from archive mtime freshness.
+- [x] Show the bounded last-attempt timestamp in the Recovery workbench.
+- [x] Bump the recovery-status response schema to version 2 and validate it in
+  both the helper model and browser client.
+- [x] Add classifier coverage for running, never-started, success, failure,
+  and unavailable states.
+
+The separate status prevents an old-but-still-recent archive from masking a
+failed latest export attempt.
+
 The owner also requested a browser-based emergency console. Its separate
 security contract is in
 `docs/superpowers/specs/2026-11-08-emergency-console-design.md`. Do not expose

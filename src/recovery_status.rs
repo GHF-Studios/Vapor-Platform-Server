@@ -12,12 +12,43 @@ pub(crate) struct RecoveryStatus {
     pub latest_archive: Option<LatestArchive>,
     pub freshness: String,
     pub state_only_timer_state: String,
+    pub state_only_export_state: String,
+    pub state_only_export_last_attempt: Option<String>,
     pub state_only_archive_count: u32,
     pub state_only_latest_archive: Option<LatestStateOnlyArchive>,
     #[serde(default)]
     pub owner_usb_sync: Option<OwnerUsbSyncStatus>,
     #[serde(default)]
     pub owner_state_usb_sync: Option<OwnerStateUsbSyncStatus>,
+}
+
+pub(crate) fn state_only_export_state(
+    load_state: &str,
+    active_state: &str,
+    result: &str,
+    start_timestamp_monotonic: &str,
+) -> &'static str {
+    if load_state != "loaded" {
+        return "unknown";
+    }
+    match active_state {
+        "active" | "activating" | "reloading" => return "running",
+        "failed" => return "failed",
+        "inactive" => {}
+        _ => return "unknown",
+    }
+    if result == "success" {
+        return match start_timestamp_monotonic.parse::<u64>() {
+            Ok(0) => "never",
+            Ok(_) => "succeeded",
+            Err(_) => "unknown",
+        };
+    }
+    if result.is_empty() {
+        "unknown"
+    } else {
+        "failed"
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -317,7 +348,7 @@ fn valid_owner_archive_name(name: &str) -> bool {
 
 impl RecoveryStatus {
     pub(crate) fn validate(&self) -> bool {
-        self.schema_version == 1
+        self.schema_version == 2
             && matches!(
                 self.archive_root_state.as_str(),
                 "available" | "missing" | "unavailable"
@@ -327,6 +358,14 @@ impl RecoveryStatus {
                 self.state_only_timer_state.as_str(),
                 "active" | "inactive" | "unknown"
             )
+            && matches!(
+                self.state_only_export_state.as_str(),
+                "succeeded" | "failed" | "running" | "never" | "unknown"
+            )
+            && self
+                .state_only_export_last_attempt
+                .as_deref()
+                .is_none_or(|value| value.len() <= 128 && !value.chars().any(char::is_control))
             && self.state_only_archive_count <= 10_000
             && self
                 .state_only_latest_archive
@@ -373,6 +412,55 @@ impl RecoveryStatus {
                     && report.recovery_kit_available
                     && matches!(report.freshness.as_str(), "recent" | "stale")
             })
+    }
+}
+
+#[cfg(test)]
+mod export_status_tests {
+    use super::state_only_export_state;
+
+    #[test]
+    fn active_export_is_reported_as_running() {
+        assert_eq!(
+            state_only_export_state("loaded", "active", "exit-code", "100"),
+            "running"
+        );
+        assert_eq!(
+            state_only_export_state("loaded", "activating", "success", "100"),
+            "running"
+        );
+    }
+
+    #[test]
+    fn never_started_export_is_not_reported_as_success() {
+        assert_eq!(
+            state_only_export_state("loaded", "inactive", "success", "0"),
+            "never"
+        );
+        assert_eq!(
+            state_only_export_state("not-found", "inactive", "success", "0"),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn completed_export_reports_success_or_failure() {
+        assert_eq!(
+            state_only_export_state("loaded", "inactive", "success", "100"),
+            "succeeded"
+        );
+        assert_eq!(
+            state_only_export_state("loaded", "failed", "exit-code", "100"),
+            "failed"
+        );
+        assert_eq!(
+            state_only_export_state("loaded", "inactive", "unknown", "100"),
+            "failed"
+        );
+        assert_eq!(
+            state_only_export_state("loaded", "inactive", "", "100"),
+            "unknown"
+        );
     }
 }
 

@@ -690,6 +690,36 @@ mod unix_impl {
             _ => "unknown",
         })
         .unwrap_or("unknown");
+        let state_only_export_output = command_output_bounded(
+            "/usr/bin/systemctl",
+            &[
+                "show",
+                "--property=LoadState,ActiveState,Result,ExecMainStartTimestampMonotonic,ExecMainStartTimestamp",
+                "vapor-state-only-export.service",
+            ],
+            512,
+        )
+        .await
+        .unwrap_or_default();
+        let export_property = |name: &str| {
+            state_only_export_output
+                .lines()
+                .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+                .unwrap_or("")
+        };
+        let state_only_export_state = recovery_status::state_only_export_state(
+            export_property("LoadState"),
+            export_property("ActiveState"),
+            export_property("Result"),
+            export_property("ExecMainStartTimestampMonotonic"),
+        );
+        let state_only_export_last_attempt = match export_property("ExecMainStartTimestamp") {
+            "" | "n/a" => None,
+            value if value.len() <= 128 && !value.chars().any(char::is_control) => {
+                Some(value.to_owned())
+            }
+            _ => None,
+        };
         let next_run_display = command_output_bounded(
             "/usr/bin/systemctl",
             &[
@@ -706,7 +736,7 @@ mod unix_impl {
         .filter(|value| !value.is_empty());
 
         Ok(recovery_status::RecoveryStatus {
-            schema_version: 1,
+            schema_version: 2,
             archive_root_state: archive_root_state.to_owned(),
             timer_state: timer_state.to_owned(),
             next_run_display,
@@ -714,6 +744,8 @@ mod unix_impl {
             latest_archive,
             freshness: freshness.to_owned(),
             state_only_timer_state: state_only_timer_state.to_owned(),
+            state_only_export_state: state_only_export_state.to_owned(),
+            state_only_export_last_attempt,
             state_only_archive_count,
             state_only_latest_archive,
             owner_usb_sync,
