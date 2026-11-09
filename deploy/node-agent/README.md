@@ -23,6 +23,20 @@ The archive contains the reporter binary, this README, and the systemd unit. It
 is built for Linux x86_64. The temporary directory is unique and removed when
 the shell exits.
 
+### Build locally when the CI artifact is unavailable
+
+On the worker, check out this repository and build with the locked dependency
+set using its native Rust toolchain:
+
+```sh
+cargo build --locked --release --bin vapor_node_agent
+sudo install -o root -g root -m 0755 target/release/vapor_node_agent /usr/local/bin/vapor-node-agent
+sudo install -o root -g root -m 0644 deploy/node-agent/vapor-node-agent.service /etc/systemd/system/vapor-node-agent.service
+```
+
+This builds for the worker's Linux architecture. The published CI artifact is
+currently x86_64 only; use the local build path for another Linux architecture.
+
 ## Configure
 
 Create the unprivileged service account and protected configuration directory:
