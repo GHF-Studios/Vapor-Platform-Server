@@ -61,6 +61,13 @@ flowchart TB
 ### Standalone runtime and project boundary
 
 - Vapor is installed, updated, and uninstalled independently of Steam. Its managed binaries, source checkouts, toolchains, caches, settings, and state live under Vapor-owned user/system locations, not in a Steam app directory.
+- Vapor is one installed tool with one recognizable entrypoint for Players,
+  Developers/Modders, Operators, and Ecosystem Developers. Their capabilities
+  and workspaces differ, but they are reached through explicit context and
+  access bridges inside the same product; a higher access tier does not require
+  a separate Vapor installation or an unrelated product surface. Local
+  Player/Developer setup and server-authoritative operator/ecosystem grants
+  remain distinct authorities.
 - The Loo Cast Steam depot contains one self-contained executable artifact.
   That artifact embeds `App.vapor.toml` and the three first-party local
   products: Spacetime Engine (Engine), Loo Cast (Game), and Loo Cast
@@ -92,14 +99,22 @@ flowchart TB
 
 - One physical VPS may run multiple independent service processes behind one public domain and a shared authenticated admin gateway. The Platform repo owns composition, fixed host operations, deployment orchestration, backup/import/recovery, and the shared shell. Each service repo owns its business rules, records, policy, and service-specific interface fragment.
 - The web dashboard is the normal graphical interface into these services; “service-owned authority” does not mean the owner must use the CLI. The gateway may present and invoke workflows, but never shadows owner records or bypasses their authorization/audit.
-- The target browser experience has separate audiences: public pages; a signed-in
-  personal dashboard; authorized Project workspaces; and the root-only Platform
-  operator dashboard. Public visitors do not receive admin navigation, page
-  layout, or operator scripts. A signed-in non-operator does not receive the
-  admin shell. Admin authorization must succeed before the shell is rendered,
-  not merely before protected records or actions load. Project pages require
+- The target browser experience uses one recognizable site shell with clear
+  bridges among public pages, a signed-in personal dashboard, authorized
+  Project workspaces, and the root-only Platform operator area. The entry to
+  privileged work is visible and explains its access requirement, including to
+  signed-in users who lack that role. This bridge reveals no admin layout,
+  private service details, operator scripts, or protected data. Admin
+  authorization must succeed before the admin shell is rendered, not merely
+  before protected records or actions load. Project pages require
   project-scoped authorization, and owning services recheck it for every API
   read or mutation. A route being hidden is not an authorization check.
+- The browser and installed Vapor client should teach the same interaction
+  model: one account/product surface, visible workspaces and contexts, and
+  explicit locked or unavailable states that name the required access and
+  where to obtain it. Product-specific workbenches appear inside that shell;
+  they are not separate login universes. Public visitors may see the operator
+  entry bridge, but never the private admin shell or its implementation.
 - Platform now checks root Identity authorization before serving any `/admin`
   page, fragment, style, or script. Admin-origin isolation remains a separate
   routing defense: it does not replace authorization, and while it is
