@@ -797,11 +797,20 @@ async fn decide_request(
 
 const MAX_GITHUB_REF_RESPONSE_BYTES: usize = 8192;
 const GITHUB_MAIN_COMMIT_URL: &str =
-    "https://api.github.com/repos/GHF-Studios/Vapor-Platform-Server/commits/main";
+    "https://api.github.com/repos/GHF-Studios/Vapor-Platform-Server/git/ref/heads/main";
 
 #[derive(Deserialize)]
-struct GithubCommitResponse {
+struct GithubRefResponse {
+    #[serde(rename = "ref")]
+    reference: String,
+    object: GithubRefObject,
+}
+
+#[derive(Deserialize)]
+struct GithubRefObject {
     sha: String,
+    #[serde(rename = "type")]
+    object_type: String,
 }
 
 async fn fetch_main_commit_at(client: &reqwest::Client, url: &str) -> Result<String, ()> {
@@ -826,11 +835,19 @@ async fn fetch_main_commit_at(client: &reqwest::Client, url: &str) -> Result<Str
         }
         body.extend_from_slice(&chunk);
     }
-    let commit: GithubCommitResponse = serde_json::from_slice(&body).map_err(|_| ())?;
-    if commit.sha.len() != 40 || !commit.sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    let reference: GithubRefResponse = serde_json::from_slice(&body).map_err(|_| ())?;
+    if reference.reference != "refs/heads/main"
+        || reference.object.object_type != "commit"
+        || reference.object.sha.len() != 40
+        || !reference
+            .object
+            .sha
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
         return Err(());
     }
-    Ok(commit.sha.to_ascii_lowercase())
+    Ok(reference.object.sha.to_ascii_lowercase())
 }
 
 fn is_current_main_revision(request_commit: &str, current_main_commit: &str) -> bool {
@@ -2238,7 +2255,12 @@ mod tests {
 
         let github_app = Router::new().route(
             "/ref",
-            get(move || async move { axum::Json(json!({"sha": current_main})) }),
+            get(move || async move {
+                axum::Json(json!({
+                    "ref": "refs/heads/main",
+                    "object": {"sha": current_main, "type": "commit"}
+                }))
+            }),
         );
         let github_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let github_address = github_listener.local_addr().unwrap();
@@ -2363,7 +2385,12 @@ mod tests {
         let expected = "0123456789abcdef0123456789abcdef01234567";
         let valid_app = Router::new().route(
             "/ref",
-            get(move || async move { axum::Json(serde_json::json!({"sha": expected})) }),
+            get(move || async move {
+                axum::Json(serde_json::json!({
+                    "ref": "refs/heads/main",
+                    "object": {"sha": expected, "type": "commit"}
+                }))
+            }),
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -2382,7 +2409,12 @@ mod tests {
 
         let invalid_app = Router::new().route(
             "/ref",
-            get(|| async { axum::Json(serde_json::json!({"sha": "not-a-commit"})) }),
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "ref": "refs/heads/main",
+                    "object": {"sha": "not-a-commit", "type": "commit"}
+                }))
+            }),
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
