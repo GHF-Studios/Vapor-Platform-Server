@@ -1,6 +1,6 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-09 09:00 UTC)
+## Current verified state (2026-11-09 09:36 UTC)
 
 - The primary VPS is in independent `services` mode. Platform composition
   `19117b021b88cc478c342f612ac2d28fbdf03a29` is deployed; the Platform,
@@ -14,19 +14,21 @@
   existing deploy script's root migration path; all deployment health checks
   passed. No service credentials or long-lived GitHub Actions secrets were
   added.
-- GitHub Actions run `42588893190` passed composed Linux CI, Windows recovery
-  tests, and deploy-request submission. It created request
-  `ec044eeb-636d-4167-a38a-74954f83a229`, pending for commit
-  `e2aff6a60118bc8649177af2c3a370a6455b5986`, scope `service`, target
-  `platform`. Its signed run key is `42588893190:1`. The earlier run
-  `42586875123` failed only at submission because it reached the old live
-  endpoint before cutover. Platform `main` is now at `e2aff6a`.
-- The queue has three pending requests and nine older approved requests whose
-  dispatch state is failed; there are no active workers. The two oldest pending
-  commits, `6001a3e` and `1f84ef2`, are already ancestors of the deployed
-  `19117b0` composition. Re-deploying them would roll the server backward.
-  They must be closed as stale before the newer `e2aff6a` request can be
-  approved. Do not bulk-dispatch the nine failed approvals.
+- GitHub Actions run `42593795801` passed Windows recovery and composed Linux
+  CI and created pending request `15cce7e1-ab44-4242-863f-7ca494364aee` for
+  commit `99f3cf5cd8f0b9fa422f93567e4e9fe75ea8b8b6`, scope `service`, target
+  `platform`. Platform `main` is now at `99f3cf5`. The request is pending in
+  the live queue; it has not been deployed.
+- The queue currently has four pending requests and nine older approved
+  requests whose dispatch state is failed; no request worker is active. The
+  first three pending commits (`6001a3e`, `1f84ef2`, and `e2aff6a`) are
+  superseded by current `main` (`99f3cf5`). The first two are already ancestors
+  of deployed `19117b0`, so deploying them would roll the server backward.
+  The new source adds current-main freshness checks to request submission and
+  approval, makes stale requests visibly rejectable in the inbox, and keeps the
+  worker's existing last-moment guard. Those changes are not live until the
+  queue is cleared and the current request is deployed. Do not bulk-dispatch
+  the nine failed approvals.
 - The owner-held `E:` drive remains mounted as `BACKUPS` (exFAT, about 119.5
   GiB). Its hourly `Vapor USB Recovery Sync` task is Ready and last completed
   with result `0`. The current sync verified 16 generations totaling
