@@ -1953,6 +1953,7 @@ const JS: &str = r#"
   const serverActionStatus = document.querySelector('#server-action-status');
   const serverOperationList = document.querySelector('#server-operation-list');
     const nodeForm = document.querySelector('#server-node-enroll');
+    const nodeSlot = document.querySelector('#server-node-slot');
     const nodeLabel = document.querySelector('#server-node-label');
     const nodeRole = document.querySelector('#server-node-role');
     const nodeStatus = document.querySelector('#server-node-management-status');
@@ -1995,7 +1996,7 @@ const JS: &str = r#"
         const status = document.createElement('span'); status.className = `server-node-status${node.state === 'online' ? '' : node.state === 'stale' ? ' stale' : ' unavailable'}`;
         status.textContent = stateLabels[node.state] || 'Unavailable';
         header.append(title, status); card.append(header);
-        const role = document.createElement('p'); role.className = 'server-node-role'; role.textContent = `${node.role || 'server'} · ${node.id || 'identity unavailable'}`; card.append(role);
+        const role = document.createElement('p'); role.className = 'server-node-role'; role.textContent = `${node.role || 'server'} · slot ${node.slot_id || 'unknown'} · installation ${node.id || 'identity unavailable'}`; card.append(role);
         const metrics = document.createElement('dl'); metrics.className = 'server-node-metrics';
         metric(metrics, 'CPU', Number.isFinite(node.cpu_percent) ? `${Number(node.cpu_percent).toFixed(1)}% · ${node.logical_cpu_count || '?'} cores` : `Sampling · ${node.logical_cpu_count || '?'} cores`);
         metric(metrics, 'Memory', node.memory_total_bytes != null && node.memory_available_bytes != null ? `${formatBytes(Number(node.memory_total_bytes) - Number(node.memory_available_bytes))} used / ${formatBytes(node.memory_total_bytes)}` : 'Unavailable');
@@ -2097,13 +2098,27 @@ const JS: &str = r#"
       try {
         const response = await fetch('/api/admin/server-nodes', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
         const data = await response.json().catch(() => null);
-        if (!response.ok || data?.schema_version !== 1 || !Array.isArray(data.nodes) || !Array.isArray(data.events)) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Server records are unavailable (HTTP ${response.status}).`);
+        if (!response.ok || data?.schema_version !== 1 || !Array.isArray(data.slots) || !Array.isArray(data.nodes) || !Array.isArray(data.events)) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Server records are unavailable (HTTP ${response.status}).`);
         nodeManagement.replaceChildren();
+        const slotHeading = document.createElement('h3'); slotHeading.textContent = 'Logical server slots'; nodeManagement.append(slotHeading);
+        nodeSlot.replaceChildren(new Option('Create a new logical slot', ''));
+        for (const slot of data.slots) {
+          if (slot.status === 'vacant') {
+            const option = new Option(`${slot.label} · ${slot.role} · ${slot.id}`, slot.id);
+            option.dataset.label = slot.label; option.dataset.role = slot.role; nodeSlot.add(option);
+          }
+          const row = document.createElement('article'); row.className = 'server-node-management-row';
+          const details = document.createElement('div');
+          const title = document.createElement('strong'); title.textContent = slot.label;
+          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${slot.role} · ${slot.status} · ${slot.current_node_id ? `current installation ${slot.current_node_id}` : 'no active installation'} · slot ${slot.id}`;
+          details.append(title, meta); row.append(details); nodeManagement.append(row);
+        }
+        const incarnationHeading = document.createElement('h3'); incarnationHeading.textContent = 'Host installations'; nodeManagement.append(incarnationHeading);
         for (const node of data.nodes) {
           const row = document.createElement('article'); row.className = 'server-node-management-row';
           const details = document.createElement('div');
           const title = document.createElement('strong'); title.textContent = node.label;
-          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${node.role} · ${node.status} · ${node.id} · ${node.last_report_received_at_unix ? `last report ${new Date(node.last_report_received_at_unix * 1000).toLocaleString()}` : 'never reported'}`;
+          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${node.role} · ${node.status} · slot ${node.slot_id} · installation ${node.id} · ${node.last_report_received_at_unix ? `last report ${new Date(node.last_report_received_at_unix * 1000).toLocaleString()}` : 'never reported'}`;
           details.append(title, meta); row.append(details);
           if (node.status === 'active') {
             const revoke = document.createElement('button'); revoke.type = 'button'; revoke.textContent = 'Revoke';
@@ -2127,20 +2142,34 @@ const JS: &str = r#"
           }
           disclosure.append(summary, list); nodeManagement.append(disclosure);
         }
-        nodeStatus.textContent = `${data.nodes.length} registered ${data.nodes.length === 1 ? 'server' : 'servers'}. Reporter credentials are never shown here.`;
+        nodeStatus.textContent = `${data.slots.length} logical ${data.slots.length === 1 ? 'slot' : 'slots'} · ${data.nodes.length} host installations, including history.`;
       } catch (error) { nodeManagement.replaceChildren(); nodeStatus.textContent = error.message || 'Server records are unavailable.'; }
     };
+    const syncSlotSelection = () => {
+      const selected = nodeSlot?.selectedOptions?.[0];
+      const slot = selected?.value ? selected : null;
+      if (slot) {
+        nodeLabel.value = slot.dataset.label;
+        nodeRole.value = slot.dataset.role;
+        nodeLabel.readOnly = true; nodeRole.disabled = true;
+      } else {
+        nodeLabel.readOnly = false; nodeRole.disabled = false;
+      }
+    };
+    nodeSlot?.addEventListener('change', syncSlotSelection);
     nodeForm?.addEventListener('submit', async event => {
       event.preventDefault();
-      if (!window.confirm('Create a telemetry-only credential for this server? The secret will be shown once.')) return;
+      if (!window.confirm('Enroll this host installation for telemetry? The credential will be shown once.')) return;
       const submit = nodeForm.querySelector('button[type="submit"]'); submit.disabled = true; nodeStatus.textContent = 'Adding server…';
       try {
-        const created = await postNodeApi('/api/admin/server-nodes', { label: nodeLabel.value, role: nodeRole.value });
+        const request = { label: nodeLabel.value, role: nodeRole.value };
+        if (nodeSlot.value) request.slot_id = nodeSlot.value;
+        const created = await postNodeApi('/api/admin/server-nodes', request);
         nodeSecretValue.textContent = created.reporter_credential;
         createdNodeConfig = { id: created.id, credential: created.reporter_credential };
         nodeSecretPanel.hidden = false;
-        nodeStatus.textContent = `${created.label} added. Download its config or copy the credential now; the secret will not be shown again.`;
-        nodeForm.reset(); await refreshNodeManagement(); await refreshFleet();
+        nodeStatus.textContent = `${created.label} installation enrolled in slot ${created.slot_id}. Download its config or copy the credential now; the secret will not be shown again.`;
+        nodeForm.reset(); syncSlotSelection(); await refreshNodeManagement(); await refreshFleet();
       } catch (error) { nodeStatus.textContent = error.message || 'Could not add server.'; }
       finally { submit.disabled = false; }
     });
@@ -2539,7 +2568,7 @@ fn server_fleet_page_content() -> &'static str {
         "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
         "<section class=\"card\"><h2>Core server actions</h2><p class=\"muted\">Typed, recorded actions for this Platform host. Restarting a service does not change its configuration. Remote-server actions will appear only after that server has an explicitly installed executor. Platform self-restart is withheld until its recovery behavior is verified.</p><div class=\"server-operation-controls\"><label>Service<select id=\"server-action-service\"><option value=\"homepage\">Homepage</option><option value=\"docs\">Docs</option><option value=\"identity\">Identity</option><option value=\"diagnostics\">Diagnostics</option><option value=\"registry\">Registry</option><option value=\"artifact\">Artifact</option><option value=\"build_cache\">Build Cache</option><option value=\"caddy\">Web gateway</option></select></label><button id=\"server-action-restart\" type=\"button\">Restart service</button><button id=\"server-action-reboot\" type=\"button\">Reboot host…</button></div><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for local server identity…</p><details><summary>Recent actions</summary><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></details></section>",
-        "<section class=\"card\"><h2>Add server</h2><p class=\"muted\">Register a manually managed server so its agent can report CPU, memory, load, and uptime. Registration does not provision or remove machines, assign jobs, or grant SSH access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose (label only)<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Add server</button></form><p class=\"server-fleet-note\">Purpose is descriptive only; it does not schedule builds, backups, or other work. Operations will be explicit, typed, and recorded.</p><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time telemetry credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
+        "<section class=\"card\"><h2>Add server installation</h2><p class=\"muted\">Register a fresh host installation to report CPU, memory, load, and uptime. A logical slot stays stable when its OS is wiped; re-enroll the replacement into that same vacant slot. Registration never provisions hardware or grants service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Install into<select id=\"server-node-slot\" name=\"slot_id\"><option value=\"\">Create a new logical slot</option></select></label><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose (descriptive)<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Enroll installation</button></form><p class=\"server-fleet-note\">Purpose is descriptive only; it does not schedule builds, backups, or other work. Operations will be explicit, typed, and recorded.</p><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time telemetry credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
         "<p class=\"muted\">The telemetry credential cannot be used for SSH, shell access, or arbitrary commands.</p>"
     )
 }
@@ -4235,13 +4264,16 @@ mod tests {
         assert!(nav.contains("Infrastructure"));
         assert!(page.contains("id=\"server-fleet-list\""));
         assert!(page.contains("id=\"server-fleet-refresh\""));
-        assert!(page.contains("Add server"));
+        assert!(page.contains("Add server installation"));
         assert!(!page.contains("Enroll a server"));
+        assert!(page.contains("id=\"server-node-slot\""));
+        assert!(page.contains("A logical slot stays stable when its OS is wiped"));
         assert!(page.contains("This file contains the one-time telemetry credential."));
         assert!(page.contains("id=\"server-node-secret-download\""));
-        assert!(page.contains("grant SSH access or service control"));
-        assert!(page.contains("does not provision or remove machines, assign jobs"));
+        assert!(page.contains("grants service control"));
+        assert!(page.contains("Registration never provisions hardware"));
         assert!(page.contains("Purpose is descriptive only"));
+        assert!(page.contains("does not schedule builds, backups, or other work"));
         assert!(page.contains("id=\"server-action-restart\""));
         assert!(page.contains("id=\"server-action-reboot\""));
         assert!(page.contains("id=\"server-operation-list\""));

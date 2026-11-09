@@ -24,6 +24,7 @@ struct ServerFleetSnapshot {
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct ServerNode {
     pub(crate) id: String,
+    pub(crate) slot_id: String,
     pub(crate) label: String,
     pub(crate) role: String,
     pub(crate) state: &'static str,
@@ -87,6 +88,7 @@ impl Sampler {
         let has_metrics = cpu.is_some() || memory.is_some() || uptime.is_some();
         let node = ServerNode {
             id: crate::server_operation_schema::local_node_id(),
+            slot_id: crate::server_operation_schema::local_slot_id(),
             label: node_label(),
             role: "control-plane".to_owned(),
             state: if has_metrics { "online" } else { "unavailable" },

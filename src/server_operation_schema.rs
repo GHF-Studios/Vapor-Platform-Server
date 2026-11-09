@@ -75,6 +75,19 @@ pub(crate) fn local_node_id() -> String {
     format!("node-{short_hash}")
 }
 
+pub(crate) fn local_slot_id() -> String {
+    std::env::var("VAPOR_PLATFORM_SERVER_SLOT_ID")
+        .ok()
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 80
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .unwrap_or_else(|| "core".to_owned())
+}
+
 pub(crate) fn current_boot_id() -> Option<String> {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .ok()

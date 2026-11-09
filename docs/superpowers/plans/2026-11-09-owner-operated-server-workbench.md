@@ -45,9 +45,9 @@
 
 - [x] State in the Servers page that nodes are manually managed and registration does not provision, remove, schedule, or grant service control.
 - [x] Label purpose as informational and say jobs are never assigned from that value.
-- [ ] Review every node-role use; retain a role only where it affects an explicit profile/apply operation, otherwise make it a plain label.
-- [ ] Update fleet acceptance tests to assert the manual-operation/no-scheduler language.
-- [ ] Run the focused Server Fleet test and `git diff --check`.
+- [x] Review every node-role use; the existing purpose categories remain descriptive UI labels only and do not select jobs or grant capabilities.
+- [x] Update fleet acceptance tests to assert the manual-operation/no-scheduler language.
+- [x] Run the focused Server Fleet test and `git diff --check`.
 
 ### Task 2: Durable typed operation ledger
 
@@ -122,7 +122,7 @@ root-owned local action helper and systemd/sudoers installation assets,
 
 **Files:** Platform migration module/API, node executor protocol, service-owner export/import contracts, Servers and Recovery UI, docs.
 
-- [ ] Model stable logical server slots separately from replaceable host incarnations. A reinstall retires one incarnation, enrolls another into the same slot, revokes the old credentials, and preserves slot and action history.
+- [x] Model stable logical server slots separately from replaceable host incarnations. A reinstall retires one incarnation, enrolls another into the same slot, revokes the old credentials, and preserves slot and action history.
 - [ ] Model a manually advanced workflow with source/target slots and incarnations, chosen service set, pinned profile and state revisions, per-step results, and explicit continue/abort actions.
 - [ ] Preflight capacity, service readiness, source exports, target profile, and current deployment revision before any move.
 - [ ] Move only services whose owning repository exposes a valid export/import/deploy contract; preserve the local-build fallback when no worker is available.

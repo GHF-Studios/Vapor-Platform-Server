@@ -36,6 +36,8 @@ struct NodeState {
 struct CreateNodeRequest {
     label: String,
     role: String,
+    #[serde(default)]
+    slot_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +63,7 @@ pub(crate) struct TelemetryReport {
 #[derive(Serialize)]
 struct CreatedNode {
     id: String,
+    slot_id: String,
     label: String,
     role: String,
     status: String,
@@ -72,6 +75,7 @@ struct CreatedNode {
 #[derive(Serialize)]
 struct NodeRecord {
     id: String,
+    slot_id: String,
     label: String,
     role: String,
     status: String,
@@ -99,8 +103,20 @@ struct NodeEvent {
 #[derive(Serialize)]
 struct NodeInventory {
     schema_version: u32,
+    slots: Vec<ServerSlot>,
     nodes: Vec<NodeRecord>,
     events: Vec<NodeEvent>,
+}
+
+#[derive(Serialize)]
+struct ServerSlot {
+    id: String,
+    label: String,
+    role: String,
+    status: String,
+    version: i64,
+    current_node_id: Option<String>,
+    changed_at_unix: i64,
 }
 
 pub(crate) fn router() -> Router {
@@ -124,6 +140,7 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS platform_server_nodes (
             id TEXT PRIMARY KEY,
+            slot_id TEXT,
             label TEXT NOT NULL,
             role TEXT NOT NULL CHECK(role IN ('control-plane','builder','backup','general')),
             status TEXT NOT NULL CHECK(status IN ('active','revoked')),
@@ -146,6 +163,7 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     )
     .execute(&pool)
     .await?;
+    initialize_slots(&pool).await?;
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_platform_server_nodes_status_label
          ON platform_server_nodes(status,label,id)",
@@ -185,10 +203,89 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let columns = sqlx::query("PRAGMA table_info(platform_server_nodes)")
+        .fetch_all(pool)
+        .await?;
+    let has_slot_id = columns.iter().any(|row| row.get::<String, _>("name") == "slot_id");
+    if !has_slot_id {
+        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN slot_id TEXT")
+            .execute(pool)
+            .await?;
+    }
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS platform_server_slots (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('control-plane','builder','backup','general')),
+            status TEXT NOT NULL CHECK(status IN ('active','vacant','retired')),
+            version INTEGER NOT NULL,
+            created_at_unix INTEGER NOT NULL,
+            created_by_profile_id TEXT NOT NULL,
+            current_node_id TEXT,
+            changed_at_unix INTEGER NOT NULL,
+            changed_by_profile_id TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO platform_server_slots
+         (id,label,role,status,version,created_at_unix,created_by_profile_id,current_node_id,changed_at_unix,changed_by_profile_id)
+         SELECT id,label,role,
+                CASE WHEN status='active' THEN 'active' ELSE 'vacant' END,
+                1,created_at_unix,created_by_profile_id,
+                CASE WHEN status='active' THEN id ELSE NULL END,
+                COALESCE(revoked_at_unix,created_at_unix),
+                COALESCE(revoked_by_profile_id,created_by_profile_id)
+         FROM platform_server_nodes",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE platform_server_nodes SET slot_id=id
+         WHERE slot_id IS NULL OR slot_id=''",
+    )
+    .execute(pool)
+    .await?;
+    let local_slot_id = crate::server_operation_schema::local_slot_id();
+    let local_node_id = crate::server_operation_schema::local_node_id();
+    let now = unix_now();
+    let local_label = std::env::var("VAPOR_PLATFORM_SERVER_SLOT_LABEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty() && value.len() <= 80)
+        .unwrap_or_else(|| "Core server".to_owned());
+    sqlx::query(
+        "INSERT OR IGNORE INTO platform_server_slots
+         (id,label,role,status,version,created_at_unix,created_by_profile_id,current_node_id,changed_at_unix,changed_by_profile_id)
+         VALUES (?,?,'control-plane','active',1,?,'platform-bootstrap',?,?,'platform-bootstrap')",
+    )
+    .bind(local_slot_id)
+    .bind(local_label)
+    .bind(now)
+    .bind(local_node_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_server_slots_current_node
+         ON platform_server_slots(current_node_id) WHERE current_node_id IS NOT NULL",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_platform_server_nodes_slot_history
+         ON platform_server_nodes(slot_id,created_at_unix,id)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error> {
     let state = NODE_STATE.get().ok_or(sqlx::Error::PoolTimedOut)?;
     let rows = sqlx::query(
-        "SELECT id,label,role,status,created_at_unix,last_report_received_at_unix,
+        "SELECT id,slot_id,label,role,status,created_at_unix,last_report_received_at_unix,
                 sampled_at_unix,cpu_percent,logical_cpu_count,memory_total_bytes,
                 memory_available_bytes,uptime_seconds,load_average_1m
          FROM platform_server_nodes ORDER BY status,label,id",
@@ -218,6 +315,7 @@ pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error
                 && row.get::<Option<i64>, _>("uptime_seconds").is_some();
             ServerNode {
                 id: row.get("id"),
+                slot_id: row.get::<Option<String>, _>("slot_id").unwrap_or_else(|| row.get("id")),
                 label: row.get("label"),
                 role: row.get("role"),
                 state,
@@ -253,7 +351,7 @@ async fn list_nodes(State(state): State<NodeState>, headers: HeaderMap) -> Respo
         Err(response) => return response,
     };
     let nodes = sqlx::query(
-        "SELECT id,label,role,status,version,created_at_unix,created_by_profile_id,
+        "SELECT id,slot_id,label,role,status,version,created_at_unix,created_by_profile_id,
                 revoked_at_unix,revoked_by_profile_id,last_report_received_at_unix,
                 sampled_at_unix,agent_version
          FROM platform_server_nodes ORDER BY created_at_unix DESC,id DESC LIMIT 200",
@@ -266,11 +364,18 @@ async fn list_nodes(State(state): State<NodeState>, headers: HeaderMap) -> Respo
     )
     .fetch_all(&state.pool)
     .await;
-    match (nodes, events) {
-        (Ok(nodes), Ok(events)) => private_json(
+    let slots = sqlx::query(
+        "SELECT id,label,role,status,version,current_node_id,changed_at_unix
+         FROM platform_server_slots ORDER BY status,label,id",
+    )
+    .fetch_all(&state.pool)
+    .await;
+    match (nodes, events, slots) {
+        (Ok(nodes), Ok(events), Ok(slots)) => private_json(
             StatusCode::OK,
             NodeInventory {
                 schema_version: 1,
+                slots: slots.into_iter().map(server_slot).collect(),
                 nodes: nodes.into_iter().map(node_record).collect(),
                 events: events.into_iter().map(node_event).collect(),
             },
@@ -305,6 +410,14 @@ async fn create_node(
         return error(StatusCode::BAD_REQUEST, "invalid_server_role");
     }
     let id = uuid::Uuid::new_v4().to_string();
+    let new_slot = request.slot_id.is_none();
+    let slot_id = request
+        .slot_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if uuid::Uuid::parse_str(&slot_id).is_err() {
+        return error(StatusCode::BAD_REQUEST, "invalid_server_slot_id");
+    }
     let credential = format!(
         "v1.{id}.{}.{}",
         uuid::Uuid::new_v4().simple(),
@@ -321,12 +434,72 @@ async fn create_node(
             )
         }
     };
+    let slot_version = if new_slot {
+        None
+    } else {
+        let slot = sqlx::query(
+            "SELECT status,version,label,role FROM platform_server_slots WHERE id=?",
+        )
+        .bind(&slot_id)
+        .fetch_optional(&mut *transaction)
+        .await;
+        match slot {
+            Ok(Some(slot))
+                if slot.get::<String, _>("status") == "vacant"
+                    && slot.get::<String, _>("label") == label
+                    && slot.get::<String, _>("role") == request.role =>
+            {
+                Some(slot.get::<i64, _>("version"))
+            }
+            Ok(Some(_)) => {
+                return error(StatusCode::CONFLICT, "server_slot_not_vacant_or_details_changed")
+            }
+            Ok(None) => return error(StatusCode::NOT_FOUND, "server_slot_not_found"),
+            Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_node_state_unavailable"),
+        }
+    };
+    if let Some(version) = slot_version {
+        let changed = sqlx::query(
+            "UPDATE platform_server_slots SET status='active',current_node_id=?,version=version+1,
+                    changed_at_unix=?,changed_by_profile_id=?
+             WHERE id=? AND status='vacant' AND version=? AND current_node_id IS NULL",
+        )
+        .bind(&id)
+        .bind(now)
+        .bind(&actor)
+        .bind(&slot_id)
+        .bind(version)
+        .execute(&mut *transaction)
+        .await;
+        if !changed.is_ok_and(|result| result.rows_affected() == 1) {
+            return error(StatusCode::CONFLICT, "server_slot_changed_during_enrollment");
+        }
+    } else if sqlx::query(
+        "INSERT INTO platform_server_slots
+         (id,label,role,status,version,created_at_unix,created_by_profile_id,current_node_id,changed_at_unix,changed_by_profile_id)
+         VALUES (?,?,?,'active',1,?,?,?,?,?)",
+    )
+    .bind(&slot_id)
+    .bind(label)
+    .bind(&request.role)
+    .bind(now)
+    .bind(&actor)
+    .bind(&id)
+    .bind(now)
+    .bind(&actor)
+    .execute(&mut *transaction)
+    .await
+    .is_err()
+    {
+        return error(StatusCode::CONFLICT, "server_slot_creation_conflict");
+    }
     let inserted = sqlx::query(
         "INSERT INTO platform_server_nodes
-         (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
-         VALUES (?,?,?,'active',?,1,?,?)",
+         (id,slot_id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+         VALUES (?,?,?,?,'active',?,1,?,?)",
     )
     .bind(&id)
+    .bind(&slot_id)
     .bind(label)
     .bind(&request.role)
     .bind(&credential_sha256)
@@ -357,6 +530,7 @@ async fn create_node(
         StatusCode::CREATED,
         CreatedNode {
             id,
+            slot_id,
             label: label.to_owned(),
             role: request.role,
             status: "active".to_owned(),
@@ -391,7 +565,7 @@ async fn revoke_node(
         }
     };
     let row = sqlx::query(
-        "SELECT label,role FROM platform_server_nodes
+        "SELECT slot_id,label,role FROM platform_server_nodes
          WHERE id=? AND status='active' AND version=?",
     )
     .bind(&id)
@@ -415,6 +589,7 @@ async fn revoke_node(
     };
     let label: String = row.get("label");
     let role: String = row.get("role");
+    let slot_id: Option<String> = row.get("slot_id");
     let updated = sqlx::query(
         "UPDATE platform_server_nodes SET status='revoked',version=version+1,
                 revoked_at_unix=?,revoked_by_profile_id=?
@@ -426,10 +601,26 @@ async fn revoke_node(
     .bind(request.expected_version)
     .execute(&mut *transaction)
     .await;
-    if !updated.is_ok_and(|result| result.rows_affected() == 1)
-        || insert_node_event(&mut transaction, &id, "revoked", &label, &role, &actor, now)
-            .await
-            .is_err()
+    if !updated.is_ok_and(|result| result.rows_affected() == 1) {
+        return error(StatusCode::CONFLICT, "server_node_changed_or_already_revoked");
+    }
+    let slot_updated = sqlx::query(
+        "UPDATE platform_server_slots SET status='vacant',current_node_id=NULL,
+                version=version+1,changed_at_unix=?,changed_by_profile_id=?
+         WHERE id=? AND current_node_id=? AND status='active'",
+    )
+        .bind(now)
+        .bind(&actor)
+        .bind(slot_id.as_deref().unwrap_or_default())
+        .bind(&id)
+        .execute(&mut *transaction)
+        .await;
+    if !slot_updated.is_ok_and(|result| result.rows_affected() == 1) {
+        return error(StatusCode::CONFLICT, "server_slot_changed_or_missing");
+    }
+    if insert_node_event(&mut transaction, &id, "revoked", &label, &role, &actor, now)
+        .await
+        .is_err()
         || transaction.commit().await.is_err()
     {
         return error(
@@ -670,6 +861,7 @@ async fn insert_node_event(
 fn node_record(row: sqlx::sqlite::SqliteRow) -> NodeRecord {
     NodeRecord {
         id: row.get("id"),
+        slot_id: row.get::<Option<String>, _>("slot_id").unwrap_or_else(|| row.get("id")),
         label: row.get("label"),
         role: row.get("role"),
         status: row.get("status"),
@@ -681,6 +873,18 @@ fn node_record(row: sqlx::sqlite::SqliteRow) -> NodeRecord {
         last_report_received_at_unix: row.get("last_report_received_at_unix"),
         sampled_at_unix: row.get("sampled_at_unix"),
         agent_version: row.get("agent_version"),
+    }
+}
+
+fn server_slot(row: sqlx::sqlite::SqliteRow) -> ServerSlot {
+    ServerSlot {
+        id: row.get("id"),
+        label: row.get("label"),
+        role: row.get("role"),
+        status: row.get("status"),
+        version: row.get("version"),
+        current_node_id: row.get("current_node_id"),
+        changed_at_unix: row.get("changed_at_unix"),
     }
 }
 
@@ -758,6 +962,35 @@ mod tests {
     use std::time::Duration;
     use tower::ServiceExt;
 
+    async fn root_auth_server() -> (String, tokio::task::JoinHandle<()>) {
+        use axum::routing::post;
+        let app = axum::Router::new().route(
+            "/authorize",
+            post(|| async {
+                axum::Json(serde_json::json!({
+                    "allowed": true,
+                    "expires_at_unix": super::unix_now() + 600,
+                    "profile_id": "test-root-profile"
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{address}/authorize"), task)
+    }
+
+    fn admin_request(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::ORIGIN, "https://vapor.ghf-studios.site")
+            .header(header::COOKIE, format!("vapor_identity_session={}", "a".repeat(40)))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -790,7 +1023,195 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE platform_server_node_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id TEXT NOT NULL,
+                event TEXT NOT NULL,
+                label TEXT NOT NULL,
+                role TEXT NOT NULL,
+                actor_profile_id TEXT NOT NULL,
+                at_unix INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn logical_slot_migration_preserves_existing_active_node_as_its_incarnation() {
+        let pool = test_pool().await;
+        let node_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO platform_server_nodes
+             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+             VALUES (?, 'Build node', 'builder', 'active', 'credential-hash', 1, 123, 'owner')",
+        )
+        .bind(&node_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        super::initialize_slots(&pool).await.unwrap();
+
+        let (slot_id, current_node_id, slot_label, slot_role): (String, String, String, String) =
+            sqlx::query_as(
+                "SELECT s.id,s.current_node_id,s.label,s.role
+                 FROM platform_server_slots s WHERE s.id=?",
+            )
+            .bind(&node_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let incarnation_slot_id: String = sqlx::query_scalar(
+            "SELECT slot_id FROM platform_server_nodes WHERE id=?",
+        )
+        .bind(&node_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(slot_id, node_id);
+        assert_eq!(current_node_id, node_id);
+        assert_eq!(incarnation_slot_id, slot_id);
+        assert_eq!(slot_label, "Build node");
+        assert_eq!(slot_role, "builder");
+
+        let (local_slot, local_node, local_role): (String, String, String) = sqlx::query_as(
+            "SELECT id,current_node_id,role FROM platform_server_slots WHERE id=?",
+        )
+        .bind(crate::server_operation_schema::local_slot_id())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(local_slot, "core");
+        assert_eq!(local_node, crate::server_operation_schema::local_node_id());
+        assert_eq!(local_role, "control-plane");
+    }
+
+    #[tokio::test]
+    async fn logical_slot_migration_keeps_revoked_installation_historical_and_vacant() {
+        let pool = test_pool().await;
+        let node_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO platform_server_nodes
+             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id,revoked_at_unix,revoked_by_profile_id)
+             VALUES (?, 'Old host', 'backup', 'revoked', 'old-hash', 2, 123, 'owner', 456, 'owner')",
+        )
+        .bind(&node_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        super::initialize_slots(&pool).await.unwrap();
+
+        let current_node_id: Option<String> = sqlx::query_scalar(
+            "SELECT current_node_id FROM platform_server_slots WHERE id=?",
+        )
+        .bind(&node_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let historical_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM platform_server_nodes WHERE id=? AND status='revoked'",
+        )
+        .bind(&node_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(current_node_id, None);
+        assert_eq!(historical_count, 1);
+    }
+
+    #[tokio::test]
+    async fn re_enrollment_uses_vacant_slot_and_preserves_old_installation_history() {
+        let pool = test_pool().await;
+        super::initialize_slots(&pool).await.unwrap();
+        let (authz_endpoint, authz_task) = root_auth_server().await;
+        let app = router_with_state(NodeState {
+            pool: pool.clone(),
+            authz_endpoint,
+            service_token: Some("a".repeat(64)),
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(1))
+                .timeout(Duration::from_secs(3))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        });
+
+        let created_response = app
+            .clone()
+            .oneshot(admin_request(
+                "POST",
+                "/api/admin/server-nodes",
+                serde_json::json!({"label":"Worker", "role":"builder"}),
+            ))
+            .await
+            .unwrap();
+        let created_status = created_response.status();
+        let created_body = axum::body::to_bytes(created_response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(created_status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&created_body));
+        let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+        let old_node_id = created["id"].as_str().unwrap().to_owned();
+        let slot_id = created["slot_id"].as_str().unwrap().to_owned();
+        assert_ne!(old_node_id, slot_id);
+
+        let revoked = app
+            .clone()
+            .oneshot(admin_request(
+                "POST",
+                &format!("/api/admin/server-nodes/{old_node_id}/revoke"),
+                serde_json::json!({"expected_version":1}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::OK);
+
+        let replacement_response = app
+            .clone()
+            .oneshot(admin_request(
+                "POST",
+                "/api/admin/server-nodes",
+                serde_json::json!({"label":"Worker", "role":"builder", "slot_id":slot_id}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(replacement_response.status(), StatusCode::CREATED);
+        let replacement: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(replacement_response.into_body(), 4096)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let new_node_id = replacement["id"].as_str().unwrap();
+        assert_ne!(old_node_id, new_node_id);
+        assert_eq!(replacement["slot_id"], slot_id);
+
+        let (old_status, new_slot_id): (String, String) = sqlx::query_as(
+            "SELECT n.status,n.slot_id FROM platform_server_nodes n WHERE n.id=?",
+        )
+        .bind(old_node_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let (slot_status, current_node_id): (String, String) = sqlx::query_as(
+            "SELECT status,current_node_id FROM platform_server_slots WHERE id=?",
+        )
+        .bind(&slot_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(old_status, "revoked");
+        assert_eq!(new_slot_id, slot_id);
+        assert_eq!(slot_status, "active");
+        assert_eq!(current_node_id, new_node_id);
+        authz_task.abort();
     }
 
     fn telemetry_request(node_id: &str, credential: &str, sampled_at_unix: i64) -> Request<Body> {
