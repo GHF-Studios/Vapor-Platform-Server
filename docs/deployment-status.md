@@ -1,5 +1,31 @@
 # Vapor server deployment status
 
+## USB task verification (2026-11-09 11:39 UTC)
+
+- Ran the installed `Vapor USB Recovery Sync` scheduled task end-to-end. It
+  completed with Task Scheduler result `0`; the task returned to `Ready` and
+  did not create a visible PowerShell window. Its hidden, noninteractive action
+  remains configured as intended.
+- The sync is idempotent when the VPS has no newer archive: it revalidated the
+  existing latest archive and recovery kit, updated the local sync report, and
+  retained 19 verified state generations totaling 91,210,763 bytes. The latest
+  archive remains `vapor-platform-state-20261109T110416Z-5d0cbc760559.tar.gz`
+  (SHA-256
+  `0f84f9f51f69d1a96ef364f16762a7dd1d8f55f70d51d229b3e576bd1e138463`),
+  with recovery kit `f9236de5ecbc5a1c2496c7a30cbf632b21fb815b` and archived
+  Platform source `7928edcc42968cf3cdf33eeb0025bc4f004abc9d`.
+- The focused PowerShell tests `test_backup_state_only_to_usb.ps1` and
+  `test_install_usb_state_task.ps1` passed. They include rejection of a
+  snapshot source revision unavailable from `origin/main` and confirm the
+  scheduled action is hidden and noninteractive.
+- A live Build Cache probe returned HTTP 200 and still reports both supported
+  Rust targets as unconfigured and without current snapshots. The primary
+  Platform and Build Cache services are active; this does not enable or imply
+  worker-backed builds.
+- This locates the recovery sync as an unlikely source of the reported blank
+  PowerShell window, but does not identify which process opened it. No USB
+  contents were erased during this check.
+
 ## Current verified state (2026-11-09 09:36 UTC)
 
 - The primary VPS is in independent `services` mode. Platform composition
