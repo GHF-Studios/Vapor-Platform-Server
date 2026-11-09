@@ -24,6 +24,43 @@ jobs:
       - name: Run Platform Server test recipe
         run: deploy/scripts/test.sh
 
+  node-agent-package:
+    name: Build Linux node-agent package
+    needs: root-ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the worker reporter
+        run: cargo build --locked --release --bin vapor_node_agent
+
+      - name: Assemble checksummed install package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="${RUNNER_TEMP}/vapor-node-agent-package"
+          mkdir -p "${package_dir}" dist
+          install -m 0755 target/release/vapor_node_agent "${package_dir}/vapor-node-agent"
+          install -m 0644 deploy/node-agent/vapor-node-agent.service "${package_dir}/vapor-node-agent.service"
+          install -m 0644 deploy/node-agent/README.md "${package_dir}/README.md"
+          archive="dist/vapor-node-agent-linux-x86_64.tar.gz"
+          tar -C "${package_dir}" -czf "${archive}" .
+          (cd dist && sha256sum vapor-node-agent-linux-x86_64.tar.gz > vapor-node-agent-linux-x86_64.tar.gz.sha256)
+
+      - name: Publish install package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vapor-node-agent-linux-x86_64
+          path: dist/vapor-node-agent-linux-x86_64.tar.gz*
+          if-no-files-found: error
+          retention-days: 30
+
   windows-recovery-tests:
     runs-on: windows-latest
     steps:

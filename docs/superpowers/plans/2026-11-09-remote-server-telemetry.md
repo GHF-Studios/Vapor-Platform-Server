@@ -37,13 +37,14 @@
 
 ### 3. Linux reporter
 
-**Files:** `src/bin/vapor_node_agent.rs`, `deploy/node-agent/README.md`, `deploy/node-agent/vapor-node-agent.service`, `Cargo.toml`.
+**Files:** `src/bin/vapor_node_agent.rs`, `deploy/node-agent/README.md`, `deploy/node-agent/vapor-node-agent.service`, `Cargo.toml`, `.github/workflows/ci.yml`.
 
 - [x] Read root-owned, group-readable configuration and run as a dedicated unprivileged service account.
 - [x] Require a bare HTTPS origin and refuse redirects.
 - [x] Sample CPU deltas, memory, uptime, and load from procfs.
 - [x] Add one-shot and recurring modes with bounded timeouts.
 - [x] Document setup and minimum permissions.
+- [ ] Build and verify the checksummed Linux x86_64 install artifact in CI so a worker does not need a Rust toolchain to install the reporter.
 
 ### 4. Fleet controls and state clarity
 

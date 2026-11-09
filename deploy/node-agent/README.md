@@ -4,16 +4,25 @@ This standalone Linux utility sends only CPU, memory, uptime, one-minute load,
 sample time, and reporter version to an enrolled Platform node. Its credential
 cannot enroll nodes, read server data, or invoke commands.
 
-## Build
+## Obtain the tested package
 
-Build for the Linux architecture of the worker:
+The Platform CI run creates a `vapor-node-agent-linux-x86_64` artifact from the
+same tested commit. Download `vapor-node-agent-linux-x86_64.tar.gz` and its
+`.sha256` sidecar from that run, then verify and unpack it:
 
 ```sh
-cargo build --release --bin vapor-node-agent
+sha256sum -c vapor-node-agent-linux-x86_64.tar.gz.sha256
+mkdir -m 0700 /tmp/vapor-node-agent-install
+tar -xzf vapor-node-agent-linux-x86_64.tar.gz -C /tmp/vapor-node-agent-install
 ```
 
-Install `target/release/vapor-node-agent` as
-`/usr/local/bin/vapor-node-agent` with root ownership and mode `0755`.
+The archive contains the reporter binary, this README, and the systemd unit. It
+is built for Linux x86_64. Install the binary and unit with root ownership:
+
+```sh
+sudo install -o root -g root -m 0755 /tmp/vapor-node-agent-install/vapor-node-agent /usr/local/bin/vapor-node-agent
+sudo install -o root -g root -m 0644 /tmp/vapor-node-agent-install/vapor-node-agent.service /etc/systemd/system/vapor-node-agent.service
+```
 
 ## Configure
 
@@ -45,8 +54,7 @@ Run one report in the foreground to validate the connection:
 sudo -u vapor-node-agent /usr/local/bin/vapor-node-agent --config /etc/vapor/node-agent.toml --once
 ```
 
-After that succeeds, install the included unit as
-`/etc/systemd/system/vapor-node-agent.service`, then enable it:
+After that succeeds, enable the installed unit:
 
 ```sh
 sudo systemctl daemon-reload
