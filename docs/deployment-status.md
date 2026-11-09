@@ -1,6 +1,26 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-08 22:05 UTC)
+## Current verified state (2026-11-09 00:05 UTC)
+
+- The hourly `Vapor USB Recovery Sync` completed successfully at
+  `2026-11-09T00:05:04Z`. The USB index contains six state-only generations
+  totaling 28,787,911 bytes; the latest archive is
+  `vapor-platform-state-20261108T234117Z-caa08ee1084b.tar.gz` with SHA-256
+  `da3c3d5da8a5bc36ff4779955e9df5b5be7ead61799a6e9f5ee4fc45b6035f24`.
+  The Platform status report confirms the sync and recovery kit are available.
+- The state-only recovery pointer is schema 2 and records separate pins:
+  recovery-kit source `cbcf388536fdce8c18e852a8950fd6cabed5acee` and archived
+  Platform source `20d1d234b6b2886250fc2ade4c3d016aebbdf708`. The former is the
+  latest commit that changed a recovery-kit file; unrelated `main` changes do
+  not create duplicate kit versions. The state archive remains verified, but a
+  clean-host restore drill is still unproven.
+- Platform `main` is at
+  `cd6d4cd31a10774a2249756061f242fd2a18dd68`; Windows recovery tests and Linux
+  composed CI passed. The push workflow classified the changes as `none`, so it
+  created no deployment request and did not deploy application services. The
+  last recorded live Platform revision remains `20d1d234...`.
+
+## Previous checkpoint (2026-11-08 22:05 UTC)
 
 - The primary VPS is running the independently managed Platform, Homepage,
   Docs, Identity, Diagnostics, Registry, Artifact, and Build Cache services.
