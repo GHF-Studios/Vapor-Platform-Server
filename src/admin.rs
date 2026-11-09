@@ -290,6 +290,7 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .ssh-history-list p { margin:7px 0; padding-left:10px; border-left:2px solid #40536a; }
 .ssh-pending-note { padding:10px; border-left:3px solid #d4bd69; background:#28271e; }
 .recovery-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin:14px 0 0; }
+.recovery-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .recovery-details { margin-top:8px; border-top:1px solid var(--line); padding-top:8px; }
 .recovery-details > summary { cursor:pointer; color:var(--muted); font-size:13px; }
 .recovery-fact { min-width:0; padding:11px; background:#111821; border-radius:5px; }
@@ -1677,6 +1678,7 @@ const JS: &str = r#"
   const recoveryFeedback = document.querySelector('#recovery-feedback');
   const recoveryFacts = document.querySelector('#recovery-facts');
   const recoveryRefresh = document.querySelector('#recovery-refresh');
+  const recoverySnapshot = document.querySelector('#recovery-snapshot');
   if (recoveryFeedback && recoveryFacts) {
     const fact = (label, value, state = '') => {
       const wrap = document.createElement('div'); wrap.className = 'recovery-fact';
@@ -1691,7 +1693,7 @@ const JS: &str = r#"
       return `${size.toFixed(index ? 1 : 0)} ${units[index]}`;
     };
     const refreshRecovery = async () => {
-      recoveryRefresh.disabled = true; recoveryFeedback.textContent = 'Checking recovery evidence…';
+      if (recoveryRefresh) recoveryRefresh.disabled = true; recoveryFeedback.textContent = 'Checking recovery evidence…';
       try {
         const response = await fetch('/api/admin/recovery/status', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
         if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Recovery status is unavailable (HTTP ${response.status}).`);
@@ -1756,9 +1758,48 @@ const JS: &str = r#"
       } catch (error) {
         recoveryFacts.replaceChildren(); recoveryFeedback.textContent = error.message || 'Recovery status is unavailable.';
       }
-      recoveryRefresh.disabled = false;
+      if (recoveryRefresh) recoveryRefresh.disabled = false;
     };
     recoveryRefresh?.addEventListener('click', refreshRecovery); refreshRecovery();
+    recoverySnapshot?.addEventListener('click', async () => {
+      if (!window.confirm('Create and validate a fresh state-only snapshot now? This does not copy it to USB or restore any data.')) return;
+      recoverySnapshot.disabled = true;
+      recoveryFeedback.textContent = 'Queuing a fresh state snapshot…';
+      try {
+        const before = await fetch('/api/admin/recovery/status', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        if (!before.ok) throw new Error(`Recovery status is unavailable (HTTP ${before.status}).`);
+        const baseline = await before.json();
+        const queued = await fetch('/api/admin/recovery/snapshot', {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: true }),
+          signal: AbortSignal.timeout(12000)
+        });
+        const result = await queued.json().catch(() => ({}));
+        if (queued.status === 409) throw new Error('A state snapshot is already running. Refreshing its status…');
+        if (!queued.ok || result?.state !== 'queued') throw new Error(queued.status === 401 || queued.status === 403 ? 'A same-origin root sign-in is required.' : `Snapshot request failed (HTTP ${queued.status}).`);
+        recoveryFeedback.textContent = 'Snapshot queued. Waiting for validation…';
+        const baselineCount = Number(baseline.state_only_archive_count || 0);
+        const baselineModified = Number(baseline.state_only_latest_archive?.modified_at_unix || 0);
+        for (let attempt = 0; attempt < 45; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const current = await fetch('/api/admin/recovery/status', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+          if (!current.ok) continue;
+          const data = await current.json();
+          const latestModified = Number(data.state_only_latest_archive?.modified_at_unix || 0);
+          if (Number(data.state_only_archive_count) > baselineCount || latestModified > baselineModified) {
+            await refreshRecovery();
+            recoveryFeedback.textContent = 'Fresh state snapshot published and visible in the verified archive index.';
+            return;
+          }
+        }
+        recoveryFeedback.textContent = 'The request was queued, but this page could not confirm a new verified snapshot within 90 seconds. Refresh status and inspect the server journal if it remains unchanged.';
+      } catch (error) {
+        await refreshRecovery();
+        recoveryFeedback.textContent = error.message || 'Could not request a fresh snapshot.';
+      } finally {
+        recoverySnapshot.disabled = false;
+      }
+    });
   }
 
   const consoleStatus = document.querySelector('#emergency-console-status');
@@ -2167,8 +2208,8 @@ async fn recovery_page(headers: axum::http::HeaderMap) -> Response {
         return admin_page_auth_response(failure);
     }
     let fragment = concat!(
-        "<p class=\"eyebrow\">Emergency · Read only</p><h1>Recovery</h1>",
-        "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>VPS recovery snapshot</h2><p class=\"muted\">Internet reachable, root sign-in required. This page reports evidence only; it cannot export, restore, wipe, or open a shell.</p></div><button id=\"recovery-refresh\" type=\"button\">Refresh</button></div>",
+        "<p class=\"eyebrow\">Owner tools · Recovery</p><h1>Recovery</h1>",
+        "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>VPS recovery snapshot</h2><p class=\"muted\">Create a fresh validated state-only snapshot, or review the latest automatic snapshot and owner USB report. Restore and host rebuild remain separate operations.</p></div><div class=\"recovery-actions\"><button id=\"recovery-snapshot\" type=\"button\">Create snapshot now</button><button id=\"recovery-refresh\" type=\"button\">Refresh</button></div></div>",
         "<p id=\"recovery-feedback\" role=\"status\" aria-live=\"polite\">Loading recovery status…</p><dl id=\"recovery-facts\" class=\"recovery-facts\"></dl></section>",
         "<section class=\"card\"><h2>Restore readiness</h2><p><strong>Fresh-host restore drill:</strong> Not recorded.</p><p class=\"muted\">A recent server archive or owner-reported USB sync does not prove that a clean-host restore has succeeded. The USB status is a report from the trusted owner task, not independent proof of USB possession.</p><a href=\"/docs\">Open recovery runbooks</a></section>"
     );

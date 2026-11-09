@@ -338,7 +338,10 @@ mod unix_impl {
         if let Ok(operation) = serde_json::from_slice::<LocalOperation>(&bytes) {
             require_root_cli();
             match operation.operation.as_str() {
-                "recovery_status" | "emergency_console_start" | "emergency_console_stop" => {
+                "recovery_status"
+                | "recovery_snapshot"
+                | "emergency_console_start"
+                | "emergency_console_stop" => {
                     if !authorize_root(&operation.session_token).await {
                         emit(false, "", "failed", "root Identity authorization failed");
                         std::process::exit(1);
@@ -358,6 +361,35 @@ mod unix_impl {
                             "recovery-status",
                             "failed",
                             "recovery status unavailable",
+                        );
+                        std::process::exit(1);
+                    }
+                },
+                "recovery_snapshot" => match recovery_snapshot().await {
+                    Ok(()) => {
+                        emit(
+                            true,
+                            "recovery-snapshot",
+                            "queued",
+                            "state-only snapshot service queued",
+                        );
+                        return;
+                    }
+                    Err("snapshot is already running") => {
+                        emit(
+                            false,
+                            "recovery-snapshot",
+                            "already_running",
+                            "state-only snapshot is already running",
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(_) => {
+                        emit(
+                            false,
+                            "recovery-snapshot",
+                            "failed",
+                            "state-only snapshot could not be queued",
                         );
                         std::process::exit(1);
                     }
@@ -442,6 +474,34 @@ mod unix_impl {
             }
             _ => Err("unsupported local operation"),
         }
+    }
+
+    async fn recovery_snapshot() -> Result<(), &'static str> {
+        let unit = "vapor-state-only-export.service";
+        let load_state = command_output(
+            "/usr/bin/systemctl",
+            &["show", "--property=LoadState", "--value", unit],
+        )
+        .await
+        .map_err(|_| "snapshot service state is unavailable")?;
+        if load_state != "loaded" {
+            return Err("snapshot service is not installed");
+        }
+        let active_state = command_output(
+            "/usr/bin/systemctl",
+            &["show", "--property=ActiveState", "--value", unit],
+        )
+        .await
+        .map_err(|_| "snapshot service state is unavailable")?;
+        if matches!(
+            active_state.as_str(),
+            "active" | "activating" | "deactivating"
+        ) {
+            return Err("snapshot is already running");
+        }
+        run_command("/usr/bin/systemctl", &["start", "--no-block", unit])
+            .await
+            .map_err(|_| "snapshot service could not be queued")
     }
 
     async fn recovery_status() -> Result<recovery_status::RecoveryStatus, ()> {
