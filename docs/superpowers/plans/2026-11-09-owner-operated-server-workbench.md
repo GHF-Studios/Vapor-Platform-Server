@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the two-host Vapor setup observable, explicitly operable, and rebuildable through typed, recorded owner-run workflows.
+**Goal:** Make the small Vapor host set observable, explicitly operable, and rebuildable through typed, recorded owner-run workflows. This is a guided power tool for deliberate changes, not a remote desktop or autonomous fleet manager.
 
 **Architecture:** Keep inventory and coordination in Platform, telemetry and typed execution on each host, and service state in its owning service. Each action is explicitly started by the root operator and persisted before dispatch. Migration is a resumable runbook with human checkpoints; it never autoscales or allocates hardware.
 
@@ -122,7 +122,8 @@ root-owned local action helper and systemd/sudoers installation assets,
 
 **Files:** Platform migration module/API, node executor protocol, service-owner export/import contracts, Servers and Recovery UI, docs.
 
-- [ ] Model a manually advanced workflow with stable logical host slots, source/target incarnations, chosen service set, pinned profile and state revisions, per-step results, and explicit continue/abort actions.
+- [ ] Model stable logical server slots separately from replaceable host incarnations. A reinstall retires one incarnation, enrolls another into the same slot, revokes the old credentials, and preserves slot and action history.
+- [ ] Model a manually advanced workflow with source/target slots and incarnations, chosen service set, pinned profile and state revisions, per-step results, and explicit continue/abort actions.
 - [ ] Preflight capacity, service readiness, source exports, target profile, and current deployment revision before any move.
 - [ ] Move only services whose owning repository exposes a valid export/import/deploy contract; preserve the local-build fallback when no worker is available.
 - [ ] Verify target health and data before the operator retires the source host through Strato.

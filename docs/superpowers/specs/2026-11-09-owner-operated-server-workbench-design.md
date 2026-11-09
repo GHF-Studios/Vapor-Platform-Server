@@ -71,6 +71,12 @@ and rebuild either test host without treating the other host as an
 autoscaled/automatically assigned worker. Strato remains responsible for VPS
 allocation, reinstall, recovery OS, and provider console access.
 
+This is a manually operated power tool, not a remote desktop and not an
+autonomous fleet manager. Vapor should make a multi-step change easier to
+understand, prepare, record, and validate; the owner still chooses the target,
+starts the workflow, and advances meaningful checkpoints. A missing worker is
+an explicit fallback to local work, not a scheduler event.
+
 Any future browser terminal or remote desktop remains a separate high-risk
 product decision; it is not implied by the fleet workbench or its “single
 remote operations surface” convenience goal.
@@ -97,11 +103,19 @@ remote operations surface” convenience goal.
 
 ### Inventory and telemetry
 
+- Separate the durable **server slot** from a temporary **host incarnation**.
+  A slot represents an operator-managed place in the deployment topology
+  (such as Core or Worker); it keeps its name, purpose, service assignments,
+  and operation history while its VPS is reinstalled or replaced. An
+  incarnation represents one concrete OS/agent installation and owns its
+  telemetry and executor credentials. Reinstalling a VPS retires the old
+  incarnation and enrolls a new one into the same slot; it must not erase the
+  slot's history or confuse an old credential with the new host.
 - Inventory records describe hosts the owner provisioned. Adding/removing a
-  record never creates/destroys hardware. Decommissioning a record is an
-  explicit, auditable Vapor action that revokes its agent credential and
-  preserves its history; the owner removes/reinstalls VPS hardware through
-  Strato.
+  record never creates/destroys hardware. Replacing or decommissioning an
+  incarnation is an explicit, auditable Vapor action that revokes its agent
+  credentials and preserves its history; the owner provisions/reinstalls VPS
+  hardware through Strato.
 - Purpose communicates what each server is for. It may select a profile in an
   explicit operator action but does not itself schedule jobs or alter a node.
 - Telemetry remains a separate reporting capability and cannot authorize an
@@ -126,9 +140,11 @@ remote operations surface” convenience goal.
   session check. A remote host receives a separately installed, bounded typed
   executor; its telemetry credential remains telemetry-only.
 - A migration is an owner-driven, resumable workflow with a durable run ID,
-  source/target host IDs, selected responsibilities, pinned profile/state
-  revisions, per-step result, and explicit resume/abort actions. A lost HTTP
-  response cannot be treated as proof that a migration completed.
+  source/target slot IDs and incarnation IDs, selected responsibilities,
+  pinned profile/state revisions, per-step result, and explicit
+  resume/abort actions. The handoff records which incarnation hosted each
+  responsibility at every step. A lost HTTP response cannot be treated as
+  proof that a migration completed.
 - Workload movement uses the owning service's export/import/deploy contract.
   Platform coordinates and records the steps; it does not read or copy service
   databases directly.
@@ -149,6 +165,9 @@ remote operations surface” convenience goal.
 - Inventory, operations, profiles, and migration checkpoints must be included
   in Platform's state-only export/import contract before this is migration-
   ready.
+- The replacement-host flow must preserve the logical slot across a new
+  machine ID, revoke the retired incarnation's credentials, and retain the
+  prior incarnation and action history for audit/recovery.
 
 ## Rollout
 
@@ -177,4 +196,5 @@ remote operations surface” convenience goal.
   authenticated, and reports its supported operation set.
 - The two-host drill can move selected responsibilities to the survivor, wipe
   and rebuild the first host through its provider, then move responsibilities
-  back without losing the operation/configuration record.
+  back without losing the operation/configuration record or changing the
+  logical server slots.
