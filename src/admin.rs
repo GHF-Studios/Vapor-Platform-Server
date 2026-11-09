@@ -846,8 +846,16 @@ const JS: &str = r#"
       for (const pin of (Array.isArray(item.submodules) ? item.submodules : [])) appendText(list, 'li', `${pin.path}: ${pin.commit}`);
       pins.append(summary, list); evidenceBody.append(pins); evidence.append(evidenceSummary, evidenceBody); card.append(evidence);
       if (!currentMain) appendText(card, 'p', 'Approval is disabled until current main can be verified.', 'approval-state-warning');
-      else if (deployIsSuperseded(item)) appendText(card, 'p', `No decision needed · main advanced to ${currentMain.slice(0, 12)}.`, 'approval-state-warning');
-      if (deployIsSuperseded(item)) return;
+      else if (deployIsSuperseded(item)) {
+        appendText(card, 'p', `This revision was superseded by main ${currentMain.slice(0, 12)}. It cannot be approved; dismiss it to clear the pending queue.`, 'approval-state-warning');
+        const actions = document.createElement('div'); actions.className = 'approval-deploy-actions';
+        const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.textContent = 'Dismiss superseded';
+        dismiss.addEventListener('click', () => {
+          if (!window.confirm(`Reject and close superseded request ${shortCommit}? It will not be deployed.`)) return;
+          submitDecision(dismiss, 'deploy', item, 'reject', { expected_version: item.version, confirmed: true, reason: 'superseded by a later main revision' });
+        });
+        actions.append(dismiss); card.append(actions); return;
+      }
       const actions = document.createElement('div'); actions.className = 'approval-deploy-actions';
       const approve = document.createElement('button'); approve.type = 'button'; approve.textContent = 'Approve current main commit';
       approve.disabled = !currentMain || !orderReady || !selectionValid || !revisionCurrent || isExpiredByTime(item);
