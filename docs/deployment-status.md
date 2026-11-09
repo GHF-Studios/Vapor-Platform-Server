@@ -1308,3 +1308,10 @@ The temporary HTTP fallback should be removed after DNS and HTTPS are verified.
 - The earlier recovery, USB, fresh-host drill, and Vapor.lock/worker limitations
   remain as recorded in the preceding checkpoint; this deploy did not resolve
   them.
+
+## Clean-destination USB recovery sync (`2026-11-09 00:18 UTC`)
+
+- Ran the installed state-only USB sync into a newly created empty folder on the owner USB: `E:\VaporRecovery-CleanRebuild-20261109`. It created only `State-Snapshots/` and `Recovery-Kit/` at the destination root.
+- The sync copied six indexed state generations (28,787,911 bytes) and pinned recovery kit `cbcf388536fdce8c18e852a8950fd6cabed5acee` separately from archived Platform source `20d1d234b6b2886250fc2ade4c3d016aebbdf708`.
+- Independently checked every archive's length, SHA-256, sidecar, and state-bundle structure; all six passed. All nine recovery-kit files matched the pointer hashes. The latest archive hash is `da3c3d5da8a5bc36ff4779955e9df5b5be7ead61799a6e9f5ee4fc45b6035f24`.
+- This proves a clean-destination USB sync and offline archive/kit validation. It does not prove a fresh Ubuntu host rebuild or state restore. Existing USB data was left intact; the requested bulk wipe was blocked by the command safety policy, so the clean test used a separate empty folder.
