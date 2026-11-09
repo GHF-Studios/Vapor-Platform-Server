@@ -1,0 +1,335 @@
+#[cfg(target_os = "linux")]
+use reqwest::Url;
+#[cfg(target_os = "linux")]
+use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
+
+#[cfg(target_os = "linux")]
+const REPORT_INTERVAL_SECONDS: u64 = 30;
+#[cfg(target_os = "linux")]
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Config {
+    platform_origin: String,
+    node_id: String,
+    reporter_credential: String,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Serialize)]
+struct TelemetryReport {
+    schema_version: u32,
+    sampled_at_unix: i64,
+    cpu_percent: f64,
+    logical_cpu_count: i64,
+    memory_total_bytes: i64,
+    memory_available_bytes: i64,
+    uptime_seconds: i64,
+    load_average_1m: f64,
+    agent_version: String,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct CpuTimes {
+    total: u64,
+    idle: u64,
+}
+
+#[cfg(target_os = "linux")]
+struct Sampler {
+    previous_cpu: Option<CpuTimes>,
+}
+
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("vapor-node-agent: {error}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    return Err("the node reporter currently supports Linux only".to_owned());
+
+    #[cfg(target_os = "linux")]
+    {
+        let (config_path, once) = parse_args()?;
+        let config = read_config(&config_path)?;
+        validate_config(&config)?;
+        let endpoint = Url::parse(&format!(
+            "{}/api/fleet/v1/nodes/{}/telemetry",
+            config.platform_origin.trim_end_matches('/'),
+            config.node_id
+        ))
+        .map_err(|_| "invalid Platform telemetry URL".to_owned())?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "could not create HTTPS client".to_owned())?;
+        let mut sampler = Sampler {
+            previous_cpu: read_cpu_times(),
+        };
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        if once {
+            if let Some(report) = sample(&mut sampler)? {
+                send_report(&client, &endpoint, &config.reporter_credential, report).await?;
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let report = sample(&mut sampler)?.ok_or("CPU baseline is not available")?;
+            send_report(&client, &endpoint, &config.reporter_credential, report).await?;
+            return Ok(());
+        }
+
+        loop {
+            if let Some(report) = sample(&mut sampler)? {
+                match send_report(&client, &endpoint, &config.reporter_credential, report).await {
+                    Ok(()) => eprintln!("vapor-node-agent: telemetry accepted"),
+                    Err(_) => eprintln!(
+                        "vapor-node-agent: telemetry delivery failed; will retry next interval"
+                    ),
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(REPORT_INTERVAL_SECONDS)).await;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_args() -> Result<(PathBuf, bool), String> {
+    let mut arguments = std::env::args().skip(1);
+    let mut config = None;
+    let mut once = false;
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--config" => {
+                config = Some(PathBuf::from(
+                    arguments.next().ok_or("--config requires a path")?,
+                ));
+            }
+            "--once" => once = true,
+            _ => return Err("usage: vapor-node-agent --config PATH [--once]".to_owned()),
+        }
+    }
+    Ok((
+        config.ok_or("usage: vapor-node-agent --config PATH [--once]".to_owned())?,
+        once,
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn read_config(path: &std::path::Path) -> Result<Config, String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "could not read node-agent config".to_owned())?;
+        let effective_group = unsafe { libc::getegid() };
+        let group_mode = metadata.permissions().mode() & 0o070;
+        if !metadata.file_type().is_file()
+            || metadata.uid() != 0
+            || metadata.gid() != u64::from(effective_group)
+            || metadata.permissions().mode() & 0o007 != 0
+            || group_mode != 0o040
+        {
+            return Err("node-agent config must be a root-owned regular file readable only by its dedicated service group".to_owned());
+        }
+    }
+    let contents =
+        std::fs::read_to_string(path).map_err(|_| "could not read node-agent config".to_owned())?;
+    toml::from_str(&contents)
+        .map_err(|_| "node-agent config has invalid TOML or unknown fields".to_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_config(config: &Config) -> Result<(), String> {
+    let origin = Url::parse(&config.platform_origin)
+        .map_err(|_| "Platform origin must be a bare HTTPS origin".to_owned())?;
+    if origin.scheme() != "https"
+        || origin.host_str().is_none()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || !matches!(origin.path(), "" | "/")
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+    {
+        return Err("Platform origin must be a bare HTTPS origin with no credentials, path, query, or fragment".to_owned());
+    }
+    if uuid::Uuid::parse_str(&config.node_id).is_err() {
+        return Err("node_id must be a UUID".to_owned());
+    }
+    let prefix = format!("v1.{}.", config.node_id);
+    let Some(secret) = config.reporter_credential.strip_prefix(&prefix) else {
+        return Err("reporter credential does not belong to this node".to_owned());
+    };
+    let mut sections = secret.split('.');
+    let first = sections.next().unwrap_or_default();
+    let second = sections.next().unwrap_or_default();
+    if sections.next().is_some()
+        || first.len() != 32
+        || second.len() != 32
+        || !first
+            .bytes()
+            .chain(second.bytes())
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("reporter credential has an invalid format".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn sample(sampler: &mut Sampler) -> Result<Option<TelemetryReport>, String> {
+    let current_cpu = read_cpu_times().ok_or("could not read CPU counters")?;
+    let cpu_percent = sampler
+        .previous_cpu
+        .and_then(|previous| cpu_usage(previous, current_cpu));
+    sampler.previous_cpu = Some(current_cpu);
+    let Some(cpu_percent) = cpu_percent else {
+        return Ok(None);
+    };
+    let (memory_total_bytes, memory_available_bytes) = read_memory()?;
+    let uptime_seconds = read_uptime()?;
+    let load_average_1m = read_load_average()?;
+    let logical_cpu_count = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1) as i64;
+    let sampled_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "system clock is before the Unix epoch")?
+        .as_secs() as i64;
+    Ok(Some(TelemetryReport {
+        schema_version: 1,
+        sampled_at_unix,
+        cpu_percent,
+        logical_cpu_count,
+        memory_total_bytes,
+        memory_available_bytes,
+        uptime_seconds,
+        load_average_1m,
+        agent_version: VERSION.to_owned(),
+    }))
+}
+
+#[cfg(target_os = "linux")]
+async fn send_report(
+    client: &reqwest::Client,
+    endpoint: &Url,
+    credential: &str,
+    report: TelemetryReport,
+) -> Result<(), String> {
+    let response = client
+        .post(endpoint.clone())
+        .bearer_auth(credential)
+        .json(&report)
+        .send()
+        .await
+        .map_err(|_| "telemetry connection failed".to_owned())?;
+    if response.status().is_success() {
+        return Ok(());
+    }
+    Err(format!(
+        "telemetry rejected with HTTP {}",
+        response.status().as_u16()
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn read_cpu_times() -> Option<CpuTimes> {
+    let contents = std::fs::read_to_string("/proc/stat").ok()?;
+    let mut fields = contents.lines().next()?.split_whitespace();
+    if fields.next()? != "cpu" {
+        return None;
+    }
+    let counters = fields
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    if counters.len() < 4 {
+        return None;
+    }
+    Some(CpuTimes {
+        total: counters.iter().copied().fold(0_u64, u64::saturating_add),
+        idle: counters[3].saturating_add(counters.get(4).copied().unwrap_or_default()),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_usage(previous: CpuTimes, current: CpuTimes) -> Option<f64> {
+    let total = current.total.checked_sub(previous.total)?;
+    let idle = current.idle.checked_sub(previous.idle)?;
+    if total == 0 || idle > total {
+        return None;
+    }
+    Some(((total - idle) as f64 / total as f64 * 100.0).clamp(0.0, 100.0))
+}
+
+#[cfg(target_os = "linux")]
+fn read_memory() -> Result<(i64, i64), String> {
+    let contents =
+        std::fs::read_to_string("/proc/meminfo").map_err(|_| "could not read memory counters")?;
+    let mut total = None;
+    let mut available = None;
+    for line in contents.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let Some(amount) = value
+            .split_whitespace()
+            .next()
+            .and_then(|value| value.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        match key {
+            "MemTotal" => total = amount.checked_mul(1024),
+            "MemAvailable" => available = amount.checked_mul(1024),
+            _ => {}
+        }
+    }
+    let total = total.ok_or("memory total is unavailable")?;
+    let available = available.ok_or("available memory is unavailable")?;
+    if total <= 0 || available < 0 || available > total {
+        return Err("memory counters are invalid".to_owned());
+    }
+    Ok((total, available))
+}
+
+#[cfg(target_os = "linux")]
+fn read_uptime() -> Result<i64, String> {
+    let contents = std::fs::read_to_string("/proc/uptime").map_err(|_| "could not read uptime")?;
+    let seconds = contents
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<f64>().ok())
+        .ok_or("uptime is invalid")?;
+    if !seconds.is_finite() || seconds < 0.0 || seconds > i64::MAX as f64 {
+        return Err("uptime is invalid".to_owned());
+    }
+    Ok(seconds as i64)
+}
+
+#[cfg(target_os = "linux")]
+fn read_load_average() -> Result<f64, String> {
+    let contents =
+        std::fs::read_to_string("/proc/loadavg").map_err(|_| "could not read load average")?;
+    let load = contents
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<f64>().ok())
+        .ok_or("load average is invalid")?;
+    if !load.is_finite() || load < 0.0 {
+        return Err("load average is invalid".to_owned());
+    }
+    Ok(load)
+}

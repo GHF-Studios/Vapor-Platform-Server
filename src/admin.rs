@@ -348,6 +348,14 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .server-node-status.stale { color:#e5cb78; }
 .server-node-status.unavailable { color:#f08b92; }
 .server-fleet-note { margin:8px 0 0; color:#9eacba; font-size:12px; }
+.server-node-enroll { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
+.server-node-enroll label { display:grid; gap:4px; min-width:180px; color:#aebbc8; font-size:12px; }
+.server-node-secret { margin:12px 0; padding:12px; border:1px solid #8c7a3e; border-radius:6px; background:#19180f; }
+.server-node-secret pre { padding:10px; overflow-wrap:anywhere; white-space:pre-wrap; user-select:all; background:#10151b; }
+.server-node-management-row { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 0; border-top:1px solid #29323d; }
+.server-node-management-row p { margin:4px 0 0; font-size:12px; overflow-wrap:anywhere; }
+.server-node-events { margin-top:12px; }
+.server-node-events li { margin:6px 0; color:#aebbc8; font-size:12px; overflow-wrap:anywhere; }
 .table-scroll { max-width:100%; overflow-x:auto; }
 .table-scroll:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
 .skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; background:#fff; color:#111; }
@@ -1919,6 +1927,15 @@ const JS: &str = r#"
   const fleetList = document.querySelector('#server-fleet-list');
   const fleetSummary = document.querySelector('#server-fleet-summary');
   const fleetRefresh = document.querySelector('#server-fleet-refresh');
+    const nodeForm = document.querySelector('#server-node-enroll');
+    const nodeLabel = document.querySelector('#server-node-label');
+    const nodeRole = document.querySelector('#server-node-role');
+    const nodeStatus = document.querySelector('#server-node-management-status');
+    const nodeManagement = document.querySelector('#server-node-management');
+    const nodeSecretPanel = document.querySelector('#server-node-secret');
+    const nodeSecretValue = document.querySelector('#server-node-secret-value');
+    const nodeSecretCopy = document.querySelector('#server-node-secret-copy');
+    const nodeSecretClose = document.querySelector('#server-node-secret-close');
   if (fleetList && fleetSummary) {
     const formatBytes = value => {
       let amount = Number(value);
@@ -1939,7 +1956,7 @@ const JS: &str = r#"
       term.textContent = label; detail.textContent = value; cell.append(term, detail); parent.append(cell);
     };
     const renderFleet = data => {
-      if (data?.schema_version !== 1 || data?.scope !== 'local-platform-host-only' || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
+      if (data?.schema_version !== 1 || !['local-platform-host-only', 'platform-host-and-enrolled-nodes'].includes(data?.scope) || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
       fleetList.replaceChildren();
       const reporting = data.nodes.filter(node => node.state === 'online').length;
       fleetSummary.textContent = `${reporting} of ${data.nodes.length} registered ${data.nodes.length === 1 ? 'server is' : 'servers are'} reporting · sampled ${new Date(Number(data.observed_at_unix) * 1000).toLocaleTimeString()}`;
@@ -1947,8 +1964,9 @@ const JS: &str = r#"
         const card = document.createElement('article'); card.className = 'server-node card';
         const header = document.createElement('div'); header.className = 'server-node-header';
         const title = document.createElement('h3'); title.textContent = node.label || node.id || 'Unnamed server';
-        const status = document.createElement('span'); status.className = `server-node-status${node.state === 'online' ? '' : ' unavailable'}`;
-        status.textContent = node.state === 'online' ? 'Online' : 'Unavailable';
+        const stateLabels = { online: 'Online', stale: 'Stale', revoked: 'Revoked', 'never-reported': 'Never reported', unavailable: 'Unavailable' };
+        const status = document.createElement('span'); status.className = `server-node-status${node.state === 'online' ? '' : node.state === 'stale' ? ' stale' : ' unavailable'}`;
+        status.textContent = stateLabels[node.state] || 'Unavailable';
         header.append(title, status); card.append(header);
         const role = document.createElement('p'); role.className = 'server-node-role'; role.textContent = `${node.role || 'server'} · ${node.id || 'identity unavailable'}`; card.append(role);
         const metrics = document.createElement('dl'); metrics.className = 'server-node-metrics';
@@ -1959,8 +1977,7 @@ const JS: &str = r#"
         card.append(metrics);
         const freshness = document.createElement('p'); freshness.className = 'server-fleet-note';
         const age = Math.max(0, Math.floor(Date.now() / 1000) - Number(node.observed_at_unix || data.observed_at_unix));
-        if (age > 30) { status.textContent = 'Stale'; status.classList.add('stale'); }
-        freshness.textContent = `Observed ${age < 5 ? 'just now' : `${age}s ago`} · metrics ${node.metrics_state || 'unknown'}`;
+        freshness.textContent = node.state === 'never-reported' ? 'No telemetry received yet.' : `Received ${age < 5 ? 'just now' : `${age}s ago`} · metrics ${node.metrics_state || 'unknown'}`;
         card.append(freshness); fleetList.append(card);
       }
       if (data.nodes.length === 0) fleetList.append(appendText(document.createElement('div'), 'p', 'No servers are enrolled yet.', 'muted'));
@@ -1978,6 +1995,71 @@ const JS: &str = r#"
       } finally { if (fleetRefresh) fleetRefresh.disabled = false; }
     };
     fleetRefresh?.addEventListener('click', refreshFleet); refreshFleet();
+
+    const postNodeApi = async (path, body) => {
+      const response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(8000) });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(result?.error || `Request failed (HTTP ${response.status}).`);
+      return result;
+    };
+    const refreshNodeManagement = async () => {
+      if (!nodeStatus || !nodeManagement) return;
+      nodeStatus.textContent = 'Refreshing enrollment records…';
+      try {
+        const response = await fetch('/api/admin/server-nodes', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || data?.schema_version !== 1 || !Array.isArray(data.nodes) || !Array.isArray(data.events)) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Enrollment records are unavailable (HTTP ${response.status}).`);
+        nodeManagement.replaceChildren();
+        for (const node of data.nodes) {
+          const row = document.createElement('article'); row.className = 'server-node-management-row';
+          const details = document.createElement('div');
+          const title = document.createElement('strong'); title.textContent = node.label;
+          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${node.role} · ${node.status} · ${node.id} · ${node.last_report_received_at_unix ? `last report ${new Date(node.last_report_received_at_unix * 1000).toLocaleString()}` : 'never reported'}`;
+          details.append(title, meta); row.append(details);
+          if (node.status === 'active') {
+            const revoke = document.createElement('button'); revoke.type = 'button'; revoke.textContent = 'Revoke';
+            revoke.addEventListener('click', async () => {
+              if (!window.confirm(`Revoke telemetry reporting for ${node.label}?`)) return;
+              revoke.disabled = true;
+              try { await postNodeApi(`/api/admin/server-nodes/${encodeURIComponent(node.id)}/revoke`, { expected_version: node.version }); nodeStatus.textContent = `Reporting credential for ${node.label} revoked.`; await refreshNodeManagement(); await refreshFleet(); }
+              catch (error) { nodeStatus.textContent = error.message || 'Could not revoke this node.'; revoke.disabled = false; }
+            });
+            row.append(revoke);
+          }
+          nodeManagement.append(row);
+        }
+        const recentEvents = data.events.slice(0, 8);
+        if (recentEvents.length) {
+          const disclosure = document.createElement('details'); disclosure.className = 'server-node-events';
+          const summary = document.createElement('summary'); summary.textContent = `Recent enrollment changes · ${recentEvents.length}`;
+          const list = document.createElement('ul');
+          for (const event of recentEvents) {
+            const item = document.createElement('li'); item.textContent = `${event.event} · ${event.label} (${event.role}) · ${new Date(event.at_unix * 1000).toLocaleString()} · operator ${event.actor_profile_id}`; list.append(item);
+          }
+          disclosure.append(summary, list); nodeManagement.append(disclosure);
+        }
+        nodeStatus.textContent = `${data.nodes.length} enrolled ${data.nodes.length === 1 ? 'server' : 'servers'}. Reporter credentials are never shown here.`;
+      } catch (error) { nodeManagement.replaceChildren(); nodeStatus.textContent = error.message || 'Enrollment records are unavailable.'; }
+    };
+    nodeForm?.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!window.confirm('Create a telemetry-only credential for this server? The secret will be shown once.')) return;
+      const submit = nodeForm.querySelector('button[type="submit"]'); submit.disabled = true; nodeStatus.textContent = 'Creating server enrollment…';
+      try {
+        const created = await postNodeApi('/api/admin/server-nodes', { label: nodeLabel.value, role: nodeRole.value });
+        nodeSecretValue.textContent = created.reporter_credential;
+        nodeSecretPanel.hidden = false;
+        nodeStatus.textContent = `Enrollment created for ${created.label}. Copy the secret into the node agent configuration now.`;
+        nodeForm.reset(); await refreshNodeManagement(); await refreshFleet();
+      } catch (error) { nodeStatus.textContent = error.message || 'Could not create server enrollment.'; }
+      finally { submit.disabled = false; }
+    });
+    nodeSecretCopy?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(nodeSecretValue.textContent); nodeStatus.textContent = 'Reporter credential copied. Store it only in the node agent’s protected configuration.'; }
+      catch { nodeStatus.textContent = 'Clipboard access was denied. Select and copy the one-time credential manually.'; }
+    });
+    nodeSecretClose?.addEventListener('click', () => { nodeSecretValue.textContent = ''; nodeSecretPanel.hidden = true; });
+    refreshNodeManagement();
   }
 
   const consoleStatus = document.querySelector('#emergency-console-status');
@@ -2038,7 +2120,11 @@ pub fn router() -> Router {
         .route("/admin/recovery", get(recovery_page))
         .route("/admin/emergency-console", get(emergency_console_page))
         .route("/api/admin/overview", get(overview))
-        .route("/api/admin/servers", get(crate::server_fleet::admin_snapshot))
+        .route(
+            "/api/admin/servers",
+            get(crate::server_fleet::admin_snapshot),
+        )
+        .merge(crate::node_fleet::router())
         .route("/api/admin/platform-healthz", get(platform_healthz))
         .route("/api/admin/operations", get(operations_status))
         .merge(crate::recovery::router())
@@ -2266,7 +2352,13 @@ fn render_admin_navigation(current_path: &str) -> String {
         "<nav aria-label=\"Platform administration\"><p class=\"brand\">Vapor Platform</p>",
     );
     html.push_str("<div class=\"workspace-bridges\"><p>Vapor workspaces</p><a href=\"/\">Public site</a><a href=\"/dashboard\">Your Projects</a></div>");
-    let group_order = ["Operate", "Infrastructure", "Ecosystem", "Accounts", "Emergency"];
+    let group_order = [
+        "Operate",
+        "Infrastructure",
+        "Ecosystem",
+        "Accounts",
+        "Emergency",
+    ];
     for group in group_order {
         let sections: Vec<_> = MODULES
             .iter()
@@ -2337,7 +2429,8 @@ fn server_fleet_page_content() -> &'static str {
     concat!(
         "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<p class=\"muted\">Currently reporting: the Platform host only. Additional servers appear after they are explicitly enrolled; no remote shell or arbitrary command interface is exposed here.</p>"
+        "<section class=\"card\"><h2>Enroll a server</h2><p class=\"muted\">Enrollment lets a host report CPU, memory, load, and uptime only. It grants no shell access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Create enrollment</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>Copy this credential now.</strong> It will not be shown again.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading enrolled servers…</p><div id=\"server-node-management\"></div></section>",
+        "<p class=\"muted\">Remote enrollment is separate from SSH access and never enables arbitrary commands.</p>"
     )
 }
 
@@ -3764,7 +3857,8 @@ mod tests {
         assert!(script.contains("'/api/admin/deploy-requests'"));
         assert!(script.contains("'/api/admin/ssh-access/requests'"));
         assert!(script.contains("/api/identity/v1/admin/permission-requests/page?limit=200"));
-        assert!(script.contains("item.status === 'pending' && typeof item.current_main_commit === 'string'"));
+        assert!(script
+            .contains("item.status === 'pending' && typeof item.current_main_commit === 'string'"));
         assert!(
             script.contains("/api/identity/v1/admin/permission-requests/${encodedId}/${action}")
         );
@@ -3859,23 +3953,29 @@ mod tests {
 
     #[tokio::test]
     async fn unauthenticated_admin_shell_points_to_operator_sign_in() {
-        let response = super::admin_shell_auth_response(crate::admin_auth::AuthFailure::Unauthorized);
+        let response =
+            super::admin_shell_auth_response(crate::admin_auth::AuthFailure::Unauthorized);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let html = std::str::from_utf8(&body).unwrap();
 
         assert!(html.contains("Operator sign-in required"));
         assert!(html.contains("/operator/login"));
-        assert!(html.contains("normal Vapor account sign-in does not open the Platform admin session"));
+        assert!(
+            html.contains("normal Vapor account sign-in does not open the Platform admin session")
+        );
         assert!(!html.contains("href=\"/login\""));
     }
 
     #[tokio::test]
     async fn admin_page_auth_challenge_explains_the_separate_operator_session() {
-        let response = super::admin_page_auth_response(crate::admin_auth::AuthFailure::Unauthorized);
+        let response =
+            super::admin_page_auth_response(crate::admin_auth::AuthFailure::Unauthorized);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let html = std::str::from_utf8(&body).unwrap();
 
-        assert!(html.contains("normal Vapor account sign-in does not open the Platform admin session"));
+        assert!(
+            html.contains("normal Vapor account sign-in does not open the Platform admin session")
+        );
         assert!(html.contains("href=\"/operator/login\""));
         assert!(!html.contains("href=\"/login\""));
     }

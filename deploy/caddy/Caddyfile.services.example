@@ -49,6 +49,11 @@
 		reverse_proxy 127.0.0.1:7112
 	}
 
+	@node_telemetry path_regexp ^/api/fleet/v1/nodes/[0-9a-fA-F-]{36}/telemetry$
+	handle @node_telemetry {
+		reverse_proxy 127.0.0.1:7110
+	}
+
 	handle /api/identity/v1/internal/* {
 		respond "not found" 404
 	}

@@ -1,0 +1,745 @@
+use crate::server_fleet::ServerNode;
+use axum::body::Body;
+use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::header::CACHE_CONTROL;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Row, SqlitePool};
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+const DEFAULT_IDENTITY_AUTHZ_URL: &str =
+    "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check";
+const REPORT_MIN_INTERVAL_SECONDS: i64 = 10;
+const REPORT_FRESHNESS_SECONDS: i64 = 90;
+const MAX_CLOCK_SKEW_SECONDS: i64 = 60;
+const MAX_AGENT_VERSION_BYTES: usize = 64;
+const ROLE_ALLOWLIST: &[&str] = &["control-plane", "builder", "backup", "general"];
+static NODE_STATE: OnceLock<NodeState> = OnceLock::new();
+
+#[derive(Clone)]
+struct NodeState {
+    pool: SqlitePool,
+    authz_endpoint: String,
+    service_token: Option<String>,
+    client: reqwest::Client,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateNodeRequest {
+    label: String,
+    role: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevokeNodeRequest {
+    expected_version: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TelemetryReport {
+    schema_version: u32,
+    sampled_at_unix: i64,
+    cpu_percent: f64,
+    logical_cpu_count: i64,
+    memory_total_bytes: i64,
+    memory_available_bytes: i64,
+    uptime_seconds: i64,
+    load_average_1m: f64,
+    agent_version: String,
+}
+
+#[derive(Serialize)]
+struct CreatedNode {
+    id: String,
+    label: String,
+    role: String,
+    status: String,
+    version: i64,
+    reporter_credential: String,
+    warning: &'static str,
+}
+
+#[derive(Serialize)]
+struct NodeRecord {
+    id: String,
+    label: String,
+    role: String,
+    status: String,
+    version: i64,
+    created_at_unix: i64,
+    created_by_profile_id: String,
+    revoked_at_unix: Option<i64>,
+    revoked_by_profile_id: Option<String>,
+    last_report_received_at_unix: Option<i64>,
+    sampled_at_unix: Option<i64>,
+    agent_version: Option<String>,
+}
+
+#[derive(Serialize)]
+struct NodeEvent {
+    id: i64,
+    node_id: String,
+    event: String,
+    label: String,
+    role: String,
+    actor_profile_id: String,
+    at_unix: i64,
+}
+
+#[derive(Serialize)]
+struct NodeInventory {
+    schema_version: u32,
+    nodes: Vec<NodeRecord>,
+    events: Vec<NodeEvent>,
+}
+
+pub(crate) fn router() -> Router {
+    Router::new()
+        .route("/api/admin/server-nodes", get(list_nodes).post(create_node))
+        .route("/api/admin/server-nodes/{id}/revoke", post(revoke_node))
+        .route("/api/fleet/v1/nodes/{id}/telemetry", post(report_telemetry))
+        .with_state(state())
+        .layer(DefaultBodyLimit::max(4096))
+        .route_layer(axum::middleware::from_fn(no_store))
+}
+
+pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = state_directory();
+    tokio::fs::create_dir_all(directory).await?;
+    let pool = create_pool();
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS platform_server_nodes (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('control-plane','builder','backup','general')),
+            status TEXT NOT NULL CHECK(status IN ('active','revoked')),
+            credential_sha256 TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            created_at_unix INTEGER NOT NULL,
+            created_by_profile_id TEXT NOT NULL,
+            revoked_at_unix INTEGER,
+            revoked_by_profile_id TEXT,
+            last_report_received_at_unix INTEGER,
+            sampled_at_unix INTEGER,
+            cpu_percent REAL,
+            logical_cpu_count INTEGER,
+            memory_total_bytes INTEGER,
+            memory_available_bytes INTEGER,
+            uptime_seconds INTEGER,
+            load_average_1m REAL,
+            agent_version TEXT
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_platform_server_nodes_status_label
+         ON platform_server_nodes(status,label,id)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS platform_server_node_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id TEXT NOT NULL,
+            event TEXT NOT NULL CHECK(event IN ('created','revoked')),
+            label TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('control-plane','builder','backup','general')),
+            actor_profile_id TEXT NOT NULL,
+            at_unix INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_platform_server_node_events_time
+         ON platform_server_node_events(at_unix DESC,event_id DESC)",
+    )
+    .execute(&pool)
+    .await?;
+    let _ = NODE_STATE.set(NodeState {
+        pool,
+        authz_endpoint: std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL")
+            .unwrap_or_else(|_| DEFAULT_IDENTITY_AUTHZ_URL.to_owned()),
+        service_token: std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok(),
+        client: reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(1))
+            .timeout(Duration::from_secs(3))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?,
+    });
+    Ok(())
+}
+
+pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error> {
+    let state = NODE_STATE.get().ok_or(sqlx::Error::PoolTimedOut)?;
+    let rows = sqlx::query(
+        "SELECT id,label,role,status,created_at_unix,last_report_received_at_unix,
+                sampled_at_unix,cpu_percent,logical_cpu_count,memory_total_bytes,
+                memory_available_bytes,uptime_seconds,load_average_1m
+         FROM platform_server_nodes ORDER BY status,label,id",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let status: String = row.get("status");
+            let last_received: Option<i64> = row.get("last_report_received_at_unix");
+            let sampled_at: Option<i64> = row.get("sampled_at_unix");
+            let online = status == "active"
+                && last_received.is_some_and(|received| {
+                    now.saturating_sub(received) <= REPORT_FRESHNESS_SECONDS
+                })
+                && sampled_at
+                    .is_some_and(|sampled| now.saturating_sub(sampled) <= REPORT_FRESHNESS_SECONDS);
+            let state = match status.as_str() {
+                "revoked" => "revoked",
+                _ if online => "online",
+                _ if last_received.is_none() => "never-reported",
+                _ => "stale",
+            };
+            let has_metrics: bool = row.get::<Option<f64>, _>("cpu_percent").is_some()
+                && row.get::<Option<i64>, _>("memory_total_bytes").is_some()
+                && row.get::<Option<i64>, _>("uptime_seconds").is_some();
+            ServerNode {
+                id: row.get("id"),
+                label: row.get("label"),
+                role: row.get("role"),
+                state,
+                metrics_state: if has_metrics {
+                    "complete"
+                } else {
+                    "unavailable"
+                },
+                observed_at_unix: last_received.unwrap_or_else(|| row.get("created_at_unix"))
+                    as u64,
+                cpu_percent: row.get("cpu_percent"),
+                logical_cpu_count: row
+                    .get::<Option<i64>, _>("logical_cpu_count")
+                    .and_then(|value| usize::try_from(value).ok()),
+                memory_total_bytes: row
+                    .get::<Option<i64>, _>("memory_total_bytes")
+                    .and_then(|value| u64::try_from(value).ok()),
+                memory_available_bytes: row
+                    .get::<Option<i64>, _>("memory_available_bytes")
+                    .and_then(|value| u64::try_from(value).ok()),
+                uptime_seconds: row
+                    .get::<Option<i64>, _>("uptime_seconds")
+                    .and_then(|value| u64::try_from(value).ok()),
+                load_average_1m: row.get("load_average_1m"),
+            }
+        })
+        .collect())
+}
+
+async fn list_nodes(State(state): State<NodeState>, headers: HeaderMap) -> Response {
+    let actor = match authorize_root(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let nodes = sqlx::query(
+        "SELECT id,label,role,status,version,created_at_unix,created_by_profile_id,
+                revoked_at_unix,revoked_by_profile_id,last_report_received_at_unix,
+                sampled_at_unix,agent_version
+         FROM platform_server_nodes ORDER BY created_at_unix DESC,id DESC LIMIT 200",
+    )
+    .fetch_all(&state.pool)
+    .await;
+    let events = sqlx::query(
+        "SELECT event_id,node_id,event,label,role,actor_profile_id,at_unix
+         FROM platform_server_node_events ORDER BY event_id DESC LIMIT 50",
+    )
+    .fetch_all(&state.pool)
+    .await;
+    match (nodes, events) {
+        (Ok(nodes), Ok(events)) => private_json(
+            StatusCode::OK,
+            NodeInventory {
+                schema_version: 1,
+                nodes: nodes.into_iter().map(node_record).collect(),
+                events: events.into_iter().map(node_event).collect(),
+            },
+        ),
+        _ => {
+            let _ = actor;
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_node_inventory_unavailable",
+            )
+        }
+    }
+}
+
+async fn create_node(
+    State(state): State<NodeState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateNodeRequest>,
+) -> Response {
+    let actor = match authorize_root(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    if !same_origin(&headers) {
+        return error(StatusCode::FORBIDDEN, "same_origin_confirmation_required");
+    }
+    let label = request.label.trim();
+    if label.is_empty() || label.chars().count() > 80 || label.chars().any(char::is_control) {
+        return error(StatusCode::BAD_REQUEST, "invalid_server_label");
+    }
+    if !ROLE_ALLOWLIST.contains(&request.role.as_str()) {
+        return error(StatusCode::BAD_REQUEST, "invalid_server_role");
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let credential = format!(
+        "v1.{id}.{}.{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let credential_sha256 = sha256_hex(credential.as_bytes());
+    let now = unix_now();
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_node_state_unavailable",
+            )
+        }
+    };
+    let inserted = sqlx::query(
+        "INSERT INTO platform_server_nodes
+         (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+         VALUES (?,?,?,'active',?,1,?,?)",
+    )
+    .bind(&id)
+    .bind(label)
+    .bind(&request.role)
+    .bind(&credential_sha256)
+    .bind(now)
+    .bind(&actor)
+    .execute(&mut *transaction)
+    .await;
+    if inserted.is_err()
+        || insert_node_event(
+            &mut transaction,
+            &id,
+            "created",
+            label,
+            &request.role,
+            &actor,
+            now,
+        )
+        .await
+        .is_err()
+        || transaction.commit().await.is_err()
+    {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_node_state_unavailable",
+        );
+    }
+    private_json(
+        StatusCode::CREATED,
+        CreatedNode {
+            id,
+            label: label.to_owned(),
+            role: request.role,
+            status: "active".to_owned(),
+            version: 1,
+            reporter_credential: credential,
+            warning: "Copy this credential now. It is shown only once and grants telemetry reporting for this node only.",
+        },
+    )
+}
+
+async fn revoke_node(
+    State(state): State<NodeState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<RevokeNodeRequest>,
+) -> Response {
+    let actor = match authorize_root(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    if !same_origin(&headers) || request.expected_version < 1 {
+        return error(StatusCode::FORBIDDEN, "same_origin_confirmation_required");
+    }
+    let now = unix_now();
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_node_state_unavailable",
+            )
+        }
+    };
+    let row = sqlx::query(
+        "SELECT label,role FROM platform_server_nodes
+         WHERE id=? AND status='active' AND version=?",
+    )
+    .bind(&id)
+    .bind(request.expected_version)
+    .fetch_optional(&mut *transaction)
+    .await;
+    let row = match row {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return error(
+                StatusCode::CONFLICT,
+                "server_node_changed_or_already_revoked",
+            )
+        }
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_node_state_unavailable",
+            )
+        }
+    };
+    let label: String = row.get("label");
+    let role: String = row.get("role");
+    let updated = sqlx::query(
+        "UPDATE platform_server_nodes SET status='revoked',version=version+1,
+                revoked_at_unix=?,revoked_by_profile_id=?
+         WHERE id=? AND status='active' AND version=?",
+    )
+    .bind(now)
+    .bind(&actor)
+    .bind(&id)
+    .bind(request.expected_version)
+    .execute(&mut *transaction)
+    .await;
+    if !updated.is_ok_and(|result| result.rows_affected() == 1)
+        || insert_node_event(&mut transaction, &id, "revoked", &label, &role, &actor, now)
+            .await
+            .is_err()
+        || transaction.commit().await.is_err()
+    {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_node_state_unavailable",
+        );
+    }
+    private_json(
+        StatusCode::OK,
+        serde_json::json!({"id":id,"status":"revoked"}),
+    )
+}
+
+async fn report_telemetry(
+    State(state): State<NodeState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(report): Json<TelemetryReport>,
+) -> Response {
+    let credential = match bearer_credential(&headers, &id) {
+        Some(value) => value,
+        None => return error(StatusCode::UNAUTHORIZED, "reporter_credential_invalid"),
+    };
+    let now = unix_now();
+    if !valid_report(&report, now) {
+        return error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "telemetry_report_invalid_or_stale",
+        );
+    }
+    let credential_sha256 = sha256_hex(credential.as_bytes());
+    let updated = sqlx::query(
+        "UPDATE platform_server_nodes
+         SET last_report_received_at_unix=?,sampled_at_unix=?,cpu_percent=?,
+             logical_cpu_count=?,memory_total_bytes=?,memory_available_bytes=?,
+             uptime_seconds=?,load_average_1m=?,agent_version=?
+         WHERE id=? AND status='active' AND credential_sha256=?
+           AND (last_report_received_at_unix IS NULL OR last_report_received_at_unix<=?)
+           AND (sampled_at_unix IS NULL OR sampled_at_unix<?)",
+    )
+    .bind(now)
+    .bind(report.sampled_at_unix)
+    .bind(report.cpu_percent)
+    .bind(report.logical_cpu_count)
+    .bind(report.memory_total_bytes)
+    .bind(report.memory_available_bytes)
+    .bind(report.uptime_seconds)
+    .bind(report.load_average_1m)
+    .bind(&report.agent_version)
+    .bind(&id)
+    .bind(&credential_sha256)
+    .bind(now.saturating_sub(REPORT_MIN_INTERVAL_SECONDS))
+    .bind(report.sampled_at_unix)
+    .execute(&state.pool)
+    .await;
+    match updated {
+        Ok(result) if result.rows_affected() == 1 => {
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            response.headers_mut().insert(
+                CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("private, no-store"),
+            );
+            response
+        }
+        Ok(_) => {
+            let row = sqlx::query(
+                "SELECT status,credential_sha256,last_report_received_at_unix,sampled_at_unix
+                 FROM platform_server_nodes WHERE id=?",
+            )
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await;
+            match row {
+                Ok(Some(row)) if row.get::<String, _>("status") != "active" => {
+                    error(StatusCode::UNAUTHORIZED, "reporter_credential_revoked")
+                }
+                Ok(Some(row)) if row.get::<String, _>("credential_sha256") != credential_sha256 => {
+                    error(StatusCode::UNAUTHORIZED, "reporter_credential_invalid")
+                }
+                Ok(Some(row))
+                    if row
+                        .get::<Option<i64>, _>("last_report_received_at_unix")
+                        .is_some_and(|previous| {
+                            now.saturating_sub(previous) < REPORT_MIN_INTERVAL_SECONDS
+                        }) =>
+                {
+                    error(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "telemetry_report_too_frequent",
+                    )
+                }
+                Ok(Some(_)) => error(StatusCode::CONFLICT, "telemetry_sample_out_of_order"),
+                Ok(None) => error(StatusCode::UNAUTHORIZED, "reporter_credential_invalid"),
+                Err(_) => error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "server_node_state_unavailable",
+                ),
+            }
+        }
+        Err(_) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_node_state_unavailable",
+        ),
+    }
+}
+
+fn valid_report(report: &TelemetryReport, now: i64) -> bool {
+    report.schema_version == 1
+        && report.sampled_at_unix >= now.saturating_sub(REPORT_FRESHNESS_SECONDS)
+        && report.sampled_at_unix <= now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
+        && report.cpu_percent.is_finite()
+        && (0.0..=100.0).contains(&report.cpu_percent)
+        && (1..=4096).contains(&report.logical_cpu_count)
+        && report.memory_total_bytes > 0
+        && report.memory_available_bytes >= 0
+        && report.memory_available_bytes <= report.memory_total_bytes
+        && report.uptime_seconds >= 0
+        && report.load_average_1m.is_finite()
+        && (0.0..=1_000_000.0).contains(&report.load_average_1m)
+        && !report.agent_version.is_empty()
+        && report.agent_version.len() <= MAX_AGENT_VERSION_BYTES
+        && report
+            .agent_version
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic())
+}
+
+fn bearer_credential<'a>(headers: &'a HeaderMap, expected_id: &str) -> Option<&'a str> {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let credential = value.strip_prefix("Bearer ")?;
+    let mut parts = credential.split('.');
+    let version = parts.next()?;
+    let id = parts.next()?;
+    let first = parts.next()?;
+    let second = parts.next()?;
+    if version != "v1"
+        || id != expected_id
+        || uuid::Uuid::parse_str(id).is_err()
+        || first.len() != 32
+        || second.len() != 32
+        || !first
+            .bytes()
+            .chain(second.bytes())
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(credential)
+}
+
+async fn authorize_root(state: &NodeState, headers: &HeaderMap) -> Result<String, Response> {
+    match crate::admin_auth::authorize_root_profile_with_client(
+        headers,
+        state.service_token.as_deref(),
+        &state.authz_endpoint,
+        &state.client,
+    )
+    .await
+    {
+        Ok(profile_id) => Ok(profile_id),
+        Err(failure) => Err(auth_failure(failure)),
+    }
+}
+
+async fn no_store(request: axum::http::Request<Body>, next: axum::middleware::Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    response
+}
+
+fn state() -> NodeState {
+    NODE_STATE.get().cloned().unwrap_or_else(|| NodeState {
+        pool: create_pool(),
+        authz_endpoint: std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL")
+            .unwrap_or_else(|_| DEFAULT_IDENTITY_AUTHZ_URL.to_owned()),
+        service_token: std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok(),
+        client: reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(1))
+            .timeout(Duration::from_secs(3))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("valid server-node authorization client"),
+    })
+}
+
+fn state_directory() -> PathBuf {
+    std::env::var_os("VAPOR_PLATFORM_STATE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/vapor-server/platform"))
+}
+
+fn create_pool() -> SqlitePool {
+    let database_path = std::env::var_os("VAPOR_PLATFORM_DB")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state_directory().join("platform.sqlite3"));
+    SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_lazy_with(
+            SqliteConnectOptions::new()
+                .filename(database_path)
+                .create_if_missing(true)
+                .foreign_keys(true)
+                .busy_timeout(Duration::from_secs(5))
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
+        )
+}
+
+async fn insert_node_event(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    node_id: &str,
+    event: &str,
+    label: &str,
+    role: &str,
+    actor: &str,
+    now: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO platform_server_node_events
+         (node_id,event,label,role,actor_profile_id,at_unix) VALUES (?,?,?,?,?,?)",
+    )
+    .bind(node_id)
+    .bind(event)
+    .bind(label)
+    .bind(role)
+    .bind(actor)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+fn node_record(row: sqlx::sqlite::SqliteRow) -> NodeRecord {
+    NodeRecord {
+        id: row.get("id"),
+        label: row.get("label"),
+        role: row.get("role"),
+        status: row.get("status"),
+        version: row.get("version"),
+        created_at_unix: row.get("created_at_unix"),
+        created_by_profile_id: row.get("created_by_profile_id"),
+        revoked_at_unix: row.get("revoked_at_unix"),
+        revoked_by_profile_id: row.get("revoked_by_profile_id"),
+        last_report_received_at_unix: row.get("last_report_received_at_unix"),
+        sampled_at_unix: row.get("sampled_at_unix"),
+        agent_version: row.get("agent_version"),
+    }
+}
+
+fn node_event(row: sqlx::sqlite::SqliteRow) -> NodeEvent {
+    NodeEvent {
+        id: row.get("event_id"),
+        node_id: row.get("node_id"),
+        event: row.get("event"),
+        label: row.get("label"),
+        role: row.get("role"),
+        actor_profile_id: row.get("actor_profile_id"),
+        at_unix: row.get("at_unix"),
+    }
+}
+
+fn private_json<T: Serialize>(status: StatusCode, value: T) -> Response {
+    let mut response = (status, Json(value)).into_response();
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    response
+}
+
+fn error(status: StatusCode, code: &'static str) -> Response {
+    private_json(status, serde_json::json!({"error": code}))
+}
+
+fn auth_failure(failure: crate::admin_auth::AuthFailure) -> Response {
+    let (status, code) = match failure {
+        crate::admin_auth::AuthFailure::Unauthorized => {
+            (StatusCode::UNAUTHORIZED, "sign_in_required")
+        }
+        crate::admin_auth::AuthFailure::Forbidden => (StatusCode::FORBIDDEN, "root_required"),
+        crate::admin_auth::AuthFailure::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "identity_authorization_unavailable",
+        ),
+    };
+    error(status, code)
+}
+
+fn same_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let expected = crate::admin_auth::browser_admin_origin();
+    origin == expected
+}
+
+fn sha256_hex(value: &[u8]) -> String {
+    Sha256::digest(value)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or_default()
+}

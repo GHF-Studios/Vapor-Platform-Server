@@ -15,6 +15,7 @@ sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
+toml = "0.8"
 vapor_diagnostics_server = { path = "Vapor-Diagnostics-Server" }
 vapor_docs_server = { path = "Vapor-Docs-Server" }
 vapor_artifact_server = { path = "Vapor-Artifact-Server" }

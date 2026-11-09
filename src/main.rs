@@ -5,16 +5,17 @@ mod deploy_request_schema;
 mod deploy_requests;
 mod emergency_console;
 mod github_oidc;
+mod node_fleet;
 mod operation_history;
 mod pagination;
 mod platform_ops_client;
 mod recovery;
 mod recovery_status;
+mod server_fleet;
 mod ssh_access;
 mod ssh_key;
 mod ssh_policy;
 mod ssh_schema;
-mod server_fleet;
 
 use axum::Router;
 use std::env;
@@ -29,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ssh_access::initialize().await?;
     operation_history::initialize().await?;
     emergency_console::initialize().await?;
+    node_fleet::initialize().await?;
     server_fleet::initialize();
 
     let app = if env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services") {

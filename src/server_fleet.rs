@@ -22,19 +22,19 @@ struct ServerFleetSnapshot {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ServerNode {
-    id: String,
-    label: String,
-    role: &'static str,
-    state: &'static str,
-    metrics_state: &'static str,
-    observed_at_unix: u64,
-    cpu_percent: Option<f64>,
-    logical_cpu_count: Option<usize>,
-    memory_total_bytes: Option<u64>,
-    memory_available_bytes: Option<u64>,
-    uptime_seconds: Option<u64>,
-    load_average_1m: Option<f64>,
+pub(crate) struct ServerNode {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) role: String,
+    pub(crate) state: &'static str,
+    pub(crate) metrics_state: &'static str,
+    pub(crate) observed_at_unix: u64,
+    pub(crate) cpu_percent: Option<f64>,
+    pub(crate) logical_cpu_count: Option<usize>,
+    pub(crate) memory_total_bytes: Option<u64>,
+    pub(crate) memory_available_bytes: Option<u64>,
+    pub(crate) uptime_seconds: Option<u64>,
+    pub(crate) load_average_1m: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,7 +88,7 @@ impl Sampler {
         let node = ServerNode {
             id: node_id(),
             label: node_label(),
-            role: "control-plane",
+            role: "control-plane".to_owned(),
             state: if has_metrics { "online" } else { "unavailable" },
             metrics_state: if !has_metrics {
                 "unavailable"
@@ -144,7 +144,24 @@ pub async fn admin_snapshot(headers: HeaderMap) -> Response {
         .get()
         .and_then(|snapshot| snapshot.read().ok().map(|value| value.clone()));
     match snapshot {
-        Some(snapshot) => {
+        Some(mut snapshot) => {
+            match crate::node_fleet::fleet_nodes(unix_now() as i64).await {
+                Ok(mut remote_nodes) => snapshot.nodes.append(&mut remote_nodes),
+                Err(_) => {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({"error":"server_node_inventory_unavailable"})),
+                    )
+                        .into_response();
+                }
+            }
+            snapshot.observed_at_unix = unix_now();
+            snapshot.reporting_node_count = snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.state == "online")
+                .count();
+            snapshot.scope = "platform-host-and-enrolled-nodes";
             let mut response = (StatusCode::OK, Json(snapshot)).into_response();
             response.headers_mut().insert(
                 CACHE_CONTROL,
