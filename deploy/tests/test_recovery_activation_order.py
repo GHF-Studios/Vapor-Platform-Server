@@ -118,7 +118,12 @@ class RecoveryActivationOrderTests(unittest.TestCase):
         self.assertIn(restore_call, coordinator)
         timer_start = coordinator.index('systemctl start vapor-state-only-export.timer')
         self.assertLess(coordinator.index(restore_call), timer_start)
-        self.assertLess(timer_start, coordinator.index('"$DEPLOY_ROOT/deploy/scripts/health-check.sh"'))
+        reset_failed = coordinator.index('systemctl reset-failed vapor-state-only-export.service')
+        export_start = coordinator.index('systemctl start vapor-state-only-export.service')
+        health_check = coordinator.index('"$DEPLOY_ROOT/deploy/scripts/health-check.sh"')
+        self.assertLess(timer_start, reset_failed)
+        self.assertLess(reset_failed, export_start)
+        self.assertLess(export_start, health_check)
 
         restore = (REPO_ROOT / "deploy/scripts/restore-state-only.sh").read_text()
         self.assertIn('if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then', restore)

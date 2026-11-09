@@ -316,6 +316,11 @@ VAPOR_RECOVERY_STAGING=1 bash "$DEPLOY_ROOT/deploy/scripts/restore-state-only.sh
 # scheduled exports only after that process exits and releases the lock, then
 # run the complete health check with the production timer requirements.
 systemctl start vapor-state-only-export.timer
+# The app revision embedded in an older snapshot may start this timer before
+# its restore subprocess releases the deploy/state lock. Clear that transient
+# one-shot failure and run the export now that the restore subprocess exited.
+systemctl reset-failed vapor-state-only-export.service || true
+systemctl start vapor-state-only-export.service
 "$DEPLOY_ROOT/deploy/scripts/health-check.sh"
 python3 "$MARKER_TOOL" set-phase --root "$MARKER_ROOT" --bundle-sha256 "$BUNDLE_SHA256" \
   --root-commit "$REVISION" --phase awaiting_provider_checks
