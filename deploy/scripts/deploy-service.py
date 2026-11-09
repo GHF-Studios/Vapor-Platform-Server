@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 try:
     import grp
@@ -94,9 +95,16 @@ def public_health(runner: CommandRunner, domain: str, path: str) -> None:
 
 
 def check_health(runner: CommandRunner, target: dict[str, str], domain: str) -> None:
-    if target["kind"] in {"service", "root-service"}:
-        run_checked(runner, ["curl", "--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "8", target["loopback_health"]])
-    public_health(runner, domain, target["public_health"])
+    for attempt in range(10):
+        try:
+            if target["kind"] in {"service", "root-service"}:
+                run_checked(runner, ["curl", "--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "8", target["loopback_health"]])
+            public_health(runner, domain, target["public_health"])
+            return
+        except DeploymentError as error:
+            if attempt == 9:
+                raise DeploymentError(f"health check failed after 10 attempts: {error}") from error
+            time.sleep(1)
 
 
 def read_current_link(path: pathlib.Path) -> str:

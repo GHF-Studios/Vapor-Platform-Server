@@ -89,6 +89,35 @@ class FakeRunner:
 
 
 class DeployServiceTests(unittest.TestCase):
+    def test_health_check_retries_transient_startup_connection_failure(self) -> None:
+        class StartingRunner:
+            def __init__(self) -> None:
+                self.loopback_calls = 0
+                self.public_calls = 0
+
+            def run(self, command: list[str], *, env: dict[str, str] | None = None):
+                if command[0] == "curl" and command[-1].startswith("https://"):
+                    self.public_calls += 1
+                    failed = False
+                elif command[0] == "curl":
+                    self.loopback_calls += 1
+                    failed = self.loopback_calls == 1
+                else:
+                    failed = False
+                return type("Completed", (), {
+                    "returncode": 7 if failed else 0,
+                    "stdout": "",
+                    "stderr": "curl: (7) connection refused" if failed else "",
+                })()
+
+        runner = StartingRunner()
+        with mock.patch("time.sleep") as sleep:
+            DEPLOY.check_health(runner, DEPLOY.target_map("platform"), "vapor.example.test")
+
+        self.assertEqual(runner.loopback_calls, 2)
+        self.assertEqual(runner.public_calls, 1)
+        sleep.assert_called_once_with(1)
+
     def test_queue_verification_accepts_platform_database_without_state_root(self) -> None:
         runner = FakeRunner()
         environment = {
@@ -367,12 +396,13 @@ class DeployServiceTests(unittest.TestCase):
             temporary.cleanup()
 
     def test_health_failure_restores_binary_state_and_manifest(self) -> None:
-        runner = FakeRunner(fail_public_calls={2})
+        runner = FakeRunner(fail_public_calls=set(range(2, 12)))
         temporary, environment, stable, state, manifest, _ = self._fixture(runner)
         original_manifest = manifest.read_bytes()
         try:
             with mock.patch.dict(os.environ, environment, clear=True), \
                  mock.patch.object(DEPLOY, "set_runtime_owner_group"), \
+                 mock.patch("time.sleep"), \
                  contextlib.redirect_stderr(io.StringIO()):
                 result = DEPLOY.deploy_service(
                     type("Args", (), {"approved": ROOT_COMMIT, "target": "identity"})(), runner
@@ -386,12 +416,13 @@ class DeployServiceTests(unittest.TestCase):
             temporary.cleanup()
 
     def test_rollback_health_failure_preserves_recovery_backup(self) -> None:
-        runner = FakeRunner(fail_public_calls={2, 3})
+        runner = FakeRunner(fail_public_calls=set(range(2, 22)))
         temporary, environment, stable, _, _, _ = self._fixture(runner)
         try:
             error = io.StringIO()
             with mock.patch.dict(os.environ, environment, clear=True), \
                  mock.patch.object(DEPLOY, "set_runtime_owner_group"), \
+                 mock.patch("time.sleep"), \
                  contextlib.redirect_stderr(error):
                 result = DEPLOY.deploy_service(
                     type("Args", (), {"approved": ROOT_COMMIT, "target": "identity"})(), runner
