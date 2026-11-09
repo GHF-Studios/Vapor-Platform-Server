@@ -1,12 +1,12 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-09 01:07 UTC)
+## Current verified state (2026-11-09 01:23 UTC)
 
-- The hourly `Vapor USB Recovery Sync` completed successfully at
-  `2026-11-09T01:07:48Z` with task result `0`. It verified all eight indexed
-  state-only archives (38,389,881 payload bytes) and copied the latest archive
-  and recovery kit to the owner USB. The USB archive index and sidecars were
-  independently re-hashed with no mismatches.
+- The repaired state-only USB sync completed successfully at
+  `2026-11-09T01:22:54Z`. It fetched canonical Platform `main`, verified all
+  eight indexed generations and their recovery-kit files, and reported success
+  to Platform. The installed scheduled-task script matches the tested
+  repository copy.
 - The latest owner-held archive is
   `vapor-platform-state-20261109T010116Z-34f63ec46441.tar.gz` with SHA-256
   `edd21e88ec907b1108914f15561e0201629af14c4b865cd29da876c3bc9a53e9`. Its
@@ -21,12 +21,19 @@
   all active during the latest check. The three old failed systemd deployment
   units were reset after their outcomes were confirmed in Platform history;
   the history records remain intact.
+- Public `/`, `/downloads`, `/docs/`, `/login`, `/dashboard`, and
+  `/operator/login` return HTTP 200. All 29 same-origin links in the Docs index
+  resolved successfully. Unauthenticated `/admin`, `/admin/approvals`, and
+  `/admin/recovery` return HTTP 401, as required; authenticated operator
+  workflows still need an end-to-end browser check.
 - Build Cache currently reports both supported targets as unconfigured and
   without a current snapshot. The optional worker path still lacks the
   canonical ecosystem/toolchain lock. Local source builds remain the available
   fallback; no clean-host restore drill has been completed yet.
-- Platform `main` was at `5c01be4` when this snapshot was collected. The
-  archive and recovery kit are checksum-verified on USB, but
+- Platform `main` is at `62615c9d0869df3b515a6be771daf9b2c8911536`; commits
+  after deployed composition `78722c2641b42bfdf493d45b6b92461dccd3e87f` are
+  documentation and USB recovery-sync changes, so no service deployment was
+  needed. The archive and recovery kit are checksum-verified on USB, but
   archive verification is not a substitute for a fresh-host restore drill.
 
 ## Previous checkpoint (2026-11-08 22:05 UTC)
