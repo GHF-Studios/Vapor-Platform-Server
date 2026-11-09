@@ -104,11 +104,15 @@ struct NodeInventory {
 }
 
 pub(crate) fn router() -> Router {
+    router_with_state(state())
+}
+
+fn router_with_state(state: NodeState) -> Router {
     Router::new()
         .route("/api/admin/server-nodes", get(list_nodes).post(create_node))
         .route("/api/admin/server-nodes/{id}/revoke", post(revoke_node))
         .route("/api/fleet/v1/nodes/{id}/telemetry", post(report_telemetry))
-        .with_state(state())
+        .with_state(state)
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(axum::middleware::from_fn(no_store))
 }
@@ -742,4 +746,180 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{router_with_state, sha256_hex, NodeState};
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::{Row, SqlitePool};
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE platform_server_nodes (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                credential_sha256 TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                created_at_unix INTEGER NOT NULL,
+                created_by_profile_id TEXT NOT NULL,
+                revoked_at_unix INTEGER,
+                revoked_by_profile_id TEXT,
+                last_report_received_at_unix INTEGER,
+                sampled_at_unix INTEGER,
+                cpu_percent REAL,
+                logical_cpu_count INTEGER,
+                memory_total_bytes INTEGER,
+                memory_available_bytes INTEGER,
+                uptime_seconds INTEGER,
+                load_average_1m REAL,
+                agent_version TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    fn telemetry_request(node_id: &str, credential: &str, sampled_at_unix: i64) -> Request<Body> {
+        let body = serde_json::json!({
+            "schema_version": 1,
+            "sampled_at_unix": sampled_at_unix,
+            "cpu_percent": 24.5,
+            "logical_cpu_count": 8,
+            "memory_total_bytes": 16_000_000_000i64,
+            "memory_available_bytes": 8_000_000_000i64,
+            "uptime_seconds": 1234,
+            "load_average_1m": 1.25,
+            "agent_version": "1.0.0"
+        });
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/fleet/v1/nodes/{node_id}/telemetry"))
+            .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn telemetry_endpoint_accepts_one_sample_then_enforces_throttle_and_revocation() {
+        let pool = test_pool().await;
+        let node_id = uuid::Uuid::new_v4().to_string();
+        let credential = format!("v1.{node_id}.{}.{}", "a".repeat(32), "b".repeat(32));
+        let now = super::unix_now();
+        sqlx::query(
+            "INSERT INTO platform_server_nodes
+             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+             VALUES (?, 'CI worker', 'builder', 'active', ?, 1, ?, 'test-profile')",
+        )
+        .bind(&node_id)
+        .bind(sha256_hex(credential.as_bytes()))
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let app = router_with_state(NodeState {
+            pool: pool.clone(),
+            authz_endpoint: String::new(),
+            service_token: None,
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(1))
+                .timeout(Duration::from_secs(3))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        });
+
+        let invalid_credential = credential.replace('a', "c");
+        let rejected = app
+            .clone()
+            .oneshot(telemetry_request(&node_id, &invalid_credential, now))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+
+        let accepted = app
+            .clone()
+            .oneshot(telemetry_request(&node_id, &credential, now))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            accepted.headers().get(header::CACHE_CONTROL).unwrap(),
+            "private, no-store"
+        );
+
+        let throttled = app
+            .clone()
+            .oneshot(telemetry_request(&node_id, &credential, now + 1))
+            .await
+            .unwrap();
+        assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
+        let stored_sample: i64 =
+            sqlx::query("SELECT sampled_at_unix FROM platform_server_nodes WHERE id=?")
+                .bind(&node_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get("sampled_at_unix");
+        assert_eq!(stored_sample, now);
+        let stored_cpu: f64 =
+            sqlx::query("SELECT cpu_percent FROM platform_server_nodes WHERE id=?")
+                .bind(&node_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get("cpu_percent");
+        assert_eq!(stored_cpu, 24.5);
+
+        sqlx::query(
+            "UPDATE platform_server_nodes
+             SET last_report_received_at_unix=?,sampled_at_unix=? WHERE id=?",
+        )
+        .bind(now.saturating_sub(11))
+        .bind(now + 1)
+        .bind(&node_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let out_of_order = app
+            .clone()
+            .oneshot(telemetry_request(&node_id, &credential, now))
+            .await
+            .unwrap();
+        assert_eq!(out_of_order.status(), StatusCode::CONFLICT);
+        let preserved_sample: i64 =
+            sqlx::query("SELECT sampled_at_unix FROM platform_server_nodes WHERE id=?")
+                .bind(&node_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get("sampled_at_unix");
+        assert_eq!(preserved_sample, now + 1);
+
+        sqlx::query("UPDATE platform_server_nodes SET status='revoked' WHERE id=?")
+            .bind(&node_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let revoked = app
+            .oneshot(telemetry_request(&node_id, &credential, now + 2))
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
+    }
 }
