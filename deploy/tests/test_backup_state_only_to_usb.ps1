@@ -129,6 +129,43 @@ with tarfile.open(root / sys.argv[3], "w:gz") as archive:
     catch { $rejected = $_.Exception.Message -like '*checksum file does not match*' }
     Assert-True $rejected 'sync must reject a modified source-pinned recovery kit'
     Assert-True ((Get-Content -LiteralPath (Join-Path $kitRoot 'state_only_recovery_marker.py') -Raw).Trim() -ceq 'fixture recovery kit from current main') 'recovery kit was incorrectly taken from the archived application revision'
+
+    $checkout = Join-Path $testRoot 'checkout'
+    & $git clone --quiet $repositoryCache $checkout
+    & $git -C $checkout config user.name 'Vapor USB fixture'
+    & $git -C $checkout config user.email 'fixture@example.invalid'
+    Set-Content -LiteralPath (Join-Path $checkout 'deploy\scripts\state_only_recovery_marker.py') -Value 'fixture recovery kit from unpushed local commit' -Encoding utf8
+    & $git -C $checkout add deploy/scripts/state_only_recovery_marker.py
+    & $git -C $checkout commit --quiet -m 'Unpushed local recovery-kit change'
+    $unpushedCommit = (& $git -C $checkout rev-parse HEAD).Trim()
+    Assert-True ($unpushedCommit -ne $recoveryKitCommit) 'fixture local commit must differ from origin/main'
+    $unpushedUsbRoot = Join-Path $testRoot 'usb-unpushed'
+    & $sync -Server fixture -SshKey $sshKey -UsbPath $unpushedUsbRoot -AllowFixedDrive -RecoveryRepositoryPath $checkout | Out-Null
+    $pointer = Get-Content -LiteralPath (Join-Path $unpushedUsbRoot 'Recovery-Kit\state-only\latest.json') -Raw | ConvertFrom-Json
+    Assert-True ($pointer.recovery_kit_commit -ceq $recoveryKitCommit) 'USB sync selected an unpushed recovery-tool revision'
+    $kitRoot = Join-Path $unpushedUsbRoot (Join-Path 'Recovery-Kit\state-only' $recoveryKitCommit)
+    Assert-True ((Get-Content -LiteralPath (Join-Path $kitRoot 'state_only_recovery_marker.py') -Raw).Trim() -ceq 'fixture recovery kit from current main') 'USB sync archived recovery tools from local HEAD instead of origin/main'
+
+    $unavailableArchiveName = 'vapor-platform-state-20261108T000001Z-abcdef012345.tar.gz'
+    Set-Content -LiteralPath $manifestPath -Value @"
+schema_version = 4
+created_at_utc = "2026-11-08T00:00:01Z"
+platform_source_commit = "$unpushedCommit"
+"@ -Encoding ascii
+    & $python $makeArchive $remoteRoot $manifestPath $unavailableArchiveName
+    $unavailableArchivePath = Join-Path $remoteRoot $unavailableArchiveName
+    $unavailableArchiveHash = (Get-FileHash -LiteralPath $unavailableArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $unavailableArchiveSize = (Get-Item -LiteralPath $unavailableArchivePath).Length
+    [ordered]@{ schema_version = 1; archive_schema_version = 4; archive = $unavailableArchiveName; sha256 = $unavailableArchiveHash; size_bytes = $unavailableArchiveSize } |
+        ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $remoteRoot 'latest.json') -Encoding utf8
+    [ordered]@{ schema_version = 1; archives = @([ordered]@{ archive = $unavailableArchiveName; sha256 = $unavailableArchiveHash; size_bytes = $unavailableArchiveSize }) } |
+        ConvertTo-Json -Depth 4 -Compress | Set-Content -LiteralPath (Join-Path $remoteRoot 'index.json') -Encoding utf8
+    $unavailableUsbRoot = Join-Path $testRoot 'usb-unavailable-source'
+    $unavailableRejected = $false
+    try { & $sync -Server fixture -SshKey $sshKey -UsbPath $unavailableUsbRoot -AllowFixedDrive -RecoveryRepositoryPath $checkout | Out-Null }
+    catch { $unavailableRejected = $_.Exception.Message -like '*not reachable from Platform origin/main*' }
+    Assert-True $unavailableRejected 'USB sync must refuse an archived Platform revision absent from origin/main'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $unavailableUsbRoot 'Recovery-Kit\state-only\latest.json'))) 'unrecoverable archive was published to the USB recovery-kit pointer'
     Write-Output 'state-only USB recovery-kit tests passed'
 } finally {
     Remove-Item Env:\VAPOR_USB_TEST_REMOTE_ROOT -ErrorAction SilentlyContinue

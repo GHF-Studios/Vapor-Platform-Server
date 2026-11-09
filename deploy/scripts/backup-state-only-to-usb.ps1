@@ -183,20 +183,21 @@ $isBare = (& $git -C $repositoryRoot rev-parse --is-bare-repository).Trim()
 if ($LASTEXITCODE -ne 0 -or $isBare -notin @('true', 'false')) {
     throw 'The recovery-tool repository is not a valid Git repository.'
 }
-if ($isBare -ceq 'true') {
-    # The scheduled task uses Vapor's bare repository cache. Refresh canonical
-    # main here so the backup does not depend on cache freshness or the archive
-    # having been produced by the same application revision.
-    & $git -C $repositoryRoot fetch --no-tags origin main
-    if ($LASTEXITCODE -ne 0) { throw 'Could not update recovery tools from Platform main.' }
-    $sourceRef = 'FETCH_HEAD'
-} else {
+if ($isBare -cne 'true') {
     $dirty = & $git -C $repositoryRoot status --porcelain --untracked-files=all
     if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the recovery-tool checkout.' }
     if (-not [string]::IsNullOrWhiteSpace(($dirty -join "`n"))) {
         throw 'The recovery-tool checkout has local changes; use a clean checkout or bare repository cache.'
     }
-    $sourceRef = 'HEAD'
+}
+# Always refresh canonical main. A clean local checkout can still contain
+# unpushed commits, which a fresh recovery host cannot fetch from GitHub.
+& $git -C $repositoryRoot fetch --no-tags origin main
+if ($LASTEXITCODE -ne 0) { throw 'Could not update recovery tools from Platform main.' }
+$sourceRef = 'FETCH_HEAD'
+& $git -C $repositoryRoot merge-base --is-ancestor $archiveSourceCommit $sourceRef 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw 'The snapshot source revision is not reachable from Platform origin/main; refusing to create an unrecoverable USB generation.'
 }
 $recoveryKitCommit = (& $git -C $repositoryRoot log -1 --format=%H $sourceRef -- @archivePaths).Trim()
 if ($recoveryKitCommit -notmatch '^[0-9a-f]{40}$') {
