@@ -276,10 +276,13 @@ async fn create_request(
         .await
     {
         Ok(commit) => commit,
-        Err(()) => {
+        Err(error) => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "GitHub main could not be checked; no deployment request was created. Retry after GitHub is available.\n",
+                format!(
+                    "GitHub main check failed ({}); no deployment request was created. Retry after GitHub is available.\n",
+                    error.public_summary()
+                ),
             )
                 .into_response();
         }
@@ -708,10 +711,13 @@ async fn decide_request(
             .await
         {
             Ok(commit) => commit,
-            Err(()) => {
+            Err(error) => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "GitHub main could not be checked; no approval was saved. Retry after GitHub is available.\n",
+                    format!(
+                        "GitHub main check failed ({}); no approval was saved. Retry after GitHub is available.\n",
+                        error.public_summary()
+                    ),
                 )
                     .into_response();
             }
@@ -813,29 +819,66 @@ struct GithubRefObject {
     object_type: String,
 }
 
-async fn fetch_main_commit_at(client: &reqwest::Client, url: &str) -> Result<String, ()> {
+#[derive(Debug, PartialEq, Eq)]
+enum GithubMainCheckError {
+    RequestFailed,
+    HttpStatus(u16),
+    ResponseTooLarge,
+    BodyReadFailed,
+    InvalidResponse,
+    InvalidReference,
+}
+
+impl GithubMainCheckError {
+    fn public_summary(&self) -> String {
+        match self {
+            Self::RequestFailed => {
+                "GitHub request failed before a response was received".to_owned()
+            }
+            Self::HttpStatus(status) => format!("GitHub returned HTTP {status}"),
+            Self::ResponseTooLarge => "GitHub response exceeded the 8 KiB limit".to_owned(),
+            Self::BodyReadFailed => "GitHub response body could not be read".to_owned(),
+            Self::InvalidResponse => "GitHub response was not valid reference JSON".to_owned(),
+            Self::InvalidReference => {
+                "GitHub response did not identify a valid main commit".to_owned()
+            }
+        }
+    }
+}
+
+async fn fetch_main_commit_at(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<String, GithubMainCheckError> {
     let mut response = client
         .get(url)
         .header(reqwest::header::USER_AGENT, "Vapor-Platform-Server")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .send()
         .await
-        .map_err(|_| ())?;
-    if !response.status().is_success()
-        || response
-            .content_length()
-            .is_some_and(|length| length > MAX_GITHUB_REF_RESPONSE_BYTES as u64)
+        .map_err(|_| GithubMainCheckError::RequestFailed)?;
+    if !response.status().is_success() {
+        return Err(GithubMainCheckError::HttpStatus(response.status().as_u16()));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_GITHUB_REF_RESPONSE_BYTES as u64)
     {
-        return Err(());
+        return Err(GithubMainCheckError::ResponseTooLarge);
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| GithubMainCheckError::BodyReadFailed)?
+    {
         if body.len().saturating_add(chunk.len()) > MAX_GITHUB_REF_RESPONSE_BYTES {
-            return Err(());
+            return Err(GithubMainCheckError::ResponseTooLarge);
         }
         body.extend_from_slice(&chunk);
     }
-    let reference: GithubRefResponse = serde_json::from_slice(&body).map_err(|_| ())?;
+    let reference: GithubRefResponse =
+        serde_json::from_slice(&body).map_err(|_| GithubMainCheckError::InvalidResponse)?;
     if reference.reference != "refs/heads/main"
         || reference.object.object_type != "commit"
         || reference.object.sha.len() != 40
@@ -845,7 +888,7 @@ async fn fetch_main_commit_at(client: &reqwest::Client, url: &str) -> Result<Str
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err(());
+        return Err(GithubMainCheckError::InvalidReference);
     }
     Ok(reference.object.sha.to_ascii_lowercase())
 }
@@ -2211,7 +2254,8 @@ mod tests {
         approve_request, fetch_main_commit_at, fetch_request_rows, is_current_main_revision,
         read_bounded_identity_response, request_scope, request_server_mode, request_service_target,
         same_request_shape, validate_request, CreateDeployRequest, DeployRequestState,
-        IdentityCredentialDecision, SubmodulePin, SERVICE_DEPLOY_TARGETS, SUBMODULES,
+        GithubMainCheckError, IdentityCredentialDecision, SubmodulePin, SERVICE_DEPLOY_TARGETS,
+        SUBMODULES,
     };
     use crate::pagination::{Page, PageCursor};
     use axum::body::{to_bytes, Body};
@@ -2378,6 +2422,22 @@ mod tests {
             "1123456789abcdef0123456789abcdef01234567",
             current
         ));
+    }
+
+    #[test]
+    fn github_main_lookup_errors_explain_safe_diagnostic_categories() {
+        assert_eq!(
+            GithubMainCheckError::HttpStatus(503).public_summary(),
+            "GitHub returned HTTP 503"
+        );
+        assert_eq!(
+            GithubMainCheckError::ResponseTooLarge.public_summary(),
+            "GitHub response exceeded the 8 KiB limit"
+        );
+        assert_eq!(
+            GithubMainCheckError::RequestFailed.public_summary(),
+            "GitHub request failed before a response was received"
+        );
     }
 
     #[tokio::test]
