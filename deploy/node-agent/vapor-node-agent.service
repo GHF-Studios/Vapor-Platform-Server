@@ -1,5 +1,5 @@
 [Unit]
-Description=Vapor enrolled server telemetry reporter
+Description=Vapor enrolled server telemetry and typed-operation agent
 After=network-online.target
 Wants=network-online.target
 
@@ -10,7 +10,7 @@ Group=vapor-node-agent
 ExecStart=/usr/local/bin/vapor-node-agent --config /etc/vapor/node-agent.toml
 Restart=on-failure
 RestartSec=15s
-NoNewPrivileges=true
+NoNewPrivileges=false
 PrivateDevices=true
 PrivateTmp=true
 ProtectHome=true

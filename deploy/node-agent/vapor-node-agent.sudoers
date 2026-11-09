@@ -1,0 +1,1 @@
+vapor-node-agent ALL=(root) NOPASSWD: /usr/local/libexec/vapor-node-ops ""

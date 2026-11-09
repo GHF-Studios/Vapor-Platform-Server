@@ -20,10 +20,9 @@
   not hold SSH keys for enrolled hosts or expose an inbound shell port.
 - A remote action credential is distinct from the reporter credential and is
   limited to claiming/reporting the node's already-recorded typed operations.
-- Delivery is at-least-once at the transport boundary but exactly-once in the
-  executor state machine: an operation ID is claimed with compare-and-set,
-  duplicate claims return its current state, and uncertain actions are never
-  re-executed automatically.
+- Delivery is at-least-once at the transport boundary but at-most-once in the
+  executor: an operation ID is claimed with compare-and-set, duplicate polls
+  never re-run it, and uncertain actions are never re-executed automatically.
 - Root Identity authorization and same-origin mutation checks remain mandatory.
 - Platform coordinates service-owned export/import/deploy contracts and never reads service databases directly.
 - Every operation and migration step is durably recorded before execution; uncertain results are never blindly retried.
@@ -75,28 +74,32 @@
 root-owned local action helper and systemd/sudoers installation assets,
 `src/server_operations.rs`, node-agent config/package docs.
 
-- [ ] Keep the current reporter credential telemetry-only. Add a separately
+- [x] Keep the current reporter credential telemetry-only. Add a separately
   generated, one-time operation credential whose hash is stored independently;
   neither credential may be used for the other's endpoints.
-- [ ] Let an enrolled agent poll only its own pending operation queue over
+- [x] Let an enrolled agent poll only its own pending operation queue over
   outbound HTTPS. The queue returns the persisted action enum, operation ID,
   schema version, and expiry; it accepts no command string or caller-selected
   executable, unit, path, or environment.
-- [ ] Claim an operation atomically before execution. A repeated poll for the
-  same claim returns status without re-running the action. Revocation prevents
-  new claims and result updates; in-flight outcomes remain auditable.
-- [ ] Keep the network agent unprivileged. Route the small enum through a
+- [x] Claim an operation atomically before execution. Repeated polls do not
+  deliver the claimed action again. Revocation prevents new claims and result
+  updates; in-flight outcomes remain auditable. Unclaimed actions expire after
+  15 minutes; running remote actions become outcome-unknown after three minutes.
+- [x] Keep the network agent unprivileged. Route the small enum through a
   separate root-owned helper with a fixed service allowlist and explicit host
   identity check; do not grant the telemetry process general root or shell.
-- [ ] Persist action/result and actor on Platform before dispatch; report
-  bounded results and reconcile reboot by boot identity. Lost responses become
-  `outcome_unknown`, never an automatic retry.
-- [ ] Expose remote controls only after the separate executor capability has
-  enrolled and reported a supported schema/action set. A reporter-only node
-  remains telemetry-only in the UI.
+- [x] Persist action/result and actor on Platform before dispatch; report
+  bounded results. The first remote vocabulary is restart-only; host reboot is
+  withheld. Lost results become `outcome_unknown`, never an automatic retry.
+- [x] Expose remote controls only while the separately authenticated executor
+  has checked in recently. A configured-but-offline or reporter-only node
+  remains unavailable in the UI.
 - [ ] Test credential separation, wrong-node access, revocation, concurrent
   claim races, duplicate delivery, expiry, arbitrary JSON rejection, helper
-  allowlisting, and ambiguous result handling.
+  allowlisting, and ambiguous result handling comprehensively. Current tests
+  cover reporter/executor separation, one-time claims, revocation, duplicate
+  result rejection, remote-result timeout, and expired queued actions; Linux
+  CI still needs to compile and execute the helper-specific tests.
 
 ### Task 4: Servers page operation surface
 
@@ -105,7 +108,7 @@ root-owned local action helper and systemd/sudoers installation assets,
 - [x] Add compact controls for restarting an allowlisted service or rebooting the local Platform host. Remote nodes remain telemetry-only.
 - [x] Confirm the exact service before restart, require exact host-ID text before reboot, and disable duplicate submissions while the request is active.
 - [x] Display the operation result and a compact recent-action list. A dedicated operation detail route exists; linking from each row remains to do.
-- [ ] Keep remote nodes telemetry-only until a bounded remote executor is installed; no UI control is inferred from an active telemetry credential.
+- [x] Add a host selector populated only with a live typed executor; keep reboot and gateway actions core-only.
 - [ ] Parse embedded JavaScript and test route/page rendering and action-state wording.
 
 ### Task 5: Typed server profiles

@@ -1948,10 +1948,12 @@ const JS: &str = r#"
   const fleetSummary = document.querySelector('#server-fleet-summary');
   const fleetRefresh = document.querySelector('#server-fleet-refresh');
   const serverActionSelect = document.querySelector('#server-action-service');
+  const serverActionTarget = document.querySelector('#server-action-target');
   const serverActionButton = document.querySelector('#server-action-restart');
   const serverRebootButton = document.querySelector('#server-action-reboot');
   const serverActionStatus = document.querySelector('#server-action-status');
   const serverOperationList = document.querySelector('#server-operation-list');
+  const serverLabelById = new Map();
     const nodeForm = document.querySelector('#server-node-enroll');
     const nodeSlot = document.querySelector('#server-node-slot');
     const nodeLabel = document.querySelector('#server-node-label');
@@ -1988,7 +1990,10 @@ const JS: &str = r#"
       fleetList.replaceChildren();
       const reporting = data.nodes.filter(node => node.state === 'online').length;
       fleetSummary.textContent = `${reporting} of ${data.nodes.length} registered ${data.nodes.length === 1 ? 'server is' : 'servers are'} reporting · sampled ${new Date(Number(data.observed_at_unix) * 1000).toLocaleTimeString()}`;
+      serverLabelById.clear();
+      serverLabelById.set(data.local_node_id, 'Core server');
       for (const node of data.nodes) {
+        serverLabelById.set(node.id, node.label || node.id);
         const card = document.createElement('article'); card.className = 'server-node card';
         const header = document.createElement('div'); header.className = 'server-node-header';
         const title = document.createElement('h3'); title.textContent = node.label || node.id || 'Unnamed server';
@@ -2008,7 +2013,10 @@ const JS: &str = r#"
         freshness.textContent = node.state === 'never-reported' ? 'No telemetry received yet.' : `Received ${age < 5 ? 'just now' : `${age}s ago`} · metrics ${node.metrics_state || 'unknown'}`;
         card.append(freshness); fleetList.append(card);
       }
-      if (serverActionSelect) serverActionSelect.dataset.targetNodeId = data.local_node_id || '';
+      if (serverActionTarget && data.local_node_id) {
+        serverActionTarget.dataset.localNodeId = data.local_node_id;
+        if (!serverActionTarget.options.length) serverActionTarget.add(new Option('Core server · this Platform host', data.local_node_id));
+      }
       if (data.nodes.length === 0) fleetList.append(appendText(document.createElement('div'), 'p', 'No servers have been added yet.', 'muted'));
     };
     const refreshFleet = async () => {
@@ -2034,7 +2042,7 @@ const JS: &str = r#"
         const action = operation.action?.kind === 'restart_service' ? `Restart ${operation.action.service}` : operation.action?.kind === 'reboot_host' ? 'Reboot host' : operation.action?.kind || 'Unknown action';
         const title = document.createElement('strong'); title.textContent = action;
         const state = document.createElement('span'); state.className = `server-operation-state ${operation.state || ''}`; state.textContent = operation.state || 'unknown';
-        const detail = document.createElement('small'); detail.textContent = operation.result_detail || `Requested ${new Date(Number(operation.created_at_unix) * 1000).toLocaleString()}`;
+        const detail = document.createElement('small'); detail.textContent = `${serverLabelById.get(operation.target_node_id) || operation.target_node_id} · ${operation.result_detail || `Requested ${new Date(Number(operation.created_at_unix) * 1000).toLocaleString()}`}`;
         item.append(title, state, detail); serverOperationList.append(item);
       }
       if (!data.items.length) serverOperationList.append(appendText(document.createElement('div'), 'p', 'No server actions recorded.', 'muted'));
@@ -2049,9 +2057,20 @@ const JS: &str = r#"
       } catch (error) { serverOperationList.replaceChildren(appendText(document.createElement('div'), 'p', error.message || 'Action history is unavailable.', 'muted')); }
     };
     refreshServerOperations();
+    window.setInterval(() => {
+      if (!document.hidden && serverOperationList?.querySelector('.server-operation-state.accepted, .server-operation-state.running')) refreshServerOperations();
+    }, 5000);
+    const syncTargetControls = () => {
+      if (!serverActionTarget) return;
+      const local = serverActionTarget.value === serverActionTarget.dataset.localNodeId;
+      for (const option of serverActionSelect?.options || []) option.disabled = !local && ['caddy'].includes(option.value);
+      if (serverRebootButton) serverRebootButton.disabled = !local;
+      if (!local && serverActionSelect?.selectedOptions[0]?.disabled) serverActionSelect.value = 'docs';
+    };
+    serverActionTarget?.addEventListener('change', syncTargetControls);
     const submitServerAction = async (action, description) => {
-      const target = serverActionSelect?.dataset.targetNodeId || '';
-      if (!target) { serverActionStatus.textContent = 'The local host identity is unavailable.'; return; }
+      const target = serverActionTarget?.value || '';
+      if (!target) { serverActionStatus.textContent = 'Choose an available host first.'; return; }
       if (serverActionButton) serverActionButton.disabled = true;
       if (serverRebootButton) serverRebootButton.disabled = true;
       serverActionStatus.textContent = `Requesting ${description}…`;
@@ -2060,7 +2079,7 @@ const JS: &str = r#"
         const data = await response.json().catch(() => null);
         if (!response.ok) throw new Error(data?.error || `Action request failed (HTTP ${response.status}).`);
         const operation = data.operation;
-        serverActionStatus.textContent = `${operation.state}: ${operation.result_detail || description}`;
+        serverActionStatus.textContent = operation.state === 'accepted' ? `${description} queued for the selected server.` : `${operation.state}: ${operation.result_detail || description}`;
         if (operation.state === 'awaiting_reboot') serverActionStatus.textContent = 'Reboot requested. This page will disconnect; the operation will be reconciled after the host returns.';
         await refreshServerOperations();
       } catch (error) {
@@ -2074,12 +2093,13 @@ const JS: &str = r#"
     serverActionButton?.addEventListener('click', async () => {
       const service = serverActionSelect?.value || '';
       if (!service) { serverActionStatus.textContent = 'Choose a service first.'; return; }
-      if (!window.confirm(`Restart ${service}? This runs a recorded service action on the Platform host.`)) return;
+      const target = serverActionTarget?.selectedOptions?.[0]?.textContent || 'selected server';
+      if (!window.confirm(`Restart ${service} on ${target}? This records and queues a typed action.`)) return;
       await submitServerAction({ kind: 'restart_service', service }, `restart of ${service}`);
     });
     serverRebootButton?.addEventListener('click', async () => {
-      const target = serverActionSelect?.dataset.targetNodeId || '';
-      if (!target) { serverActionStatus.textContent = 'The local host identity is unavailable.'; return; }
+      const target = serverActionTarget?.value || '';
+      if (!target || target !== serverActionTarget?.dataset.localNodeId) { serverActionStatus.textContent = 'Host reboot is currently available only for the core server.'; return; }
       const expected = `REBOOT ${target}`;
       const confirmation = window.prompt(`This will reboot the Platform host. Type exactly:\n${expected}`);
       if (confirmation !== expected) { serverActionStatus.textContent = 'Reboot cancelled; confirmation did not match.'; return; }
@@ -2114,18 +2134,32 @@ const JS: &str = r#"
           details.append(title, meta); row.append(details); nodeManagement.append(row);
         }
         const incarnationHeading = document.createElement('h3'); incarnationHeading.textContent = 'Host installations'; nodeManagement.append(incarnationHeading);
+        if (serverActionTarget) {
+          const selectedTarget = serverActionTarget.value;
+          serverActionTarget.replaceChildren();
+          const localId = serverActionTarget.dataset.localNodeId;
+          if (localId) serverActionTarget.add(new Option('Core server · this Platform host', localId));
+          for (const node of data.nodes) {
+            if (node.status === 'active' && node.executor_enabled && node.executor_online) {
+              serverActionTarget.add(new Option(`${node.label} · ${node.role}`, node.id));
+            }
+          }
+          if ([...serverActionTarget.options].some(option => option.value === selectedTarget)) serverActionTarget.value = selectedTarget;
+          syncTargetControls();
+        }
         for (const node of data.nodes) {
           const row = document.createElement('article'); row.className = 'server-node-management-row';
           const details = document.createElement('div');
           const title = document.createElement('strong'); title.textContent = node.label;
-          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${node.role} · ${node.status} · slot ${node.slot_id} · installation ${node.id} · ${node.last_report_received_at_unix ? `last report ${new Date(node.last_report_received_at_unix * 1000).toLocaleString()}` : 'never reported'}`;
+          const capability = node.status !== 'active' ? 'revoked' : node.executor_online ? 'telemetry + typed actions · online' : node.executor_enabled ? 'executor configured · offline' : 'telemetry only';
+          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${node.role} · ${capability} · ${node.status} · slot ${node.slot_id} · installation ${node.id} · ${node.last_report_received_at_unix ? `last report ${new Date(node.last_report_received_at_unix * 1000).toLocaleString()}` : 'never reported'}`;
           details.append(title, meta); row.append(details);
           if (node.status === 'active') {
             const revoke = document.createElement('button'); revoke.type = 'button'; revoke.textContent = 'Revoke';
             revoke.addEventListener('click', async () => {
-              if (!window.confirm(`Revoke telemetry reporting for ${node.label}?`)) return;
+              if (!window.confirm(`Revoke ${node.label}? Telemetry and future typed-action claims will stop; an action already running may still finish.`)) return;
               revoke.disabled = true;
-              try { await postNodeApi(`/api/admin/server-nodes/${encodeURIComponent(node.id)}/revoke`, { expected_version: node.version }); nodeStatus.textContent = `Reporting credential for ${node.label} revoked.`; await refreshNodeManagement(); await refreshFleet(); }
+              try { await postNodeApi(`/api/admin/server-nodes/${encodeURIComponent(node.id)}/revoke`, { expected_version: node.version }); nodeStatus.textContent = `Telemetry and typed-operation access for ${node.label} revoked.`; await refreshNodeManagement(); await refreshFleet(); }
               catch (error) { nodeStatus.textContent = error.message || 'Could not revoke this node.'; revoke.disabled = false; }
             });
             row.append(revoke);
@@ -2159,14 +2193,14 @@ const JS: &str = r#"
     nodeSlot?.addEventListener('change', syncSlotSelection);
     nodeForm?.addEventListener('submit', async event => {
       event.preventDefault();
-      if (!window.confirm('Enroll this host installation for telemetry? The credential will be shown once.')) return;
+      if (!window.confirm('Enroll this host installation? Its separate telemetry and typed-executor credentials will be shown once.')) return;
       const submit = nodeForm.querySelector('button[type="submit"]'); submit.disabled = true; nodeStatus.textContent = 'Adding server…';
       try {
         const request = { label: nodeLabel.value, role: nodeRole.value };
         if (nodeSlot.value) request.slot_id = nodeSlot.value;
         const created = await postNodeApi('/api/admin/server-nodes', request);
-        nodeSecretValue.textContent = created.reporter_credential;
-        createdNodeConfig = { id: created.id, credential: created.reporter_credential };
+        nodeSecretValue.textContent = `Telemetry credential:\n${created.reporter_credential}\n\nTyped executor credential:\n${created.executor_credential}\n\n${created.warning}`;
+        createdNodeConfig = { id: created.id, reporterCredential: created.reporter_credential, executorCredential: created.executor_credential };
         nodeSecretPanel.hidden = false;
         nodeStatus.textContent = `${created.label} installation enrolled in slot ${created.slot_id}. Download its config or copy the credential now; the secret will not be shown again.`;
         nodeForm.reset(); syncSlotSelection(); await refreshNodeManagement(); await refreshFleet();
@@ -2174,24 +2208,24 @@ const JS: &str = r#"
       finally { submit.disabled = false; }
     });
     nodeSecretCopy?.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(nodeSecretValue.textContent); nodeStatus.textContent = 'Reporter credential copied. Store it only in the node agent’s protected configuration.'; }
+      try { await navigator.clipboard.writeText(nodeSecretValue.textContent); nodeStatus.textContent = 'Both one-time credentials copied. Store them only in the node agent’s protected configuration.'; }
       catch { nodeStatus.textContent = 'Clipboard access was denied. Select and copy the one-time credential manually.'; }
     });
     nodeSecretDownload?.addEventListener('click', () => {
       const current = createdNodeConfig;
       const origin = new URL(window.location.origin);
-      const credentialParts = String(current?.credential || '').split('.');
+      const validCredential = credential => { const parts = String(credential || '').split('.'); return parts.length === 4 && parts[0] === 'v1' && parts[1] === current?.id && /^[0-9a-f]{32}$/i.test(parts[2]) && /^[0-9a-f]{32}$/i.test(parts[3]); };
       const validId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(current?.id || '');
-      if (!current || origin.protocol !== 'https:' || !validId || credentialParts.length !== 4 || credentialParts[0] !== 'v1' || credentialParts[1] !== current.id || !/^[0-9a-f]{32}$/i.test(credentialParts[2]) || !/^[0-9a-f]{32}$/i.test(credentialParts[3])) {
+      if (!current || origin.protocol !== 'https:' || !validId || !validCredential(current.reporterCredential) || !validCredential(current.executorCredential) || current.reporterCredential === current.executorCredential) {
         nodeStatus.textContent = 'The one-time server setup data is unavailable or invalid. Add the server again.';
         return;
       }
       const quote = value => JSON.stringify(value);
-      const config = `platform_origin = ${quote(origin.origin)}\nnode_id = ${quote(current.id)}\nreporter_credential = ${quote(current.credential)}\n`;
+      const config = `platform_origin = ${quote(origin.origin)}\nnode_id = ${quote(current.id)}\nreporter_credential = ${quote(current.reporterCredential)}\nexecutor_credential = ${quote(current.executorCredential)}\n`;
       const url = URL.createObjectURL(new Blob([config], { type: 'application/toml' }));
       const link = document.createElement('a'); link.href = url; link.download = `vapor-node-${current.id}.toml`; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      nodeStatus.textContent = 'Config downloaded. It contains the node secret; transfer it privately, install it as root-owned and readable only by the agent group, then delete the extra copy.';
+      nodeStatus.textContent = 'Config downloaded. It contains separate telemetry and typed-executor secrets; transfer it privately, install it as root-owned and readable only by the agent group, then delete the extra copy.';
     });
     const clearCreatedNodeSecret = () => { nodeSecretValue.textContent = ''; createdNodeConfig = null; nodeSecretPanel.hidden = true; };
     nodeSecretClose?.addEventListener('click', clearCreatedNodeSecret);
@@ -2567,8 +2601,8 @@ fn server_fleet_page_content() -> &'static str {
     concat!(
         "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<section class=\"card\"><h2>Core server actions</h2><p class=\"muted\">Typed, recorded actions for this Platform host. Restarting a service does not change its configuration. Remote-server actions will appear only after that server has an explicitly installed executor. Platform self-restart is withheld until its recovery behavior is verified.</p><div class=\"server-operation-controls\"><label>Service<select id=\"server-action-service\"><option value=\"homepage\">Homepage</option><option value=\"docs\">Docs</option><option value=\"identity\">Identity</option><option value=\"diagnostics\">Diagnostics</option><option value=\"registry\">Registry</option><option value=\"artifact\">Artifact</option><option value=\"build_cache\">Build Cache</option><option value=\"caddy\">Web gateway</option></select></label><button id=\"server-action-restart\" type=\"button\">Restart service</button><button id=\"server-action-reboot\" type=\"button\">Reboot host…</button></div><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for local server identity…</p><details><summary>Recent actions</summary><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></details></section>",
-        "<section class=\"card\"><h2>Add server installation</h2><p class=\"muted\">Register a fresh host installation to report CPU, memory, load, and uptime. A logical slot stays stable when its OS is wiped; re-enroll the replacement into that same vacant slot. Registration never provisions hardware or grants service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Install into<select id=\"server-node-slot\" name=\"slot_id\"><option value=\"\">Create a new logical slot</option></select></label><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose (descriptive)<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Enroll installation</button></form><p class=\"server-fleet-note\">Purpose is descriptive only; it does not schedule builds, backups, or other work. Operations will be explicit, typed, and recorded.</p><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time telemetry credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
+        "<section class=\"card\"><h2>Server actions</h2><p class=\"muted\">Choose a host and restart an eligible Vapor service. Each action is recorded before that host receives it. Remote actions need an installed typed executor; reboot and gateway controls remain core-host only.</p><div class=\"server-operation-controls\"><label>Server<select id=\"server-action-target\"><option value=\"\">Loading hosts…</option></select></label><label>Service<select id=\"server-action-service\"><option value=\"homepage\">Homepage</option><option value=\"docs\">Docs</option><option value=\"identity\">Identity</option><option value=\"diagnostics\">Diagnostics</option><option value=\"registry\">Registry</option><option value=\"artifact\">Artifact</option><option value=\"build_cache\">Build Cache</option><option value=\"caddy\">Web gateway</option></select></label><button id=\"server-action-restart\" type=\"button\">Restart service</button><button id=\"server-action-reboot\" type=\"button\">Reboot host…</button></div><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for server inventory…</p><details><summary>Recent actions</summary><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></details></section>",
+        "<section class=\"card\"><h2>Add server installation</h2><p class=\"muted\">Register a fresh host installation to report CPU, memory, load, and uptime. A logical slot stays stable when its OS is wiped; re-enroll the replacement into that same vacant slot. Registration never provisions hardware.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Install into<select id=\"server-node-slot\" name=\"slot_id\"><option value=\"\">Create a new logical slot</option></select></label><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose (descriptive)<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Enroll installation</button></form><p class=\"server-fleet-note\">Purpose is descriptive only; it does not schedule builds, backups, or other work. Typed operations are authored by the root operator; the separate executor credential can only claim/report actions already recorded for this installation.</p><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains one-time telemetry and typed-executor credentials.</strong> Keep it private; the credentials are separately scoped and will not be shown again after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credentials</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
         "<p class=\"muted\">The telemetry credential cannot be used for SSH, shell access, or arbitrary commands.</p>"
     )
 }
@@ -4268,16 +4302,16 @@ mod tests {
         assert!(!page.contains("Enroll a server"));
         assert!(page.contains("id=\"server-node-slot\""));
         assert!(page.contains("A logical slot stays stable when its OS is wiped"));
-        assert!(page.contains("This file contains the one-time telemetry credential."));
+        assert!(page.contains("one-time telemetry and typed-executor credentials"));
         assert!(page.contains("id=\"server-node-secret-download\""));
-        assert!(page.contains("grants service control"));
+        assert!(page.contains("separate executor credential can only claim/report actions already recorded"));
         assert!(page.contains("Registration never provisions hardware"));
         assert!(page.contains("Purpose is descriptive only"));
         assert!(page.contains("does not schedule builds, backups, or other work"));
         assert!(page.contains("id=\"server-action-restart\""));
         assert!(page.contains("id=\"server-action-reboot\""));
         assert!(page.contains("id=\"server-operation-list\""));
-        assert!(page.contains("Platform self-restart is withheld"));
+        assert!(page.contains("reboot and gateway controls remain core-host only"));
         assert!(!page.contains("<option value=\"platform\">Platform</option>"));
     }
 
@@ -4299,7 +4333,7 @@ mod tests {
         assert!(script.contains("kind: 'restart_service', service"));
         assert!(script.contains("crypto.randomUUID()"));
         assert!(script.contains("Check action history before retrying."));
-        assert!(script.contains("window.confirm(`Restart ${service}?"));
+        assert!(script.contains("window.confirm(`Restart ${service} on ${target}?"));
         assert!(script.contains("Type exactly:\\n${expected}"));
         assert!(script.contains("kind: 'reboot_host', confirmation"));
     }

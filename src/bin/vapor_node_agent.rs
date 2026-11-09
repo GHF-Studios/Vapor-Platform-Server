@@ -19,6 +19,8 @@ struct Config {
     platform_origin: String,
     node_id: String,
     reporter_credential: String,
+    #[serde(default)]
+    executor_credential: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
@@ -33,6 +35,52 @@ struct TelemetryReport {
     uptime_seconds: i64,
     load_average_1m: f64,
     agent_version: String,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteClaim {
+    operation: Option<RemoteOperation>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteOperation {
+    id: String,
+    schema_version: u32,
+    target_node_id: String,
+    action: RemoteAction,
+    expires_at_unix: i64,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum RemoteAction {
+    RestartService { service: RemoteServiceId },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RemoteServiceId {
+    Docs,
+    Homepage,
+    Identity,
+    Diagnostics,
+    Registry,
+    Artifact,
+    BuildCache,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteResult {
+    state: String,
+    detail: String,
 }
 
 #[cfg(target_os = "linux")]
@@ -76,6 +124,25 @@ async fn run() -> Result<(), String> {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| "could not create HTTPS client".to_owned())?;
+        if let Some(credential) = &config.executor_credential {
+            validate_credential(&config.node_id, credential, "executor")?;
+        }
+        if !once {
+            if let Some(executor_credential) = config.executor_credential.clone() {
+                let operation_client = client.clone();
+                let operation_origin = config.platform_origin.clone();
+                let operation_node_id = config.node_id.clone();
+                tokio::spawn(async move {
+                    poll_operations(
+                        operation_client,
+                        operation_origin,
+                        operation_node_id,
+                        executor_credential,
+                    )
+                    .await;
+                });
+            }
+        }
         let mut sampler = Sampler {
             previous_cpu: read_cpu_times(),
         };
@@ -168,9 +235,14 @@ fn validate_config(config: &Config) -> Result<(), String> {
     if uuid::Uuid::parse_str(&config.node_id).is_err() {
         return Err("node_id must be a UUID".to_owned());
     }
-    let prefix = format!("v1.{}.", config.node_id);
-    let Some(secret) = config.reporter_credential.strip_prefix(&prefix) else {
-        return Err("reporter credential does not belong to this node".to_owned());
+    validate_credential(&config.node_id, &config.reporter_credential, "reporter")
+}
+
+#[cfg(target_os = "linux")]
+fn validate_credential(node_id: &str, credential: &str, name: &str) -> Result<(), String> {
+    let prefix = format!("v1.{node_id}.");
+    let Some(secret) = credential.strip_prefix(&prefix) else {
+        return Err(format!("{name} credential does not belong to this node"));
     };
     let mut sections = secret.split('.');
     let first = sections.next().unwrap_or_default();
@@ -183,9 +255,154 @@ fn validate_config(config: &Config) -> Result<(), String> {
             .chain(second.bytes())
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err("reporter credential has an invalid format".to_owned());
+        return Err(format!("{name} credential has an invalid format"));
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn poll_operations(
+    client: reqwest::Client,
+    platform_origin: String,
+    node_id: String,
+    credential: String,
+) {
+    let endpoint = format!(
+        "{}/api/fleet/v1/nodes/{node_id}/operations/claim",
+        platform_origin.trim_end_matches('/')
+    );
+    let mut interval = tokio::time::interval(Duration::from_secs(3));
+    interval.tick().await;
+    loop {
+        interval.tick().await;
+        let response = match client
+            .get(&endpoint)
+            .bearer_auth(&credential)
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => response,
+            _ => continue,
+        };
+        let claim: RemoteClaim = match response.json().await {
+            Ok(claim) => claim,
+            Err(_) => continue,
+        };
+        let Some(operation) = claim.operation else {
+            continue;
+        };
+        if operation.target_node_id != node_id
+            || operation.schema_version != 1
+            || uuid::Uuid::parse_str(&operation.id).is_err()
+            || operation.expires_at_unix <= unix_now()
+            || operation.expires_at_unix > unix_now().saturating_add(900)
+        {
+            let _ = send_remote_result(
+                &client,
+                &platform_origin,
+                &node_id,
+                &credential,
+                &operation.id,
+                "failed",
+                "claimed operation identity or expiry is invalid",
+            )
+            .await;
+            continue;
+        }
+        let payload = serde_json::json!({
+            "schema_version": operation.schema_version,
+            "operation_id": operation.id,
+            "target_node_id": operation.target_node_id,
+            "action": operation.action,
+            "expires_at_unix": operation.expires_at_unix,
+        });
+        let helper = match execute_remote_operation(payload).await {
+            Ok(result) => result,
+            Err(_) => RemoteResult {
+                state: "outcome_unknown".to_owned(),
+                detail: "executor result was not conclusive; inspect the host before retrying".to_owned(),
+            },
+        };
+        let _ = send_remote_result(
+            &client,
+            &platform_origin,
+            &node_id,
+            &credential,
+            &operation.id,
+            &helper.state,
+            &helper.detail,
+        )
+        .await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn execute_remote_operation(payload: serde_json::Value) -> Result<RemoteResult, String> {
+    use tokio::io::AsyncWriteExt;
+    use tokio::process::Command;
+
+    let bytes = serde_json::to_vec(&payload).map_err(|_| "could not encode action")?;
+    if bytes.len() > 2048 {
+        return Err("action payload is too large".to_owned());
+    }
+    let mut child = Command::new("/usr/bin/sudo")
+        .args(["-n", "/usr/local/libexec/vapor-node-ops"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| "could not start the restricted operation helper")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(&bytes)
+            .await
+            .map_err(|_| "could not deliver the typed operation")?;
+    }
+    let output = tokio::time::timeout(Duration::from_secs(90), child.wait_with_output())
+        .await
+        .map_err(|_| "restricted operation timed out")?
+        .map_err(|_| "restricted operation could not be observed")?;
+    if !output.status.success() {
+        return Err("restricted operation helper rejected or failed the action".to_owned());
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| "restricted operation helper returned invalid output".to_owned())
+}
+
+#[cfg(target_os = "linux")]
+async fn send_remote_result(
+    client: &reqwest::Client,
+    platform_origin: &str,
+    node_id: &str,
+    credential: &str,
+    operation_id: &str,
+    state: &str,
+    detail: &str,
+) -> Result<(), String> {
+    let endpoint = format!(
+        "{}/api/fleet/v1/nodes/{node_id}/operations/{operation_id}/result",
+        platform_origin.trim_end_matches('/')
+    );
+    let response = client
+        .post(endpoint)
+        .bearer_auth(credential)
+        .json(&serde_json::json!({"state":state,"detail":detail}))
+        .send()
+        .await
+        .map_err(|_| "could not report the operation result")?;
+    if response.status().as_u16() != 204 {
+        return Err("Platform did not accept the operation result".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or_default()
 }
 
 #[cfg(target_os = "linux")]

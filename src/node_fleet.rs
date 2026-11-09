@@ -69,6 +69,7 @@ struct CreatedNode {
     status: String,
     version: i64,
     reporter_credential: String,
+    executor_credential: String,
     warning: &'static str,
 }
 
@@ -87,6 +88,8 @@ struct NodeRecord {
     last_report_received_at_unix: Option<i64>,
     sampled_at_unix: Option<i64>,
     agent_version: Option<String>,
+    executor_enabled: bool,
+    executor_online: bool,
 }
 
 #[derive(Serialize)]
@@ -145,6 +148,8 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
             role TEXT NOT NULL CHECK(role IN ('control-plane','builder','backup','general')),
             status TEXT NOT NULL CHECK(status IN ('active','revoked')),
             credential_sha256 TEXT NOT NULL,
+            executor_credential_sha256 TEXT,
+            executor_last_seen_at_unix INTEGER,
             version INTEGER NOT NULL,
             created_at_unix INTEGER NOT NULL,
             created_by_profile_id TEXT NOT NULL,
@@ -210,6 +215,25 @@ async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let has_slot_id = columns.iter().any(|row| row.get::<String, _>("name") == "slot_id");
     if !has_slot_id {
         sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN slot_id TEXT")
+            .execute(pool)
+            .await?;
+    }
+    if !columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "executor_credential_sha256")
+    {
+        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN executor_credential_sha256 TEXT")
+            .execute(pool)
+            .await?;
+    }
+    let columns = sqlx::query("PRAGMA table_info(platform_server_nodes)")
+        .fetch_all(pool)
+        .await?;
+    if !columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "executor_last_seen_at_unix")
+    {
+        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN executor_last_seen_at_unix INTEGER")
             .execute(pool)
             .await?;
     }
@@ -353,9 +377,12 @@ async fn list_nodes(State(state): State<NodeState>, headers: HeaderMap) -> Respo
     let nodes = sqlx::query(
         "SELECT id,slot_id,label,role,status,version,created_at_unix,created_by_profile_id,
                 revoked_at_unix,revoked_by_profile_id,last_report_received_at_unix,
-                sampled_at_unix,agent_version
+                sampled_at_unix,agent_version,
+                (executor_credential_sha256 IS NOT NULL) AS executor_enabled,
+                (executor_last_seen_at_unix IS NOT NULL AND executor_last_seen_at_unix>=?) AS executor_online
          FROM platform_server_nodes ORDER BY created_at_unix DESC,id DESC LIMIT 200",
     )
+    .bind(unix_now().saturating_sub(REPORT_FRESHNESS_SECONDS))
     .fetch_all(&state.pool)
     .await;
     let events = sqlx::query(
@@ -424,6 +451,12 @@ async fn create_node(
         uuid::Uuid::new_v4().simple()
     );
     let credential_sha256 = sha256_hex(credential.as_bytes());
+    let executor_credential = format!(
+        "v1.{id}.{}.{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let executor_credential_sha256 = sha256_hex(executor_credential.as_bytes());
     let now = unix_now();
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
@@ -495,14 +528,15 @@ async fn create_node(
     }
     let inserted = sqlx::query(
         "INSERT INTO platform_server_nodes
-         (id,slot_id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
-         VALUES (?,?,?,?,'active',?,1,?,?)",
+         (id,slot_id,label,role,status,credential_sha256,executor_credential_sha256,version,created_at_unix,created_by_profile_id)
+         VALUES (?,?,?,?,'active',?,?,1,?,?)",
     )
     .bind(&id)
     .bind(&slot_id)
     .bind(label)
     .bind(&request.role)
     .bind(&credential_sha256)
+    .bind(&executor_credential_sha256)
     .bind(now)
     .bind(&actor)
     .execute(&mut *transaction)
@@ -536,7 +570,8 @@ async fn create_node(
             status: "active".to_owned(),
             version: 1,
             reporter_credential: credential,
-            warning: "Copy this credential now. It is shown only once and grants telemetry reporting for this node only.",
+            executor_credential,
+            warning: "Each credential is shown once. Telemetry cannot authorize actions; the separate executor credential only claims and reports root-operator-authored typed actions for this node.",
         },
     )
 }
@@ -873,6 +908,8 @@ fn node_record(row: sqlx::sqlite::SqliteRow) -> NodeRecord {
         last_report_received_at_unix: row.get("last_report_received_at_unix"),
         sampled_at_unix: row.get("sampled_at_unix"),
         agent_version: row.get("agent_version"),
+        executor_enabled: row.get::<i64, _>("executor_enabled") != 0,
+        executor_online: row.get::<i64, _>("executor_online") != 0,
     }
 }
 
@@ -1004,6 +1041,8 @@ mod tests {
                 role TEXT NOT NULL,
                 status TEXT NOT NULL,
                 credential_sha256 TEXT NOT NULL,
+                executor_credential_sha256 TEXT,
+                executor_last_seen_at_unix INTEGER,
                 version INTEGER NOT NULL,
                 created_at_unix INTEGER NOT NULL,
                 created_by_profile_id TEXT NOT NULL,

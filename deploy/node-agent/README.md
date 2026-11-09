@@ -1,8 +1,10 @@
-# Vapor node telemetry reporter
+# Vapor node agent
 
 This standalone Linux utility sends only CPU, memory, uptime, one-minute load,
-sample time, and reporter version to an enrolled Platform node. Its credential
-cannot enroll nodes, read server data, or invoke commands.
+sample time, and reporter version to an enrolled Platform node. The optional
+separate executor credential can only claim and report already-recorded typed
+service-restart operations for this node; it cannot create operations or send
+commands.
 
 ## Obtain the tested package
 
@@ -16,12 +18,15 @@ install_dir="$(mktemp -d)"
 trap 'rm -rf -- "$install_dir"' EXIT
 tar -xzf vapor-node-agent-linux-x86_64.tar.gz -C "$install_dir"
 sudo install -o root -g root -m 0755 "$install_dir/vapor-node-agent" /usr/local/bin/vapor-node-agent
+sudo install -o root -g root -m 0755 "$install_dir/vapor-node-ops" /usr/local/libexec/vapor-node-ops
 sudo install -o root -g root -m 0644 "$install_dir/vapor-node-agent.service" /etc/systemd/system/vapor-node-agent.service
+sudo install -o root -g root -m 0440 "$install_dir/vapor-node-agent.sudoers" /etc/sudoers.d/vapor-node-agent
+sudo visudo -cf /etc/sudoers.d/vapor-node-agent
 ```
 
-The archive contains the reporter binary, this README, and the systemd unit. It
-is built for Linux x86_64. The temporary directory is unique and removed when
-the shell exits.
+The archive contains the agent, restricted helper, sudoers rule, this README,
+and the systemd unit. It is built for Linux x86_64. The temporary directory is
+unique and removed when the shell exits.
 
 ### Build locally when the CI artifact is unavailable
 
@@ -29,9 +34,12 @@ On the worker, check out this repository and build with the locked dependency
 set using its native Rust toolchain:
 
 ```sh
-cargo build --locked --release --bin vapor_node_agent
+cargo build --locked --release --bin vapor_node_agent --bin vapor_node_ops
 sudo install -o root -g root -m 0755 target/release/vapor_node_agent /usr/local/bin/vapor-node-agent
+sudo install -o root -g root -m 0755 target/release/vapor_node_ops /usr/local/libexec/vapor-node-ops
 sudo install -o root -g root -m 0644 deploy/node-agent/vapor-node-agent.service /etc/systemd/system/vapor-node-agent.service
+sudo install -o root -g root -m 0440 deploy/node-agent/vapor-node-agent.sudoers /etc/sudoers.d/vapor-node-agent
+sudo visudo -cf /etc/sudoers.d/vapor-node-agent
 ```
 
 This builds for the worker's Linux architecture. The published CI artifact is
@@ -58,12 +66,22 @@ Create `/etc/vapor/node-agent.toml` as `root:vapor-node-agent`, mode `0640`:
 platform_origin = "https://vapor.ghf-studios.site"
 node_id = "<node ID from the one-time enrollment response>"
 reporter_credential = "<one-time reporter credential>"
+executor_credential = "<one-time separate executor credential>"
 ```
 
-Use the credential only in this file. Do not put it in shell arguments, shell
-history, a unit file, or an environment variable. The reporter checks that the
-file is regular, root-owned, group-readable by its service account, and not
-readable or writable by other users.
+Use the credentials only in this file. Do not put them in shell arguments,
+shell history, a unit file, or an environment variable. The agent checks that
+the file is regular, root-owned, group-readable by its service account, and not
+readable or writable by other users. Older reporter-only configs stay
+telemetry-only when the optional executor credential is missing.
+
+The systemd service remains unprivileged. Its sudo rule permits one fixed
+root-owned helper, with no command-line arguments. The helper accepts a short,
+expiring JSON action from stdin, checks the enrolled node ID, and maps a fixed
+service ID to a fixed systemd unit. It rejects Platform, Caddy, host reboot,
+shell, unit-name, and arbitrary argument requests. The executor polls over
+outbound HTTPS every three seconds; telemetry continues independently every
+30 seconds.
 
 ## Validate and run
 

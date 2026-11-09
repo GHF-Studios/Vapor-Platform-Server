@@ -16,6 +16,8 @@ const DEFAULT_IDENTITY_AUTHZ_URL: &str =
     "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check";
 const MAX_RESULT_DETAIL_BYTES: usize = 240;
 const REBOOT_RECONCILIATION_GRACE_SECONDS: i64 = 300;
+const REMOTE_OPERATION_TTL_SECONDS: i64 = 900;
+const REMOTE_OPERATION_MAX_RUNTIME_SECONDS: i64 = 180;
 
 #[derive(Clone)]
 struct OperationsState {
@@ -32,6 +34,27 @@ struct CreateOperationRequest {
     target_node_id: String,
     action: serde_json::Value,
     confirmed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteOperationResult {
+    state: String,
+    detail: String,
+}
+
+#[derive(Serialize)]
+struct RemoteClaim {
+    operation: Option<ClaimedOperation>,
+}
+
+#[derive(Serialize)]
+struct ClaimedOperation {
+    id: String,
+    schema_version: u32,
+    target_node_id: String,
+    action: serde_json::Value,
+    expires_at_unix: i64,
 }
 
 #[derive(Serialize)]
@@ -165,9 +188,299 @@ fn router_with_state(state: OperationsState) -> Router {
             get(list_operations).post(create_operation),
         )
         .route("/api/admin/server-operations/{id}", get(get_operation))
+        .route(
+            "/api/fleet/v1/nodes/{node_id}/operations/claim",
+            get(claim_remote_operation),
+        )
+        .route(
+            "/api/fleet/v1/nodes/{node_id}/operations/{operation_id}/result",
+            axum::routing::post(report_remote_result),
+        )
         .with_state(state)
         .layer(DefaultBodyLimit::max(4096))
         .route_layer(axum::middleware::from_fn(no_store))
+}
+
+async fn claim_remote_operation(
+    State(state): State<OperationsState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+) -> Response {
+    let Some(executor_hash) = authorize_executor(&state.pool, &headers, &node_id).await else {
+        return error(StatusCode::UNAUTHORIZED, "node_executor_credential_required");
+    };
+    let now = unix_now();
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+    };
+    let still_authorized = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM platform_server_nodes
+         WHERE id=? AND status='active' AND executor_credential_sha256=?",
+    )
+    .bind(&node_id)
+    .bind(&executor_hash)
+    .fetch_one(&mut *transaction)
+    .await;
+    if !matches!(still_authorized, Ok(count) if count == 1) {
+        return error(StatusCode::UNAUTHORIZED, "node_executor_credential_required");
+    }
+    // Expire one stale queued operation per poll. This prevents a host that
+    // comes back much later from unexpectedly applying old maintenance intent.
+    if let Ok(Some(stale)) = sqlx::query(
+        "SELECT id,actor_profile_id FROM platform_server_operations
+         WHERE target_node_id=? AND state='accepted' AND created_at_unix<=?
+         ORDER BY created_at_unix,id LIMIT 1",
+    )
+    .bind(&node_id)
+    .bind(now.saturating_sub(REMOTE_OPERATION_TTL_SECONDS))
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        let stale_id: String = stale.get("id");
+        let actor: String = stale.get("actor_profile_id");
+        let detail = "expired before the host claimed the action";
+        let changed = sqlx::query(
+            "UPDATE platform_server_operations SET state='failed',version=version+1,finished_at_unix=?,result_detail=?
+             WHERE id=? AND state='accepted'",
+        )
+        .bind(now)
+        .bind(detail)
+        .bind(&stale_id)
+        .execute(&mut *transaction)
+        .await;
+        if changed.is_ok_and(|result| result.rows_affected() == 1) {
+            let _ = insert_event(
+                &mut transaction,
+                &stale_id,
+                "failed",
+                "failed",
+                &actor,
+                now,
+                Some(detail),
+            )
+            .await;
+        }
+    }
+    let row = sqlx::query(
+        "SELECT id,action_json,created_at_unix FROM platform_server_operations
+         WHERE target_node_id=? AND state='accepted' AND created_at_unix>?
+         ORDER BY created_at_unix,id LIMIT 1",
+    )
+    .bind(&node_id)
+    .bind(now.saturating_sub(REMOTE_OPERATION_TTL_SECONDS))
+    .fetch_optional(&mut *transaction)
+    .await;
+    let row = match row {
+        Ok(row) => row,
+        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+    };
+    let Some(row) = row else {
+        if transaction.commit().await.is_err() {
+            return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable");
+        }
+        return private_json(StatusCode::OK, RemoteClaim { operation: None });
+    };
+    let id: String = row.get("id");
+    let created_at: i64 = row.get("created_at_unix");
+    let action_json: String = row.get("action_json");
+    let action: serde_json::Value = match serde_json::from_str(&action_json) {
+        Ok(action) => action,
+        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "stored_server_action_invalid"),
+    };
+    let changed = sqlx::query(
+        "UPDATE platform_server_operations SET state='running',version=version+1,started_at_unix=?
+         WHERE id=? AND target_node_id=? AND state='accepted' AND version=1",
+    )
+    .bind(now)
+    .bind(&id)
+    .bind(&node_id)
+    .execute(&mut *transaction)
+    .await;
+    if !changed.is_ok_and(|result| result.rows_affected() == 1) {
+        return error(StatusCode::CONFLICT, "server_operation_claim_conflict");
+    }
+    let actor: String = match sqlx::query_scalar(
+        "SELECT actor_profile_id FROM platform_server_operations WHERE id=?",
+    )
+    .bind(&id)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(actor) => actor,
+        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+    };
+    if insert_event(
+        &mut transaction,
+        &id,
+        "started",
+        "running",
+        &actor,
+        now,
+        Some("claimed by enrolled node executor"),
+    )
+    .await
+    .is_err()
+        || transaction.commit().await.is_err()
+    {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable");
+    }
+    private_json(
+        StatusCode::OK,
+        RemoteClaim {
+            operation: Some(ClaimedOperation {
+                id,
+                schema_version: 1,
+                target_node_id: node_id,
+                action,
+                expires_at_unix: created_at.saturating_add(REMOTE_OPERATION_TTL_SECONDS),
+            }),
+        },
+    )
+}
+
+async fn report_remote_result(
+    State(state): State<OperationsState>,
+    headers: HeaderMap,
+    Path((node_id, operation_id)): Path<(String, String)>,
+    Json(result): Json<RemoteOperationResult>,
+) -> Response {
+    let Some(executor_hash) = authorize_executor(&state.pool, &headers, &node_id).await else {
+        return error(StatusCode::UNAUTHORIZED, "node_executor_credential_required");
+    };
+    if uuid::Uuid::parse_str(&operation_id).is_err() || !bounded_detail(&result.detail) {
+        return error(StatusCode::BAD_REQUEST, "invalid_remote_operation_result");
+    }
+    let (to, event) = match result.state.as_str() {
+        "succeeded" => (OperationState::Succeeded, "succeeded"),
+        "failed" => (OperationState::Failed, "failed"),
+        "outcome_unknown" => (OperationState::OutcomeUnknown, "outcome_unknown"),
+        _ => return error(StatusCode::BAD_REQUEST, "invalid_remote_operation_result"),
+    };
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+    };
+    let row = match sqlx::query(
+        "SELECT actor_profile_id FROM platform_server_operations
+         WHERE id=? AND target_node_id=? AND state='running'
+           AND EXISTS (SELECT 1 FROM platform_server_nodes
+                       WHERE id=? AND status='active' AND executor_credential_sha256=?)",
+    )
+    .bind(&operation_id)
+    .bind(&node_id)
+    .bind(&node_id)
+    .bind(&executor_hash)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return error(StatusCode::CONFLICT, "remote_operation_not_running_for_node"),
+        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+    };
+    let actor: String = row.get("actor_profile_id");
+    let now = unix_now();
+    let changed = sqlx::query(
+        "UPDATE platform_server_operations SET state=?,version=version+1,
+             finished_at_unix=?,result_detail=?
+         WHERE id=? AND target_node_id=? AND state='running'
+           AND EXISTS (SELECT 1 FROM platform_server_nodes
+                       WHERE id=? AND status='active' AND executor_credential_sha256=?)",
+    )
+    .bind(to.as_str())
+    .bind(now)
+    .bind(&result.detail)
+    .bind(&operation_id)
+    .bind(&node_id)
+    .bind(&node_id)
+    .bind(&executor_hash)
+    .execute(&mut *transaction)
+    .await;
+    match changed {
+        Ok(query_result) if query_result.rows_affected() == 1 => {
+            if insert_event(
+                &mut transaction,
+                &operation_id,
+                event,
+                to.as_str(),
+                &actor,
+                now,
+                Some(&result.detail),
+            )
+            .await
+            .is_err()
+                || transaction.commit().await.is_err()
+            {
+                return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable");
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(_) => error(StatusCode::CONFLICT, "remote_operation_result_conflict"),
+        Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+    }
+}
+
+async fn authorize_executor(pool: &SqlitePool, headers: &HeaderMap, node_id: &str) -> Option<String> {
+    let Some(credential) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return None;
+    };
+    let prefix = format!("v1.{node_id}.");
+    let Some(secret) = credential.strip_prefix(&prefix) else {
+        return None;
+    };
+    let mut parts = secret.split('.');
+    let (Some(first), Some(second), None) = (parts.next(), parts.next(), parts.next()) else {
+        return None;
+    };
+    if [first, second].iter().any(|part| {
+        part.len() != 32 || !part.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return None;
+    }
+    let candidate = sha256_hex(credential.as_bytes());
+    let stored = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT executor_credential_sha256 FROM platform_server_nodes WHERE id=? AND status='active'",
+    )
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await;
+    if !matches!(stored, Ok(Some(Some(expected))) if constant_time_eq(candidate.as_bytes(), expected.as_bytes())) {
+        return None;
+    }
+    sqlx::query(
+        "UPDATE platform_server_nodes SET executor_last_seen_at_unix=?
+         WHERE id=? AND status='active' AND executor_credential_sha256=?",
+    )
+    .bind(unix_now())
+    .bind(node_id)
+    .bind(&candidate)
+    .execute(pool)
+    .await
+    .ok()
+    .filter(|result| result.rows_affected() == 1)
+    .map(|_| candidate)
+}
+
+fn sha256_hex(value: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(value)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
+        == 0
 }
 
 pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
@@ -218,9 +531,73 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             interval.tick().await;
             let _ = reconcile_reboot_operations(&monitor_pool).await;
+            let _ = reconcile_remote_operations(&monitor_pool).await;
         }
     });
     Ok(())
+}
+
+async fn reconcile_remote_operations(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let now = unix_now();
+    let expired = sqlx::query(
+        "SELECT id,actor_profile_id FROM platform_server_operations
+         WHERE target_node_id<>? AND state='accepted' AND created_at_unix<=?
+         ORDER BY created_at_unix,id",
+    )
+    .bind(local_node_id())
+    .bind(now.saturating_sub(REMOTE_OPERATION_TTL_SECONDS))
+    .fetch_all(pool)
+    .await?;
+    let mut changed_count = 0;
+    for row in expired {
+        let id: String = row.get("id");
+        let actor: String = row.get("actor_profile_id");
+        if transition(
+            pool,
+            &id,
+            OperationState::Accepted,
+            OperationState::Failed,
+            &actor,
+            "failed",
+            now,
+            Some("expired before the host claimed the action"),
+        )
+        .await?
+        {
+            changed_count += 1;
+        }
+    }
+
+    let cutoff = now.saturating_sub(REMOTE_OPERATION_MAX_RUNTIME_SECONDS);
+    let rows = sqlx::query(
+        "SELECT id,actor_profile_id FROM platform_server_operations
+         WHERE target_node_id<>? AND state='running' AND started_at_unix<=?
+         ORDER BY started_at_unix,id",
+    )
+    .bind(local_node_id())
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?;
+    for row in rows {
+        let id: String = row.get("id");
+        let actor: String = row.get("actor_profile_id");
+        let detail = "remote executor did not report a result before the operation deadline; inspect the host before retrying";
+        if transition(
+            pool,
+            &id,
+            OperationState::Running,
+            OperationState::OutcomeUnknown,
+            &actor,
+            "outcome_unknown",
+            now,
+            Some(detail),
+        )
+        .await?
+        {
+            changed_count += 1;
+        }
+    }
+    Ok(changed_count)
 }
 
 async fn reconcile_reboot_operations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -337,17 +714,41 @@ async fn create_operation(
     if uuid::Uuid::parse_str(&request.client_request_id).is_err() {
         return error(StatusCode::BAD_REQUEST, "invalid_client_request_id");
     }
-    let target = local_node_id();
-    if request.target_node_id != target {
-        return error(
-            StatusCode::CONFLICT,
-            "typed_executor_not_installed_for_server",
-        );
+    let target = request.target_node_id.trim().to_owned();
+    let local_target = target == local_node_id();
+    if target.is_empty() || target.len() > 80 {
+        return error(StatusCode::BAD_REQUEST, "invalid_server_target");
+    }
+    if !local_target {
+        if uuid::Uuid::parse_str(&target).is_err() {
+            return error(StatusCode::BAD_REQUEST, "invalid_server_target");
+        }
+        let executor_online = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM platform_server_nodes
+             WHERE id=? AND status='active' AND executor_credential_sha256 IS NOT NULL
+               AND executor_last_seen_at_unix>=?",
+        )
+        .bind(&target)
+        .bind(unix_now().saturating_sub(90))
+        .fetch_one(&state.pool)
+        .await;
+        if !matches!(executor_online, Ok(count) if count == 1) {
+            return error(
+                StatusCode::CONFLICT,
+                "typed_executor_not_online_for_server",
+            );
+        }
     }
     let action = match ServerAction::parse_json(&request.action) {
         Ok(action) => action,
         Err(_) => return error(StatusCode::BAD_REQUEST, "unsupported_server_action"),
     };
+    if !local_target && !remote_action_allowed(&action) {
+        return error(
+            StatusCode::NOT_IMPLEMENTED,
+            "server_action_not_available_for_remote_host",
+        );
+    }
     match &action {
         ServerAction::RestartService {
             service: ServiceId::Platform,
@@ -464,6 +865,10 @@ async fn create_operation(
         (id, actor.clone())
     };
 
+    if !local_target {
+        return operation_response(&state.pool, &operation_id, StatusCode::ACCEPTED).await;
+    }
+
     let running = transition(
         &state.pool,
         &operation_id,
@@ -550,6 +955,21 @@ async fn create_operation(
         }
     }
     operation_response(&state.pool, &operation_id, StatusCode::OK).await
+}
+
+fn remote_action_allowed(action: &ServerAction) -> bool {
+    matches!(
+        action,
+        ServerAction::RestartService {
+            service: ServiceId::Homepage
+                | ServiceId::Docs
+                | ServiceId::Identity
+                | ServiceId::Diagnostics
+                | ServiceId::Registry
+                | ServiceId::Artifact
+                | ServiceId::BuildCache
+        }
+    )
 }
 
 async fn list_operations(State(state): State<OperationsState>, headers: HeaderMap) -> Response {
@@ -872,6 +1292,7 @@ mod tests {
     };
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
     use sqlx::sqlite::SqlitePoolOptions;
     use tower::ServiceExt;
 
@@ -901,6 +1322,28 @@ mod tests {
             Some(OutcomeUnknown)
         );
         assert!(super::reboot_resolution(Some("boot-a"), Some("boot-a"), Some(10), 20).is_none());
+    }
+
+    #[test]
+    fn remote_executor_only_accepts_non_control_plane_service_restarts() {
+        use crate::server_operation_schema::{ServerAction, ServiceId};
+        for service in [
+            ServiceId::Homepage,
+            ServiceId::Docs,
+            ServiceId::Identity,
+            ServiceId::Diagnostics,
+            ServiceId::Registry,
+            ServiceId::Artifact,
+            ServiceId::BuildCache,
+        ] {
+            assert!(super::remote_action_allowed(&ServerAction::RestartService { service }));
+        }
+        for service in [ServiceId::Platform, ServiceId::Caddy] {
+            assert!(!super::remote_action_allowed(&ServerAction::RestartService { service }));
+        }
+        assert!(!super::remote_action_allowed(&ServerAction::RebootHost {
+            confirmation: "REBOOT node".to_owned()
+        }));
     }
 
     #[tokio::test]
@@ -959,6 +1402,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn abandoned_remote_action_becomes_unknown_without_being_replayed() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        initialize_pool(&pool).await.unwrap();
+        let started = super::unix_now().saturating_sub(181);
+        sqlx::query(
+            "INSERT INTO platform_server_operations
+             (id,schema_version,client_request_id,target_node_id,action_json,state,version,actor_profile_id,created_at_unix,started_at_unix)
+             VALUES ('44444444-4444-4444-8444-444444444444',1,'55555555-5555-4555-8555-555555555555','66666666-6666-4666-8666-666666666666','{}','running',2,'owner',?,?)",
+        )
+        .bind(started)
+        .bind(started)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(super::reconcile_remote_operations(&pool).await.unwrap(), 1);
+        assert_eq!(super::reconcile_remote_operations(&pool).await.unwrap(), 0);
+        let state: String = sqlx::query_scalar(
+            "SELECT state FROM platform_server_operations WHERE id='44444444-4444-4444-8444-444444444444'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state, "outcome_unknown");
+        let expired_at = super::unix_now().saturating_sub(901);
+        sqlx::query(
+            "INSERT INTO platform_server_operations
+             (id,schema_version,client_request_id,target_node_id,action_json,state,version,actor_profile_id,created_at_unix)
+             VALUES ('77777777-7777-4777-8777-777777777777',1,'88888888-8888-4888-8888-888888888888','66666666-6666-4666-8666-666666666666','{}','accepted',1,'owner',?)",
+        )
+        .bind(expired_at)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(super::reconcile_remote_operations(&pool).await.unwrap(), 1);
+        let expired_state: String = sqlx::query_scalar(
+            "SELECT state FROM platform_server_operations WHERE id='77777777-7777-4777-8777-777777777777'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(expired_state, "failed");
+    }
+
+    #[tokio::test]
     async fn operation_endpoints_require_a_root_session_before_reading_state() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -982,5 +1474,157 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn remote_agent_claims_its_owner_recorded_action_once_with_executor_credential_only() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        initialize_pool(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE platform_server_nodes (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                credential_sha256 TEXT NOT NULL,
+                executor_credential_sha256 TEXT,
+                executor_last_seen_at_unix INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let node_id = "11111111-1111-4111-8111-111111111111";
+        let operation_id = "22222222-2222-4222-8222-222222222222";
+        let reporter = format!("v1.{node_id}.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        let executor = format!("v1.{node_id}.cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd");
+        let hash = |value: &str| {
+            use sha2::{Digest, Sha256};
+            Sha256::digest(value.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        sqlx::query(
+            "INSERT INTO platform_server_nodes (id,status,credential_sha256,executor_credential_sha256) VALUES (?,?,?,?)",
+        )
+        .bind(node_id)
+        .bind("active")
+        .bind(hash(&reporter))
+        .bind(hash(&executor))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO platform_server_operations
+             (id,schema_version,client_request_id,target_node_id,action_json,state,version,actor_profile_id,created_at_unix)
+             VALUES (?,1,?,?,?,'accepted',1,'owner-profile',?)",
+        )
+        .bind(operation_id)
+        .bind("33333333-3333-4333-8333-333333333333")
+        .bind(node_id)
+        .bind(r#"{"kind":"restart_service","service":"docs"}"#)
+        .bind(super::unix_now())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let app = router_with_state(OperationsState {
+            pool: pool.clone(),
+            authz_endpoint: "http://127.0.0.1:9/authz".to_owned(),
+            service_token: None,
+            client: reqwest::Client::new(),
+        });
+        let claim = |credential: &str| {
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/fleet/v1/nodes/{node_id}/operations/claim"))
+                .header("authorization", format!("Bearer {credential}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let reporter_response = app.clone().oneshot(claim(&reporter)).await.unwrap();
+        assert_eq!(reporter_response.status(), StatusCode::UNAUTHORIZED);
+        let wrong_node_id = "99999999-9999-4999-8999-999999999999";
+        let wrong_node = Request::builder()
+            .method("GET")
+            .uri(format!("/api/fleet/v1/nodes/{wrong_node_id}/operations/claim"))
+            .header("authorization", format!("Bearer {executor}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(wrong_node).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let first = app.clone().oneshot(claim(&executor)).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_json: serde_json::Value = serde_json::from_slice(
+            &first.into_body().collect().await.unwrap().to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(first_json["operation"]["id"], operation_id);
+        assert_eq!(first_json["operation"]["schema_version"], 1);
+        let state: String = sqlx::query_scalar(
+            "SELECT state FROM platform_server_operations WHERE id=?",
+        )
+        .bind(operation_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state, "running");
+
+        let second = app.clone().oneshot(claim(&executor)).await.unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_json: serde_json::Value = serde_json::from_slice(
+            &second.into_body().collect().await.unwrap().to_bytes(),
+        )
+        .unwrap();
+        assert!(second_json["operation"].is_null());
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM platform_server_operation_events WHERE operation_id=? AND event='started'",
+        )
+        .bind(operation_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(event_count, 1);
+
+        let report_result = |credential: &str| {
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/fleet/v1/nodes/{node_id}/operations/{operation_id}/result"))
+                .header("authorization", format!("Bearer {credential}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"state":"succeeded","detail":"service restarted"}"#))
+                .unwrap()
+        };
+        let reporter_result = app
+            .clone()
+            .oneshot(report_result(&reporter))
+            .await
+            .unwrap();
+        assert_eq!(reporter_result.status(), StatusCode::UNAUTHORIZED);
+        let executor_result = app
+            .clone()
+            .oneshot(report_result(&executor))
+            .await
+            .unwrap();
+        assert_eq!(executor_result.status(), StatusCode::NO_CONTENT);
+        let duplicate_result = app
+            .clone()
+            .oneshot(report_result(&executor))
+            .await
+            .unwrap();
+        assert_eq!(duplicate_result.status(), StatusCode::CONFLICT);
+        sqlx::query("UPDATE platform_server_nodes SET status='revoked' WHERE id=?")
+            .bind(node_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let revoked_claim = app.oneshot(claim(&executor)).await.unwrap();
+        assert_eq!(revoked_claim.status(), StatusCode::UNAUTHORIZED);
     }
 }

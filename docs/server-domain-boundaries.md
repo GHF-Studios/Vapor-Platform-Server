@@ -90,11 +90,12 @@ hosts. It samples the current Platform host's CPU, memory, load, and uptime on
 a background interval and serves a cached snapshot through a root-authorized
 API. Additional nodes can be explicitly enrolled and report bounded telemetry
 through the Linux node agent; Platform stores a digest of each telemetry-only
-credential and keeps the last validated sample. This is intentionally distinct
-from Hosting, which reports service processes. The fleet still has no remote
-operation channel: the web dashboard must not turn into SSH polling or an
-arbitrary-command surface. Until a second host is enrolled and reports, the
-live fleet remains the Platform host alone.
+credential and keeps the last validated sample. A separate executor credential
+allows an online node agent to claim only owner-authored, expiring typed
+service-restart operations and report their results. It cannot create actions
+or carry shell text. This is intentionally distinct from Hosting, which reports
+service processes. Until a second host is enrolled and its executor checks in,
+the live fleet remains the Platform host alone.
 
 The public site, signed-in personal dashboard, authorized Project workspaces,
 and private Platform operator shell are separate audience scopes. The admin

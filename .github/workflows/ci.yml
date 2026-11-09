@@ -37,8 +37,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build the worker reporter
-        run: cargo build --locked --release --bin vapor_node_agent
+      - name: Build the worker agent and restricted operation helper
+        run: cargo build --locked --release --bin vapor_node_agent --bin vapor_node_ops
 
       - name: Assemble checksummed install package
         shell: bash
@@ -47,7 +47,9 @@ jobs:
           package_dir="${RUNNER_TEMP}/vapor-node-agent-package"
           mkdir -p "${package_dir}" dist
           install -m 0755 target/release/vapor_node_agent "${package_dir}/vapor-node-agent"
+          install -m 0755 target/release/vapor_node_ops "${package_dir}/vapor-node-ops"
           install -m 0644 deploy/node-agent/vapor-node-agent.service "${package_dir}/vapor-node-agent.service"
+          install -m 0644 deploy/node-agent/vapor-node-agent.sudoers "${package_dir}/vapor-node-agent.sudoers"
           install -m 0644 deploy/node-agent/README.md "${package_dir}/README.md"
           archive="dist/vapor-node-agent-linux-x86_64.tar.gz"
           tar -C "${package_dir}" -czf "${archive}" .
