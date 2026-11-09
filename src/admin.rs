@@ -4125,7 +4125,10 @@ mod tests {
         assert!(nav.contains("Infrastructure"));
         assert!(page.contains("id=\"server-fleet-list\""));
         assert!(page.contains("id=\"server-fleet-refresh\""));
-        assert!(page.contains("Currently reporting: the Platform host only"));
+        assert!(page.contains("Enroll a server"));
+        assert!(page.contains("Create enrollment"));
+        assert!(page.contains("one-time reporter credential"));
+        assert!(page.contains("no shell access or service control"));
     }
 
     #[test]
