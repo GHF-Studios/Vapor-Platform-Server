@@ -127,6 +127,10 @@ fn decode_and_validate(token: &str, jwk: &Jwk) -> Result<GithubActionsClaims, ()
 }
 
 fn validate_claims(claims: &GithubActionsClaims, now: i64) -> Result<(), ()> {
+    // `workflow_ref` pins the authorized workflow path and ref. The run's
+    // `sha` separately binds the request to the deployed source revision;
+    // GitHub's `workflow_sha` can legitimately refer to an older workflow
+    // definition revision, so it must not be equated with the run's `sha`.
     if claims.repository != EXPECTED_REPOSITORY
         || claims.repository_id != EXPECTED_REPOSITORY_ID
         || claims.repository_owner_id != EXPECTED_OWNER_ID

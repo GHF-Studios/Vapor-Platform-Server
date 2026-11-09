@@ -50,7 +50,12 @@ class DeploymentScopeTests(unittest.TestCase):
     def test_explicit_platform_server_sources_select_platform_target(self) -> None:
         self.assertEqual(
             SCOPE.classify_changed_paths(
-                ["src/main.rs", "src/admin.rs", "src/deploy_requests.rs"]
+                [
+                    "src/main.rs",
+                    "src/admin.rs",
+                    "src/deploy_requests.rs",
+                    "src/github_oidc.rs",
+                ]
             ),
             "platform",
         )

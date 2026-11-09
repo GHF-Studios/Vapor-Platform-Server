@@ -37,6 +37,7 @@ PLATFORM_SERVER_SOURCES = {
     "src/admin_gateway.rs",
     "src/deploy_request_schema.rs",
     "src/deploy_requests.rs",
+    "src/github_oidc.rs",
     "src/emergency_console.rs",
     "src/operation_history.rs",
     "src/pagination.rs",
