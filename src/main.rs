@@ -4,6 +4,7 @@ mod admin_gateway;
 mod deploy_request_schema;
 mod deploy_requests;
 mod emergency_console;
+mod github_oidc;
 mod operation_history;
 mod pagination;
 mod platform_ops_client;

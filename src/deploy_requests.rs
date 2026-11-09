@@ -49,14 +49,14 @@ struct DeployRequestState {
     public_origin: String,
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct SubmodulePin {
     path: String,
     commit: String,
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct CreateDeployRequest {
     server_mode: String,
@@ -250,14 +250,37 @@ async fn create_request(
     Json(request): Json<CreateDeployRequest>,
 ) -> Response {
     let Some(token) = bearer_token(&headers) else {
-        return (StatusCode::UNAUTHORIZED, "request credential required\n").into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            "GitHub Actions identity token required\n",
+        )
+            .into_response();
     };
-    let credential = match verify_request_credential(token).await {
-        Ok(credential) => credential,
-        Err(response) => return response,
+    let claims = match crate::github_oidc::verify_deploy_request_token(&state.client, token).await {
+        Ok(claims) => claims,
+        Err(status) => {
+            return (
+                status,
+                "valid GitHub Actions deploy-workflow identity required\n",
+            )
+                .into_response()
+        }
     };
     if let Err(message) = validate_request(&request) {
         return (StatusCode::BAD_REQUEST, message).into_response();
+    }
+    if !crate::github_oidc::matches_deploy_request(
+        &claims,
+        &request.repository,
+        &request.branch,
+        &request.commit,
+        &request.workflow_url,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "request metadata does not match the signed GitHub Actions run\n",
+        )
+            .into_response();
     }
     if expire_requests(&state.pool, unix_now()).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -271,6 +294,12 @@ async fn create_request(
     let now = unix_now();
     let expires_at = now + REQUEST_TTL_SECONDS;
     let submodules = serde_json::to_string(&request.submodules).unwrap_or_default();
+    let workflow_run_key = format!("{}:{}", claims.run_id, claims.run_attempt);
+    match request_for_workflow_run(&state.pool, &workflow_run_key).await {
+        Ok(Some(existing)) => return existing_workflow_run_response(existing, &request),
+        Ok(None) => {}
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
     match active_request_for_commit(&state.pool, &request.commit).await {
         Ok(Some(existing)) => return existing_request_response(existing, &request),
         Ok(None) => {}
@@ -280,18 +309,21 @@ async fn create_request(
     let result = sqlx::query(
         "INSERT INTO platform_deploy_requests
          (id, body_hash, request_json, repository, branch, commit_hash, tree_hash, submodules_json,
-          workflow_url, summary, requester_credential_id, requester_profile_id, status, version, created_at_unix, expires_at_unix)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?)",
+          workflow_url, summary, requester_credential_id, requester_profile_id, github_workflow_run_key, status, version, created_at_unix, expires_at_unix)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?)",
     )
     .bind(&id).bind(body_hash).bind(request_json).bind(&request.repository).bind(&request.branch)
     .bind(&request.commit).bind(&request.tree).bind(submodules).bind(&request.workflow_url)
-    .bind(&request.summary).bind(credential.credential_id).bind(credential.actor_profile_id).bind(now).bind(expires_at)
+    .bind(&request.summary).bind("github-actions:GHF-Studios/Vapor-Platform-Server").bind("github-actions:GHF-Studios/Vapor-Platform-Server").bind(&workflow_run_key).bind(now).bind(expires_at)
     .execute(&state.pool).await;
     if result.is_err() {
         match active_request_for_commit(&state.pool, &request.commit).await {
             Ok(Some(existing)) => return existing_request_response(existing, &request),
             Ok(None) => {}
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        }
+        if let Ok(Some(existing)) = request_for_workflow_run(&state.pool, &workflow_run_key).await {
+            return existing_workflow_run_response(existing, &request);
         }
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -305,6 +337,45 @@ async fn create_request(
         }),
     )
         .into_response()
+}
+
+fn existing_workflow_run_response(
+    existing: ActiveRequest,
+    incoming: &CreateDeployRequest,
+) -> Response {
+    if serde_json::from_str::<CreateDeployRequest>(&existing.request_json)
+        .is_ok_and(|stored| stored == *incoming)
+    {
+        (StatusCode::ACCEPTED, Json(existing.created)).into_response()
+    } else {
+        (
+            StatusCode::CONFLICT,
+            "this GitHub Actions run attempt already submitted a different deployment request\n",
+        )
+            .into_response()
+    }
+}
+
+async fn request_for_workflow_run(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Option<ActiveRequest>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT id, status, version, expires_at_unix, request_json FROM platform_deploy_requests
+         WHERE github_workflow_run_key = ? LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| ActiveRequest {
+        created: CreatedRequest {
+            id: row.get("id"),
+            status: row.get("status"),
+            version: row.get("version"),
+            expires_at_unix: row.get("expires_at_unix"),
+        },
+        request_json: row.get("request_json"),
+    }))
 }
 
 async fn active_request_for_commit(
@@ -403,13 +474,15 @@ async fn list_requests(
             Some(DeployRequestSummary {
                 id: row.get("id"),
                 requester_profile_id: row.get("requester_profile_id"),
-                requester_kind: if row
+                requester_kind: match row
                     .get::<Option<String>, _>("requester_credential_id")
-                    .is_some()
+                    .as_deref()
                 {
-                    "request credential".to_owned()
-                } else {
-                    "interactive session".to_owned()
+                    Some(value) if value.starts_with("github-actions:") => {
+                        "GitHub Actions workflow".to_owned()
+                    }
+                    Some(_) => "request credential".to_owned(),
+                    None => "interactive session".to_owned(),
                 },
                 repository: row.get("repository"),
                 branch: row.get("branch"),
@@ -1609,7 +1682,9 @@ mod dispatch_tests {
         assert!(has_earlier_open_request(&pool, "newer", 100).await.unwrap());
         assert!(!has_earlier_open_request(&pool, "older", 100).await.unwrap());
         sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='older'")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(!has_earlier_open_request(&pool, "newer", 100).await.unwrap());
     }
 }

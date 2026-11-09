@@ -8,9 +8,16 @@ VPS and never approves or starts a deployment.
 
 1. CI validates the Platform repository and every pinned root-level service
    submodule.
-2. The request workflow submits the full root commit, tree, pinned submodule
-   revisions, CI run URL, and resolved deployment target to Platform using an
-   Identity credential scoped only to `platform:deploy-request:create`.
+2. After the composed CI workflow succeeds, the request job obtains a short-lived
+   GitHub Actions OIDC token and submits the full root commit, tree, pinned
+   submodule revisions, CI run URL, and resolved deployment target to Platform.
+   Platform verifies the token signature against GitHub's published signing
+   keys, requires the exact Platform repository identity, `main` deployment
+   workflow and audience, and binds the request to the signed commit and run.
+   The workflow run/attempt pair is idempotent, so replaying one token cannot
+   create another request. Signing keys are cached briefly; unknown key IDs
+   trigger a bounded refresh to handle key rotation without allowing request
+   traffic to cause an outbound fetch per token.
 3. A root operator reviews the exact source and deployment target in
    `/admin/operations` and approves or rejects it. Legacy requests without a
    recorded target cannot be approved; submit a fresh CI request instead.
@@ -48,19 +55,16 @@ the same Operations dashboard; CI credentials cannot request or grant SSH.
 
 ## GitHub configuration
 
-On `GHF-Studios/Vapor-Platform-Server`, configure:
+The deploy-request job grants itself only `contents: read` and `id-token: write`.
+The OIDC permission is available only to that job, is audience-bound to
+`vapor-platform-deploy-request`, and does not grant repository write access or
+VPS access. No long-lived deploy-request secret is required. If Platform cannot
+verify the token or accept the request, the job fails visibly; it never reports
+success after silently skipping request creation.
 
-- Secret `VAPOR_DEPLOY_REQUEST_TOKEN`: an Identity credential with only
-  **Create Platform deploy requests** selected.
-- Variable `VAPOR_DEPLOY_PUBLIC_BASE`: `https://vapor.ghf-studios.site`, with
-  no trailing slash.
-
-If either value is absent, CI reports that it skipped request creation. It
-does not fall back to SSH, auto-deploy, or any unapproved deployment path.
-
-The request-verification service token and root-session introspection
-credentials remain in root-readable VPS env files. They are separate from the
-GitHub request credential and are never uploaded to Actions.
+The Identity request-verification service token and root-session introspection
+credentials remain in root-readable VPS env files. They are unrelated to the
+GitHub OIDC request proof and are never uploaded to Actions.
 
 ## First install and migration
 

@@ -23,6 +23,7 @@ vapor_homepage_server = { path = "Vapor-Homepage-Server" }
 vapor_identity_server = { path = "Vapor-Identity-Server" }
 vapor_registry_server = { path = "Vapor-Registry-Server" }
 uuid = { version = "1", features = ["v4"] }
+jsonwebtoken = "9.3.1"
 
 [dev-dependencies]
 http-body-util = "0.1"

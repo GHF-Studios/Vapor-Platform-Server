@@ -4,9 +4,11 @@
 
 1. A push to `main` runs the composed CI workflow, including every root-level
    service submodule at the gitlink pinned by that root commit.
-2. After CI succeeds, GitHub Actions submits the full root commit, root tree,
-   every submodule commit, and its workflow URL using a request-only Identity
-   credential. CI has no VPS SSH access and cannot approve or execute deploys.
+2. After CI succeeds, the deployment job submits the full root commit, root
+   tree, every submodule commit, and its workflow URL using a short-lived
+   GitHub Actions OIDC token. Platform verifies the signed issuer, audience,
+   repository, `main` ref, exact workflow, commit, and run. CI has no VPS SSH
+   access and cannot approve or execute deploys.
 3. A root operator opens `/admin/operations`, reviews the exact commit/tree and
    expandable submodule pins, and explicitly approves or rejects the ticket.
 4. Root approval immediately requests a request-specific systemd unit. The
@@ -33,22 +35,19 @@ sudo deploy/scripts/deploy.sh --bootstrap
 Bootstrap is refused when `/opt/vapor-platform-server` already contains a
 checkout or other files. It is not used for updates.
 
-## Enable CI ticket creation
+## CI ticket identity
 
-1. In the Identity dashboard at `/admin/identity`, create an automation
-   credential with only **Create Platform deploy requests** selected. Copy the
-   one-time secret when Identity shows it.
-2. Add that value to the Platform repository's GitHub Actions secrets as
-   `VAPOR_DEPLOY_REQUEST_TOKEN`.
-3. Add the public base URL (for example `https://vapor.ghf-studios.site`) as the
-   repository variable `VAPOR_DEPLOY_PUBLIC_BASE`, without a trailing slash.
-4. Keep the server-local Identity-to-Platform verification token in the
-   protected `/etc/vapor-server/identity.env` and `platform.env` files. The
-   bootstrap/authorization script provisions matching, distinct service
-   credentials; they are not the GitHub request credential.
+The deploy-request job alone receives GitHub's `id-token: write` permission.
+It requests an audience-specific token at submission time. There is no
+long-lived Actions secret and no setup step in Identity. Platform stores the
+verified workflow run and attempt as the request's automation identity, and
+rejects a body whose repository, branch, commit, or workflow URL differs from
+the signed claims. Failure to verify or submit fails the Actions job visibly;
+CI cannot silently succeed without creating or idempotently returning a ticket.
 
-If either GitHub setting is absent, composed CI still runs and reports that it
-skipped ticket creation. It does not fall back to SSH or a direct deploy.
+The public Platform base URL is currently fixed by the workflow. Keep the
+server-local Identity-to-Platform verification and root-session introspection
+tokens in protected `/etc/vapor-server` files; they are not sent to Actions.
 
 ## Platform API
 
@@ -56,7 +55,7 @@ All responses from the request API are `Cache-Control: no-store`.
 
 | Route | Authority | Purpose |
 | --- | --- | --- |
-| `POST /api/admin/deploy-requests` | Identity credential scoped to `platform:deploy-request:create` | Create or idempotently return the active ticket for a commit |
+| `POST /api/admin/deploy-requests` | GitHub Actions OIDC token for the exact Platform `main` deployment workflow | Create or return the ticket for that authenticated workflow run/attempt |
 | `GET /api/admin/deploy-requests?limit=50&cursor=…` | Root browser session, or a request credential | Returns `{ items, next_cursor }`; root sees the queue, while a request credential sees only tickets created by that credential. Page size is 1–200; omit `cursor` for the first page and follow the returned cursor for older records. |
 | `POST /api/admin/deploy-requests/{id}/approve` | Root browser session, same-origin, explicit confirmation, expected version | Approve one pending ticket |
 | `POST /api/admin/deploy-requests/{id}/reject` | Root browser session, same-origin, explicit confirmation, expected version | Reject one pending ticket |
@@ -68,8 +67,9 @@ The create payload is a strict DTO containing only repository, branch, full
 commit and tree hashes, all configured submodule pins, a GitHub Actions run URL,
 and a short summary. The server fixes the allowed repository, branch, and
 submodule path set. Unknown fields, incomplete pins, and untrusted workflow URLs
-are rejected. Repeated CI submission for a commit with an active ticket returns
-that ticket instead of creating duplicates.
+are rejected. Repeated submission for one authenticated workflow run/attempt
+returns its original ticket. A different successful run for a commit with an
+active ticket returns that active ticket instead of creating duplicates.
 
 ## Temporary SSH access
 

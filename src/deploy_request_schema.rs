@@ -10,6 +10,10 @@ pub(crate) async fn ensure_dispatch_columns(pool: &SqlitePool) -> Result<(), sql
     ensure_column(pool, "dispatch_attempts", "INTEGER NOT NULL DEFAULT 0").await?;
     ensure_column(pool, "dispatch_attempted_at_unix", "INTEGER").await?;
     ensure_column(pool, "dispatch_detail", "TEXT").await?;
+    ensure_column(pool, "github_workflow_run_key", "TEXT").await?;
+    sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_deploy_requests_github_run ON platform_deploy_requests(github_workflow_run_key) WHERE github_workflow_run_key IS NOT NULL")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -108,6 +112,7 @@ mod tests {
             "dispatch_attempts",
             "dispatch_attempted_at_unix",
             "dispatch_detail",
+            "github_workflow_run_key",
         ] {
             assert!(columns
                 .iter()
@@ -120,5 +125,26 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn one_github_workflow_attempt_cannot_create_multiple_tickets() {
+        let pool = pre_dispatch_schema().await;
+        ensure_dispatch_columns(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO platform_deploy_requests (id, status, version, github_workflow_run_key)
+             VALUES ('request-2', 'pending', 1, '123:1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let duplicate = sqlx::query(
+            "INSERT INTO platform_deploy_requests (id, status, version, github_workflow_run_key)
+             VALUES ('request-3', 'pending', 1, '123:1')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(duplicate.is_err());
     }
 }
