@@ -16,7 +16,10 @@ function global:New-ScheduledTaskPrincipal {
     param([string]$UserId, [string]$LogonType, [string]$RunLevel)
     [pscustomobject]@{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel }
 }
-function global:New-ScheduledTaskSettingsSet { [pscustomobject]@{ Settings = 'fixture' } }
+function global:New-ScheduledTaskSettingsSet {
+    param([timespan]$ExecutionTimeLimit)
+    [pscustomobject]@{ Settings = 'fixture'; ExecutionTimeLimit = $ExecutionTimeLimit }
+}
 function global:New-ScheduledTaskTrigger {
     param([switch]$Daily, [string]$At, [switch]$AtLogOn, [string]$User)
     [pscustomobject]@{ Daily = $Daily; At = $At; AtLogOn = $AtLogOn; User = $User; Repetition = $null }
@@ -25,7 +28,7 @@ function global:Get-CimClass { [pscustomobject]@{ ClassName = 'fixture' } }
 function global:New-CimInstance { [pscustomobject]@{ Interval = 'PT1H' } }
 function global:Register-ScheduledTask {
     param($TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force)
-    $global:VaporUsbTestRegisteredTask = [pscustomobject]@{ Name = $TaskName; Action = $Action }
+    $global:VaporUsbTestRegisteredTask = [pscustomobject]@{ Name = $TaskName; Action = $Action; Settings = $Settings }
 }
 
 try {
@@ -51,6 +54,9 @@ try {
     }
     if ($arguments -notmatch [regex]::Escape($repoRoot)) {
         throw 'The task did not preserve the configured recovery source path.'
+    }
+    if ($global:VaporUsbTestRegisteredTask.Settings.ExecutionTimeLimit -ne [timespan]::FromMinutes(20)) {
+        throw 'The task does not have a bounded execution time.'
     }
 
     & $installer -Server 'fixture.example' -SshKey $keyPath -UsbPath 'E:\VaporRecovery' `

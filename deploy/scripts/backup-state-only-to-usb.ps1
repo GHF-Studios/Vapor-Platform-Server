@@ -70,7 +70,15 @@ Assert-NoReparsePathComponents $incoming
 New-Item -ItemType Directory -Path $incoming -Force | Out-Null
 Assert-NoReparsePathComponents $incoming
 
-$sshOptions = @('-i', $keyPath, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10')
+$sshOptions = @(
+    '-i', $keyPath,
+    '-o', 'BatchMode=yes',
+    '-o', 'StrictHostKeyChecking=yes',
+    '-o', 'ConnectTimeout=10',
+    '-o', 'TCPKeepAlive=yes',
+    '-o', 'ServerAliveInterval=10',
+    '-o', 'ServerAliveCountMax=3'
+)
 $latestText = & $ssh @sshOptions $target "cat $remoteRoot/latest.json"
 if ($LASTEXITCODE -ne 0) { throw 'Could not read the state-only latest pointer from the VPS.' }
 $indexText = & $ssh @sshOptions $target "cat $remoteRoot/index.json"

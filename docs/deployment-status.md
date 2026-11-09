@@ -1,5 +1,24 @@
 # Vapor server deployment status
 
+## Recovery sync checkpoint (2026-11-09 15:21 UTC)
+
+- Exported a fresh state-only generation from the live Platform revision
+  `42b9ac5d71a97a8756986a7b86ddc51328816187` and copied it to the owner USB.
+  The archive, latest pointer, and recovery-kit pointer agree on the archive
+  name and SHA-256; the recovery bundle validator passed. The USB now has 24
+  verified generations totaling 115,237,899 bytes, and Platform accepted the
+  owner sync report.
+- Re-ran the installed hourly sync through Task Scheduler. It completed with
+  result `0` in under six seconds and returned to `Ready`. The previous
+  long-running attempt was not reproducible; no root cause for that one stall
+  is claimed.
+- Bounded future task runs to 20 minutes and enabled SSH transport keepalives
+  so a dead or idle SSH connection cannot leave the hourly task monopolized
+  indefinitely. The updated task registration and local sync both completed
+  successfully. This protects the USB sync path; a clean-host restore drill
+  is still the separate proof needed for full recovery confidence.
+- Root SSH access worked. No new access request was needed.
+
 ## USB task verification (2026-11-09 11:39 UTC)
 
 - Ran the installed `Vapor USB Recovery Sync` scheduled task end-to-end. It

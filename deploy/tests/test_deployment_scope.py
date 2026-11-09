@@ -40,6 +40,7 @@ class DeploymentScopeTests(unittest.TestCase):
                     "deploy/scripts/recover-state-only-host.sh",
                     "deploy/scripts/recover-fresh-host.sh",
                     "deploy/scripts/backup-state-only-to-usb.ps1",
+                    "deploy/scripts/install-usb-backup-task.ps1",
                     "deploy/scripts/test.sh",
                     "deploy/tests/test_state_only_fresh_host_contract.py",
                 ]

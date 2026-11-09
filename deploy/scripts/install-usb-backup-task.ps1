@@ -113,7 +113,7 @@ $action = New-ScheduledTaskAction -Execute $powershellExe -Argument $arguments
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 $triggers = New-VaporUsbRecoveryTriggers -User $user
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -StartWhenAvailable `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 
 Register-ScheduledTask -TaskName $TaskName -Action $action `
