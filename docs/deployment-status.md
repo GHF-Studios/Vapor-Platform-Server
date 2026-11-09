@@ -1,6 +1,6 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-09 01:25 UTC)
+## Current verified state (2026-11-09 01:47 UTC)
 
 - The repaired state-only USB sync completed successfully at
   `2026-11-09T01:22:54Z`, then a fresh-destination USB run completed at
@@ -20,9 +20,10 @@
   `78722c2641b42bfdf493d45b6b92461dccd3e87f` for Platform and all eight service
   targets. Platform reports the deployment succeeded. Platform, Homepage,
   Docs, Identity, Diagnostics, Registry, Artifact, Build Cache, and Caddy were
-  all active during the latest check. The three old failed systemd deployment
-  units were reset after their outcomes were confirmed in Platform history;
-  the history records remain intact.
+  all active during the latest check; `systemctl --failed` returned no failed
+  units. The three old failed systemd deployment units were reset after their
+  outcomes were confirmed in Platform history; the history records remain
+  intact.
 - Public `/`, `/downloads`, `/docs/`, `/login`, `/dashboard`, and
   `/operator/login` return HTTP 200. All 29 same-origin links in the Docs index
   resolved successfully. Unauthenticated `/admin`, `/admin/approvals`, and
@@ -32,11 +33,23 @@
   without a current snapshot. The optional worker path still lacks the
   canonical ecosystem/toolchain lock. Local source builds remain the available
   fallback; no clean-host restore drill has been completed yet.
-- Platform `main` is at `64d048f5bcc93d987c4400b5597494a1a9e69e28`; commits
-  after deployed composition `78722c2641b42bfdf493d45b6b92461dccd3e87f` are
-  documentation and USB recovery-sync changes, so no service deployment was
-  needed. The archive and recovery kit are checksum-verified on USB, but
-  archive verification is not a substitute for a fresh-host restore drill.
+- Platform `main` is at `081d60b32654eb8bac7855310221dbe8d7cbd615`. Its Windows
+  CI had falsely failed after the state-only USB test correctly caught an
+  unreachable archived revision: Git's expected exit code `1` leaked from that
+  handled validation into PowerShell's final process status. The predicate now
+  clears the native exit code before reporting the expected validation error.
+  The test passes locally with exit code `0`; the pushed composed run
+  `42547112705` passed both Linux root CI and all Windows recovery tests.
+  Deployment submission was correctly skipped for this local-recovery-only
+  change, so live composition remains `78722c2641b42bfdf493d45b6b92461dccd3e87f`.
+- The emergency web console remains disabled by default: its enable flag is
+  absent from the live Platform environment, and its enable guard also requires
+  an isolated admin origin. The unauthenticated console route returns `401`.
+- The archive and recovery kit are checksum-verified on USB, but archive
+  verification is not a substitute for a fresh-host restore drill. Build Cache
+  still reports both target triples unconfigured with no current snapshots;
+  the optional worker and canonical ecosystem/toolchain lock are not yet in
+  place. Local source builds remain the fallback.
 
 ## Previous checkpoint (2026-11-08 22:05 UTC)
 
