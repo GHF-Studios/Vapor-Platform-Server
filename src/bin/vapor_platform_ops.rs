@@ -690,7 +690,7 @@ mod unix_impl {
             _ => "unknown",
         })
         .unwrap_or("unknown");
-        let state_only_export_output = command_output_bounded(
+        let state_only_export_output = command_output_bounded_lines(
             "/usr/bin/systemctl",
             &[
                 "show",
@@ -825,6 +825,56 @@ mod unix_impl {
             return Err(());
         }
         super::normalize_command_output(&String::from_utf8(bytes).map_err(|_| ())?)
+    }
+
+    async fn command_output_bounded_lines(
+        path: &str,
+        args: &[&str],
+        max_bytes: usize,
+    ) -> Result<String, ()> {
+        use tokio::io::AsyncReadExt;
+        let mut child = tokio::process::Command::new(path)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|_| ())?;
+        let mut stdout = child.stdout.take().ok_or(())?;
+        let mut bytes = Vec::with_capacity(max_bytes.min(1024));
+        let mut limited = stdout.take((max_bytes + 1) as u64);
+        tokio::time::timeout(Duration::from_secs(2), limited.read_to_end(&mut bytes))
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?;
+        if bytes.len() > max_bytes {
+            return Err(());
+        }
+        let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?;
+        if !status.success() {
+            return Err(());
+        }
+        let output = String::from_utf8(bytes).map_err(|_| ())?;
+        if output
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r'))
+        {
+            return Err(());
+        }
+        let output = output.trim();
+        if output.is_empty()
+            || output.lines().count() > 8
+            || output.lines().any(|line| {
+                line.len() > 256 || !line.split_once('=').is_some_and(|(key, _)| !key.is_empty())
+            })
+        {
+            return Err(());
+        }
+        Ok(output.to_owned())
     }
 
     async fn run_ssh_command(command: super::ssh_cli::SshCommand) -> Result<(), String> {
