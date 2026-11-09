@@ -57,8 +57,8 @@
 ### 5. Verification and rollout
 
 - [x] `cargo check --bin vapor_platform_server --bin vapor_node_agent` on Windows.
-- [ ] Compile for Linux with a native Linux toolchain; local cross-check is currently blocked by missing `x86_64-linux-gnu-gcc`.
-- [ ] Run the existing Platform CI recipe and Linux build.
+- [x] Composed CI passed on Ubuntu and Windows; Ubuntu compiled and ran `deploy/scripts/test.sh` successfully (main run `42651713649`).
+- [ ] Local Linux cross-check remains unavailable because this workstation lacks `x86_64-linux-gnu-gcc`; native Ubuntu CI is the authoritative Linux build.
 - [ ] Install the reporter only on a disposable worker after verifying endpoint behavior.
 - [ ] Deploy Platform, confirm the local VPS remains visible, enroll one disposable node, check fresh/stale/revoked behavior, then revoke it.
 
