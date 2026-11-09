@@ -75,6 +75,15 @@ class StateOnlyFreshHostContractTests(unittest.TestCase):
         self.assertIn('TEMP_MARKER = re.compile(r"\\.state-only\\.[A-Za-z0-9_]{8}\\Z")', marker)
         self.assertIn('entry.unlink()', marker)
 
+    def test_resume_accepts_only_root_owned_private_config_with_expected_service_group(self) -> None:
+        script = (REPO_ROOT / "deploy/scripts/recover-state-only-host.sh").read_text()
+        self.assertIn('stat -c \'%u:%a\' "$CONFIG_ROOT"', script)
+        self.assertIn('safe_resume_secret_file "$CONFIG_ROOT/platform.env"', script)
+        self.assertIn('safe_resume_secret_file "$CONFIG_ROOT/identity.env"', script)
+        self.assertIn('600) return 0 ;;', script)
+        self.assertIn('640)', script)
+        self.assertIn('[ "$group" = "$config_group" ]', script)
+
 
 if __name__ == "__main__":
     unittest.main()

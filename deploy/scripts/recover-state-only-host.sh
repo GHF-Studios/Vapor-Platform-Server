@@ -34,6 +34,22 @@ USAGE
 
 fail() { echo "state-only-recovery: $*" >&2; exit 1; }
 
+safe_resume_secret_file() {
+  local path="$1"
+  local owner group mode config_group
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  read -r owner group mode < <(stat -c '%u %g %a' "$path") || return 1
+  [ "$owner" = "0" ] || return 1
+  case "$mode" in
+    600) return 0 ;;
+    640)
+      config_group="$(stat -c '%g' "$CONFIG_ROOT")" || return 1
+      [ "$group" = "$config_group" ]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --bundle) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; BUNDLE="$2"; shift 2 ;;
@@ -122,7 +138,10 @@ if [ "$RESUME" = true ] && { [ -e "$CONFIG_ROOT/platform.env" ] || [ -L "$CONFIG
     || fail "existing Platform configuration is not a regular file"
 fi
 if [ "$RESUME" = true ] && [ -f "$CONFIG_ROOT/platform.env" ] && [ ! -L "$CONFIG_ROOT/platform.env" ]; then
-  [ "$(stat -c '%u:%a' "$CONFIG_ROOT/platform.env")" = "0:600" ] \
+  [ -d "$CONFIG_ROOT" ] && [ ! -L "$CONFIG_ROOT" ] \
+    && [ "$(stat -c '%u:%a' "$CONFIG_ROOT")" = "0:750" ] \
+    || fail "existing Platform configuration directory has unsafe ownership or permissions"
+  safe_resume_secret_file "$CONFIG_ROOT/platform.env" \
     || fail "existing Platform configuration has unsafe ownership or permissions"
   set -a
   # shellcheck disable=SC1091
@@ -134,7 +153,7 @@ if [ "$RESUME" = true ] && [ -f "$CONFIG_ROOT/platform.env" ] && [ ! -L "$CONFIG
   if [ -e "$CONFIG_ROOT/identity.env" ] || [ -L "$CONFIG_ROOT/identity.env" ]; then
     [ -f "$CONFIG_ROOT/identity.env" ] && [ ! -L "$CONFIG_ROOT/identity.env" ] \
       || fail "existing Identity configuration is not a regular file"
-    [ "$(stat -c '%u:%a' "$CONFIG_ROOT/identity.env")" = "0:600" ] \
+    safe_resume_secret_file "$CONFIG_ROOT/identity.env" \
       || fail "existing Identity configuration has unsafe ownership or permissions"
     # shellcheck disable=SC1091
     . "$CONFIG_ROOT/identity.env"
@@ -292,7 +311,12 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 [[ "${CARGO_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || fail "CARGO_BUILD_JOBS must be a positive integer"
 VAPOR_DEPLOY_BOOTSTRAP=1 VAPOR_RECOVERY_STAGING=1 \
   bash "$DEPLOY_ROOT/deploy/scripts/deploy.sh" --approved "$REVISION"
-bash "$DEPLOY_ROOT/deploy/scripts/restore-state-only.sh" --bundle "$BUNDLE" --yes --fresh-host
+VAPOR_RECOVERY_STAGING=1 bash "$DEPLOY_ROOT/deploy/scripts/restore-state-only.sh" --bundle "$BUNDLE" --yes --fresh-host
+# restore-state-only.sh held the deploy/state lock while importing data. Start
+# scheduled exports only after that process exits and releases the lock, then
+# run the complete health check with the production timer requirements.
+systemctl start vapor-state-only-export.timer
+"$DEPLOY_ROOT/deploy/scripts/health-check.sh"
 python3 "$MARKER_TOOL" set-phase --root "$MARKER_ROOT" --bundle-sha256 "$BUNDLE_SHA256" \
   --root-commit "$REVISION" --phase awaiting_provider_checks
 RECOVERY_AWAITING_CONFIRMATION=true

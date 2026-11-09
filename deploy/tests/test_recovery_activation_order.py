@@ -112,6 +112,19 @@ class RecoveryActivationOrderTests(unittest.TestCase):
                 staged = text.index('"${VAPOR_RECOVERY_STAGING:-0}"')
                 self.assertLess(staged, text.index(activation))
 
+    def test_fresh_state_restore_starts_export_timer_after_restore_lock_is_released(self) -> None:
+        coordinator = (REPO_ROOT / "deploy/scripts/recover-state-only-host.sh").read_text()
+        restore_call = 'VAPOR_RECOVERY_STAGING=1 bash "$DEPLOY_ROOT/deploy/scripts/restore-state-only.sh"'
+        self.assertIn(restore_call, coordinator)
+        timer_start = coordinator.index('systemctl start vapor-state-only-export.timer')
+        self.assertLess(coordinator.index(restore_call), timer_start)
+        self.assertLess(timer_start, coordinator.index('"$DEPLOY_ROOT/deploy/scripts/health-check.sh"'))
+
+        restore = (REPO_ROOT / "deploy/scripts/restore-state-only.sh").read_text()
+        self.assertIn('if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then', restore)
+        self.assertIn('systemctl enable vapor-state-only-export.timer', restore)
+        self.assertIn('VAPOR_RECOVERY_STAGING=1 "${SCRIPT_DIR}/health-check.sh"', restore)
+
 
 if __name__ == "__main__":
     unittest.main()

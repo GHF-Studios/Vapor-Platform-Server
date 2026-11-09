@@ -173,6 +173,8 @@ if systemctl is-enabled --quiet vapor-state-export.timer || systemctl is-active 
   exit 1
 fi
 systemctl is-enabled --quiet vapor-state-only-export.timer
-systemctl is-active --quiet vapor-state-only-export.timer
+if [ "${VAPOR_RECOVERY_STAGING:-0}" != "1" ]; then
+  systemctl is-active --quiet vapor-state-only-export.timer
+fi
 
 echo "health: Vapor server endpoints responded locally (${VAPOR_SERVER_MODE} mode)"

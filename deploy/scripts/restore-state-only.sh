@@ -242,12 +242,24 @@ if [ "${FRESH_HOST}" = true ]; then
   else
     systemctl enable --now vapor-platform-server.service
   fi
-  systemctl enable --now caddy.service vapor-platform-ops.socket vapor-state-only-export.timer
+  systemctl enable --now caddy.service vapor-platform-ops.socket
+  if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then
+    # The recovery coordinator still owns the deploy/state lock until this
+    # script exits. Enable now, but let the coordinator start the timer after
+    # this process releases its lock.
+    systemctl enable vapor-state-only-export.timer
+  else
+    systemctl enable --now vapor-state-only-export.timer
+  fi
 else
   for service in "${ACTIVE_SERVICES[@]}"; do systemctl start "${service}"; done
   for timer in "${ACTIVE_TIMERS[@]}"; do systemctl start "${timer}"; done
 fi
 restart_temporary_ssh_expiry
 ACTIVE_SSH_EXPIRY_TIMERS=()
-"${SCRIPT_DIR}/health-check.sh"
+if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then
+  VAPOR_RECOVERY_STAGING=1 "${SCRIPT_DIR}/health-check.sh"
+else
+  "${SCRIPT_DIR}/health-check.sh"
+fi
 echo "state-only-restore: services healthy after state import"
