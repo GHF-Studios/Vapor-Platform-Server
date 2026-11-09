@@ -363,7 +363,7 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .server-operation-item small { grid-column:1/-1; color:#9eacba; overflow-wrap:anywhere; }
 .server-operation-state { color:#93d9a7; font-size:11px; text-transform:uppercase; }
 .server-operation-state.failed,.server-operation-state.outcome_unknown { color:#f08b92; }
-.server-operation-state.running,.server-operation-state.accepted { color:#e5cb78; }
+.server-operation-state.running,.server-operation-state.accepted,.server-operation-state.awaiting_reboot { color:#e5cb78; }
 .table-scroll { max-width:100%; overflow-x:auto; }
 .table-scroll:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
 .skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; background:#fff; color:#111; }
@@ -1949,6 +1949,7 @@ const JS: &str = r#"
   const fleetRefresh = document.querySelector('#server-fleet-refresh');
   const serverActionSelect = document.querySelector('#server-action-service');
   const serverActionButton = document.querySelector('#server-action-restart');
+  const serverRebootButton = document.querySelector('#server-action-reboot');
   const serverActionStatus = document.querySelector('#server-action-status');
   const serverOperationList = document.querySelector('#server-operation-list');
     const nodeForm = document.querySelector('#server-node-enroll');
@@ -2029,7 +2030,7 @@ const JS: &str = r#"
       serverOperationList.replaceChildren();
       for (const operation of data.items.slice(0, 12)) {
         const item = document.createElement('article'); item.className = 'server-operation-item';
-        const action = operation.action?.kind === 'restart_service' ? `Restart ${operation.action.service}` : operation.action?.kind || 'Unknown action';
+        const action = operation.action?.kind === 'restart_service' ? `Restart ${operation.action.service}` : operation.action?.kind === 'reboot_host' ? 'Reboot host' : operation.action?.kind || 'Unknown action';
         const title = document.createElement('strong'); title.textContent = action;
         const state = document.createElement('span'); state.className = `server-operation-state ${operation.state || ''}`; state.textContent = operation.state || 'unknown';
         const detail = document.createElement('small'); detail.textContent = operation.result_detail || `Requested ${new Date(Number(operation.created_at_unix) * 1000).toLocaleString()}`;
@@ -2047,23 +2048,41 @@ const JS: &str = r#"
       } catch (error) { serverOperationList.replaceChildren(appendText(document.createElement('div'), 'p', error.message || 'Action history is unavailable.', 'muted')); }
     };
     refreshServerOperations();
-    serverActionButton?.addEventListener('click', async () => {
+    const submitServerAction = async (action, description) => {
       const target = serverActionSelect?.dataset.targetNodeId || '';
-      const service = serverActionSelect?.value || '';
-      if (!target || !service) { serverActionStatus.textContent = 'The local host identity is unavailable.'; return; }
-      if (!window.confirm(`Restart ${service}? This runs a recorded service action on the Platform host.`)) return;
-      serverActionButton.disabled = true; serverActionStatus.textContent = `Requesting restart of ${service}…`;
+      if (!target) { serverActionStatus.textContent = 'The local host identity is unavailable.'; return; }
+      if (serverActionButton) serverActionButton.disabled = true;
+      if (serverRebootButton) serverRebootButton.disabled = true;
+      serverActionStatus.textContent = `Requesting ${description}…`;
       try {
-        const response = await fetch('/api/admin/server-operations', { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_request_id: crypto.randomUUID(), target_node_id: target, action: { kind: 'restart_service', service }, confirmed: true }), signal: AbortSignal.timeout(15000) });
+        const response = await fetch('/api/admin/server-operations', { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_request_id: crypto.randomUUID(), target_node_id: target, action, confirmed: true }), signal: AbortSignal.timeout(15000) });
         const data = await response.json().catch(() => null);
         if (!response.ok) throw new Error(data?.error || `Action request failed (HTTP ${response.status}).`);
         const operation = data.operation;
-        serverActionStatus.textContent = `${operation.state}: ${operation.result_detail || service}`;
+        serverActionStatus.textContent = `${operation.state}: ${operation.result_detail || description}`;
+        if (operation.state === 'awaiting_reboot') serverActionStatus.textContent = 'Reboot requested. This page will disconnect; the operation will be reconciled after the host returns.';
         await refreshServerOperations();
       } catch (error) {
         serverActionStatus.textContent = `${error.message || 'The action result is unknown.'} Check action history before retrying.`;
         await refreshServerOperations();
-      } finally { serverActionButton.disabled = false; }
+      } finally {
+        if (serverActionButton) serverActionButton.disabled = false;
+        if (serverRebootButton) serverRebootButton.disabled = false;
+      }
+    };
+    serverActionButton?.addEventListener('click', async () => {
+      const service = serverActionSelect?.value || '';
+      if (!service) { serverActionStatus.textContent = 'Choose a service first.'; return; }
+      if (!window.confirm(`Restart ${service}? This runs a recorded service action on the Platform host.`)) return;
+      await submitServerAction({ kind: 'restart_service', service }, `restart of ${service}`);
+    });
+    serverRebootButton?.addEventListener('click', async () => {
+      const target = serverActionSelect?.dataset.targetNodeId || '';
+      if (!target) { serverActionStatus.textContent = 'The local host identity is unavailable.'; return; }
+      const expected = `REBOOT ${target}`;
+      const confirmation = window.prompt(`This will reboot the Platform host. Type exactly:\n${expected}`);
+      if (confirmation !== expected) { serverActionStatus.textContent = 'Reboot cancelled; confirmation did not match.'; return; }
+      await submitServerAction({ kind: 'reboot_host', confirmation }, 'host reboot');
     });
 
     const postNodeApi = async (path, body) => {
@@ -2519,7 +2538,7 @@ fn server_fleet_page_content() -> &'static str {
     concat!(
         "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<section class=\"card\"><h2>Core server actions</h2><p class=\"muted\">Typed, recorded actions for this Platform host. Restarting a service does not change its configuration. Remote-server actions will appear only after that server has an explicitly installed executor. Platform self-restart is intentionally withheld until recovery-after-restart is verified.</p><div class=\"server-operation-controls\"><label>Service<select id=\"server-action-service\"><option value=\"homepage\">Homepage</option><option value=\"docs\">Docs</option><option value=\"identity\">Identity</option><option value=\"diagnostics\">Diagnostics</option><option value=\"registry\">Registry</option><option value=\"artifact\">Artifact</option><option value=\"build_cache\">Build Cache</option><option value=\"caddy\">Web gateway</option></select></label><button id=\"server-action-restart\" type=\"button\">Restart service</button></div><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for local server identity…</p><details><summary>Recent actions</summary><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></details></section>",
+        "<section class=\"card\"><h2>Core server actions</h2><p class=\"muted\">Typed, recorded actions for this Platform host. Restarting a service does not change its configuration. Remote-server actions will appear only after that server has an explicitly installed executor. Platform self-restart is withheld until its recovery behavior is verified.</p><div class=\"server-operation-controls\"><label>Service<select id=\"server-action-service\"><option value=\"homepage\">Homepage</option><option value=\"docs\">Docs</option><option value=\"identity\">Identity</option><option value=\"diagnostics\">Diagnostics</option><option value=\"registry\">Registry</option><option value=\"artifact\">Artifact</option><option value=\"build_cache\">Build Cache</option><option value=\"caddy\">Web gateway</option></select></label><button id=\"server-action-restart\" type=\"button\">Restart service</button><button id=\"server-action-reboot\" type=\"button\">Reboot host…</button></div><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for local server identity…</p><details><summary>Recent actions</summary><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></details></section>",
         "<section class=\"card\"><h2>Add server</h2><p class=\"muted\">Register a manually managed server so its agent can report CPU, memory, load, and uptime. Registration does not provision or remove machines, assign jobs, or grant SSH access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose (label only)<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Add server</button></form><p class=\"server-fleet-note\">Purpose is descriptive only; it does not schedule builds, backups, or other work. Operations will be explicit, typed, and recorded.</p><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time telemetry credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
         "<p class=\"muted\">The telemetry credential cannot be used for SSH, shell access, or arbitrary commands.</p>"
     )
@@ -4224,8 +4243,9 @@ mod tests {
         assert!(page.contains("does not provision or remove machines, assign jobs"));
         assert!(page.contains("Purpose is descriptive only"));
         assert!(page.contains("id=\"server-action-restart\""));
+        assert!(page.contains("id=\"server-action-reboot\""));
         assert!(page.contains("id=\"server-operation-list\""));
-        assert!(page.contains("Platform self-restart is intentionally withheld"));
+        assert!(page.contains("Platform self-restart is withheld"));
         assert!(!page.contains("<option value=\"platform\">Platform</option>"));
     }
 
@@ -4248,6 +4268,8 @@ mod tests {
         assert!(script.contains("crypto.randomUUID()"));
         assert!(script.contains("Check action history before retrying."));
         assert!(script.contains("window.confirm(`Restart ${service}?"));
+        assert!(script.contains("Type exactly:\\n${expected}"));
+        assert!(script.contains("kind: 'reboot_host', confirmation"));
     }
 
     #[test]

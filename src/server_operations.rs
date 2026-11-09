@@ -15,6 +15,7 @@ use std::time::Duration;
 const DEFAULT_IDENTITY_AUTHZ_URL: &str =
     "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check";
 const MAX_RESULT_DETAIL_BYTES: usize = 240;
+const REBOOT_RECONCILIATION_GRACE_SECONDS: i64 = 300;
 
 #[derive(Clone)]
 struct OperationsState {
@@ -82,6 +83,7 @@ struct PlatformOperationRequest<'a> {
 enum OperationState {
     Accepted,
     Running,
+    AwaitingReboot,
     Succeeded,
     Failed,
     OutcomeUnknown,
@@ -92,6 +94,7 @@ impl OperationState {
         match self {
             Self::Accepted => "accepted",
             Self::Running => "running",
+            Self::AwaitingReboot => "awaiting_reboot",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::OutcomeUnknown => "outcome_unknown",
@@ -104,9 +107,16 @@ fn allowed_transition(from: OperationState, to: OperationState) -> bool {
         (from, to),
         (OperationState::Accepted, OperationState::Running)
             | (OperationState::Accepted, OperationState::Failed)
+            | (OperationState::Running, OperationState::AwaitingReboot)
             | (OperationState::Running, OperationState::Succeeded)
             | (OperationState::Running, OperationState::Failed)
             | (OperationState::Running, OperationState::OutcomeUnknown)
+            | (OperationState::AwaitingReboot, OperationState::Succeeded)
+            | (OperationState::AwaitingReboot, OperationState::Failed)
+            | (
+                OperationState::AwaitingReboot,
+                OperationState::OutcomeUnknown
+            )
             | (OperationState::OutcomeUnknown, OperationState::Succeeded)
             | (OperationState::OutcomeUnknown, OperationState::Failed)
     )
@@ -114,6 +124,34 @@ fn allowed_transition(from: OperationState, to: OperationState) -> bool {
 
 fn accepted_operation_can_resume(state: &str) -> bool {
     state == OperationState::Accepted.as_str()
+}
+
+fn reboot_resolution(
+    before: Option<&str>,
+    current: Option<&str>,
+    requested_at: Option<i64>,
+    now: i64,
+) -> Option<(OperationState, &'static str, &'static str)> {
+    if before
+        .zip(current)
+        .is_some_and(|(before, current)| before != current)
+    {
+        Some((
+            OperationState::Succeeded,
+            "succeeded",
+            "host returned with a different boot ID; reboot completed",
+        ))
+    } else if requested_at
+        .is_some_and(|at| now.saturating_sub(at) >= REBOOT_RECONCILIATION_GRACE_SECONDS)
+    {
+        Some((
+            OperationState::OutcomeUnknown,
+            "outcome_unknown",
+            "no changed boot ID was observed within five minutes; inspect the host before retrying",
+        ))
+    } else {
+        None
+    }
 }
 
 pub(crate) fn router() -> Router {
@@ -172,6 +210,53 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
         }
         transaction.commit().await?;
     }
+    reconcile_reboot_operations(&pool).await?;
+    let monitor_pool = pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let _ = reconcile_reboot_operations(&monitor_pool).await;
+        }
+    });
+    Ok(())
+}
+
+async fn reconcile_reboot_operations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let awaiting_reboot = sqlx::query(
+        "SELECT id,actor_profile_id,boot_id_before,started_at_unix
+         FROM platform_server_operations WHERE state='awaiting_reboot'",
+    )
+    .fetch_all(pool)
+    .await?;
+    let current_boot_id = crate::server_operation_schema::current_boot_id();
+    let now = unix_now();
+    for row in awaiting_reboot {
+        let id: String = row.get("id");
+        let actor: String = row.get("actor_profile_id");
+        let before: Option<String> = row.get("boot_id_before");
+        let requested_at: Option<i64> = row.get("started_at_unix");
+        let Some((to, event, detail)) = reboot_resolution(
+            before.as_deref(),
+            current_boot_id.as_deref(),
+            requested_at,
+            now,
+        ) else {
+            continue;
+        };
+        transition(
+            pool,
+            &id,
+            OperationState::AwaitingReboot,
+            to,
+            &actor,
+            event,
+            now,
+            Some(detail),
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -183,13 +268,14 @@ async fn initialize_pool(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             client_request_id TEXT NOT NULL UNIQUE,
             target_node_id TEXT NOT NULL,
             action_json TEXT NOT NULL,
-            state TEXT NOT NULL CHECK(state IN ('accepted','running','succeeded','failed','outcome_unknown')),
+            state TEXT NOT NULL CHECK(state IN ('accepted','running','awaiting_reboot','succeeded','failed','outcome_unknown')),
             version INTEGER NOT NULL,
             actor_profile_id TEXT NOT NULL,
             created_at_unix INTEGER NOT NULL,
             started_at_unix INTEGER,
             finished_at_unix INTEGER,
-            result_detail TEXT
+            result_detail TEXT,
+            boot_id_before TEXT
         )",
     )
     .execute(pool)
@@ -204,8 +290,8 @@ async fn initialize_pool(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS platform_server_operation_events (
             event_id INTEGER PRIMARY KEY AUTOINCREMENT,
             operation_id TEXT NOT NULL REFERENCES platform_server_operations(id),
-            event TEXT NOT NULL CHECK(event IN ('requested','started','succeeded','failed','outcome_unknown')),
-            state TEXT NOT NULL CHECK(state IN ('accepted','running','succeeded','failed','outcome_unknown')),
+            event TEXT NOT NULL CHECK(event IN ('requested','started','reboot_requested','succeeded','failed','outcome_unknown')),
+            state TEXT NOT NULL CHECK(state IN ('accepted','running','awaiting_reboot','succeeded','failed','outcome_unknown')),
             actor_profile_id TEXT NOT NULL,
             at_unix INTEGER NOT NULL,
             detail TEXT
@@ -262,19 +348,24 @@ async fn create_operation(
         Ok(action) => action,
         Err(_) => return error(StatusCode::BAD_REQUEST, "unsupported_server_action"),
     };
-    if !matches!(action, ServerAction::RestartService { .. }) {
-        return error(StatusCode::NOT_IMPLEMENTED, "server_action_not_enabled_yet");
-    }
-    if matches!(
-        action,
+    match &action {
         ServerAction::RestartService {
-            service: ServiceId::Platform
+            service: ServiceId::Platform,
+        } => {
+            return error(
+                StatusCode::NOT_IMPLEMENTED,
+                "platform_self_restart_not_enabled",
+            );
         }
-    ) {
-        return error(
-            StatusCode::NOT_IMPLEMENTED,
-            "platform_self_restart_not_enabled",
-        );
+        ServerAction::RestartService { .. } => {}
+        ServerAction::RebootHost { confirmation }
+            if confirmation == &format!("REBOOT {target}") => {}
+        ServerAction::RebootHost { .. } => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "reboot_confirmation_did_not_match_target",
+            );
+        }
     }
     let session_token = match crate::admin_auth::session_token(&headers) {
         Some(value) => value.to_owned(),
@@ -416,6 +507,15 @@ async fn create_operation(
                 Some(&result.detail),
             )
             .await;
+        }
+        Ok(result)
+            if result.operation_id == operation_id
+                && result.ok
+                && result.state == "awaiting_reboot"
+                && bounded_detail(&result.detail) =>
+        {
+            // The helper persisted this state and the pre-reboot boot ID before
+            // requesting the reboot. Startup reconciles it after the host returns.
         }
         Ok(result)
             if result.operation_id == operation_id
@@ -790,6 +890,17 @@ mod tests {
         assert!(!super::accepted_operation_can_resume("running"));
         assert!(!super::accepted_operation_can_resume("outcome_unknown"));
         assert!(!super::accepted_operation_can_resume("succeeded"));
+        assert_eq!(
+            super::reboot_resolution(Some("boot-a"), Some("boot-b"), Some(10), 20)
+                .map(|(state, _, _)| state),
+            Some(Succeeded)
+        );
+        assert_eq!(
+            super::reboot_resolution(Some("boot-a"), Some("boot-a"), Some(10), 310)
+                .map(|(state, _, _)| state),
+            Some(OutcomeUnknown)
+        );
+        assert!(super::reboot_resolution(Some("boot-a"), Some("boot-a"), Some(10), 20).is_none());
     }
 
     #[tokio::test]

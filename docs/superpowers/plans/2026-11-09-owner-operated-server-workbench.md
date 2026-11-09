@@ -47,26 +47,26 @@
 
 - [x] Add Platform-owned `platform_server_operations` and append-only `platform_server_operation_events` tables with target node ID, enum action, canonical arguments, actor profile ID, state/version, timestamps, and bounded outcome. SQLite triggers reject mutation/deletion of event rows.
 - [x] Expose root-only, no-store list/detail/create routes. Validate exact Origin on mutations and gate every target to the local executor.
-- [x] Persist intent before dispatch. Record `accepted`, `running`, `succeeded`, `failed`, and `outcome_unknown` transitions with event rows and compare-and-set state transitions.
-- [x] Reconcile interrupted `running` operations on startup as `outcome_unknown`; never replay them automatically. A matching idempotency-key retry can resume only an operation still in `accepted`.
+- [x] Persist intent before dispatch. Record `accepted`, `running`, `awaiting_reboot`, `succeeded`, `failed`, and `outcome_unknown` transitions with event rows and compare-and-set state transitions.
+- [x] Reconcile interrupted `running` operations as `outcome_unknown` and verify reboot completion by boot ID; never replay uncertain operations automatically. A matching idempotency-key retry can resume only an operation still in `accepted`.
 - [ ] Test authorization, invalid action/target inputs, transition compare-and-set, append-only event order, bounded results, and interrupted execution comprehensively.
 
 ### Task 3: Core-host executor actions
 
 **Files:** `src/bin/vapor_platform_ops.rs`, `src/platform_ops_client.rs`, `src/server_operations.rs`, `deploy/scripts/vapor-ssh-service-control` only if shared allowlist extraction is necessary.
 
-- [x] Add enum-only `restart_service(service_id)` for the exact Vapor/Caddy unit allowlist. `reboot_host` is defined in the schema but not exposed until boot-ID reconciliation and high-impact confirmation are implemented.
+- [x] Add enum-only `restart_service(service_id)` for the exact Vapor/Caddy unit allowlist, plus `reboot_host` requiring the operator to type `REBOOT <host-id>`.
 - [x] Require a current root Identity session in the helper and a matching persisted operation ID/action/target before execution.
-- [x] Persist service-restart helper results directly before returning to the web process. Platform self-restart remains intentionally unavailable because its recovery-after-restart behavior is not yet verified.
-- [ ] For reboot, record the pre-action Linux boot ID and mark success only after a different boot ID is observed; leave a bounded timeout as failed/unknown with no automatic retry.
-- [ ] Test JSON rejection of arbitrary fields, unit-name injection, unsupported host targets, helper mismatch, and boot-ID reconciliation.
+- [x] Persist service-restart results directly and reboot intent plus the pre-action boot ID before requesting a reboot. Platform self-restart remains unavailable because its recovery-after-restart behavior is not yet verified.
+- [x] Mark reboot success only after observing a changed boot ID; after five minutes without one, mark the outcome unknown and require owner inspection.
+- [ ] Test JSON rejection of arbitrary fields, unit-name injection, unsupported host targets, helper mismatch, and boot-ID reconciliation comprehensively.
 
 ### Task 4: Servers page operation surface
 
 **Files:** `src/admin.rs`, `src/server_operations.rs`.
 
-- [x] Add compact controls for restarting an allowlisted service on the local Platform host. Remote nodes remain telemetry-only.
-- [x] Confirm the exact service before restart and disable duplicate submissions while the request is active.
+- [x] Add compact controls for restarting an allowlisted service or rebooting the local Platform host. Remote nodes remain telemetry-only.
+- [x] Confirm the exact service before restart, require exact host-ID text before reboot, and disable duplicate submissions while the request is active.
 - [x] Display the operation result and a compact recent-action list. A dedicated operation detail route exists; linking from each row remains to do.
 - [ ] Keep remote nodes telemetry-only until a bounded remote executor is installed; no UI control is inferred from an active telemetry credential.
 - [ ] Parse embedded JavaScript and test route/page rendering and action-state wording.

@@ -72,8 +72,10 @@ checkpoints. Any future emergency terminal remains a separate high-risk tool.
 - `deploy/scripts/vapor-ssh-service-control` has an exact service allowlist,
   but is granted only to temporary SSH accounts, not the browser.
 - `platform_operation_history` covers deploy and restore only.
-- Server Fleet shows metrics and registration/revocation, but no typed per-host
-  operation or configuration UI.
+- Server Fleet now has a first typed local-host action slice: allowlisted service
+  restarts and an explicitly typed reboot request, recorded in Platform-owned
+  operation history. Remote hosts still expose telemetry only; typed profiles,
+  configuration, and migration runbooks remain future work.
 
 ## Design boundaries
 

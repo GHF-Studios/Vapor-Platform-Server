@@ -1403,7 +1403,7 @@ mod unix_impl {
                     .action
                     .as_ref()
                     .ok_or_else(|| (id.clone(), "server action is required"))?;
-                run_server_action(
+                let state = run_server_action(
                     &pool,
                     &id,
                     input.expected_version.unwrap_or(0),
@@ -1411,7 +1411,12 @@ mod unix_impl {
                     action,
                 )
                 .await?;
-                Ok((id, "succeeded", "typed server action completed"))
+                let detail = if state == "awaiting_reboot" {
+                    "reboot requested; completion will be checked after startup"
+                } else {
+                    "typed server action completed"
+                };
+                Ok((id, state, detail))
             }
             _ => Err((id, "unsupported operation")),
         }
@@ -1423,7 +1428,7 @@ mod unix_impl {
         expected_version: i64,
         target_node_id: &str,
         action: &ServerAction,
-    ) -> Result<(), (String, &'static str)> {
+    ) -> Result<&'static str, (String, &'static str)> {
         if expected_version != 2 || target_node_id != local_node_id() {
             return Err((
                 id.to_owned(),
@@ -1450,10 +1455,41 @@ mod unix_impl {
         {
             return Err((id.to_owned(), "server operation record does not match"));
         }
-        let Some(unit) = action.systemd_unit() else {
-            return Err((id.to_owned(), "server action is not enabled"));
+        let (result, next_state) = match action {
+            ServerAction::RestartService { service }
+                if matches!(service, super::server_operation_schema::ServiceId::Platform) =>
+            {
+                return Err((id.to_owned(), "Platform self-restart is not enabled"));
+            }
+            ServerAction::RestartService { service } => {
+                let result = run_command(
+                    "/usr/bin/systemctl",
+                    &["restart", "--", service.systemd_unit()],
+                )
+                .await;
+                (result, "succeeded")
+            }
+            ServerAction::RebootHost { confirmation }
+                if confirmation == &format!("REBOOT {target_node_id}") =>
+            {
+                let boot_id = super::server_operation_schema::current_boot_id()
+                    .ok_or_else(|| (id.to_owned(), "could not read current boot ID"))?;
+                let actor: String = row.get("actor_profile_id");
+                record_reboot_requested(pool, id, expected_version, &actor, &boot_id).await?;
+                let reboot = run_command("/usr/bin/systemctl", &["--no-block", "reboot"]).await;
+                if reboot.is_err() {
+                    record_reboot_failed(pool, id, &actor).await?;
+                    return Err((id.to_owned(), "systemd did not accept the reboot request"));
+                }
+                return Ok("awaiting_reboot");
+            }
+            ServerAction::RebootHost { .. } => {
+                return Err((
+                    id.to_owned(),
+                    "reboot confirmation does not match target host",
+                ));
+            }
         };
-        let result = run_command("/usr/bin/systemctl", &["restart", "--", unit]).await;
         let (state, event, detail) = match result {
             Ok(()) => (
                 "succeeded",
@@ -1504,7 +1540,92 @@ mod unix_impl {
             .commit()
             .await
             .map_err(|_| (id.to_owned(), "could not commit server operation result"))?;
-        result.map_err(|_| (id.to_owned(), "approved service restart failed"))
+        result.map_err(|_| (id.to_owned(), "approved service restart failed"))?;
+        Ok(next_state)
+    }
+
+    async fn record_reboot_requested(
+        pool: &SqlitePool,
+        id: &str,
+        expected_version: i64,
+        actor: &str,
+        boot_id: &str,
+    ) -> Result<(), (String, &'static str)> {
+        let now = unix_now();
+        let mut transaction = pool
+            .begin()
+            .await
+            .map_err(|_| (id.to_owned(), "could not record reboot intent"))?;
+        let updated = sqlx::query(
+            "UPDATE platform_server_operations SET state='awaiting_reboot',version=version+1,
+                    boot_id_before=?,started_at_unix=?,result_detail='reboot requested; waiting for host boot ID'
+             WHERE id=? AND state='running' AND version=?",
+        )
+        .bind(boot_id)
+        .bind(now)
+        .bind(id)
+        .bind(expected_version)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| (id.to_owned(), "could not record reboot intent"))?;
+        if updated.rows_affected() != 1 {
+            return Err((id.to_owned(), "reboot operation changed before dispatch"));
+        }
+        sqlx::query(
+            "INSERT INTO platform_server_operation_events
+             (operation_id,event,state,actor_profile_id,at_unix,detail) VALUES (?,'reboot_requested','awaiting_reboot',?,?,?)",
+        )
+        .bind(id)
+        .bind(actor)
+        .bind(now)
+        .bind("reboot intent recorded before systemd request")
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| (id.to_owned(), "could not record reboot event"))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| (id.to_owned(), "could not commit reboot intent"))
+    }
+
+    async fn record_reboot_failed(
+        pool: &SqlitePool,
+        id: &str,
+        actor: &str,
+    ) -> Result<(), (String, &'static str)> {
+        let now = unix_now();
+        let mut transaction = pool
+            .begin()
+            .await
+            .map_err(|_| (id.to_owned(), "could not record rejected reboot"))?;
+        let updated = sqlx::query(
+            "UPDATE platform_server_operations SET state='failed',version=version+1,
+                    finished_at_unix=?,result_detail='systemd did not accept the reboot request'
+             WHERE id=? AND state='awaiting_reboot' AND version=3",
+        )
+        .bind(now)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| (id.to_owned(), "could not record rejected reboot"))?;
+        if updated.rows_affected() != 1 {
+            return Err((id.to_owned(), "reboot result changed before recording"));
+        }
+        sqlx::query(
+            "INSERT INTO platform_server_operation_events
+             (operation_id,event,state,actor_profile_id,at_unix,detail) VALUES (?,'failed','failed',?,?,?)",
+        )
+        .bind(id)
+        .bind(actor)
+        .bind(now)
+        .bind("systemd did not accept the reboot request")
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| (id.to_owned(), "could not record failed reboot event"))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| (id.to_owned(), "could not commit failed reboot result"))
     }
 
     async fn authorize_root(session_token: &str) -> bool {

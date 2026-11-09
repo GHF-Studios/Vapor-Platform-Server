@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerAction {
     RestartService { service: ServiceId },
-    RebootHost,
+    RebootHost { confirmation: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -31,7 +31,7 @@ impl ServerAction {
             .ok_or("unsupported server action")?;
         let expected_fields = match kind {
             "restart_service" => &["kind", "service"][..],
-            "reboot_host" => &["kind"][..],
+            "reboot_host" => &["kind", "confirmation"][..],
             _ => return Err("unsupported server action"),
         };
         if object.len() != expected_fields.len()
@@ -42,13 +42,6 @@ impl ServerAction {
             return Err("unsupported server action");
         }
         serde_json::from_value(value.clone()).map_err(|_| "unsupported server action")
-    }
-
-    pub(crate) fn systemd_unit(&self) -> Option<&'static str> {
-        match self {
-            Self::RestartService { service } => Some(service.systemd_unit()),
-            Self::RebootHost => None,
-        }
     }
 }
 
@@ -82,6 +75,13 @@ pub(crate) fn local_node_id() -> String {
     format!("node-{short_hash}")
 }
 
+pub(crate) fn current_boot_id() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ServerAction, ServiceId};
@@ -111,11 +111,16 @@ mod tests {
     #[test]
     fn accepts_reboot_without_arbitrary_parameters() {
         assert_eq!(
-            ServerAction::parse_json(&json!({"kind":"reboot_host"})),
-            Ok(ServerAction::RebootHost)
+            ServerAction::parse_json(
+                &json!({"kind":"reboot_host","confirmation":"REBOOT node-abcd"})
+            ),
+            Ok(ServerAction::RebootHost {
+                confirmation: "REBOOT node-abcd".to_owned()
+            })
         );
         assert!(ServerAction::parse_json(&json!({
             "kind":"reboot_host",
+            "confirmation":"REBOOT node-abcd",
             "delay_seconds":0
         }))
         .is_err());
@@ -123,19 +128,10 @@ mod tests {
 
     #[test]
     fn service_ids_map_only_to_fixed_systemd_units() {
+        assert_eq!(ServiceId::Caddy.systemd_unit(), "caddy.service");
         assert_eq!(
-            ServerAction::RestartService {
-                service: ServiceId::Caddy
-            }
-            .systemd_unit(),
-            Some("caddy.service")
-        );
-        assert_eq!(
-            ServerAction::RestartService {
-                service: ServiceId::Platform
-            }
-            .systemd_unit(),
-            Some("vapor-platform-server.service")
+            ServiceId::Platform.systemd_unit(),
+            "vapor-platform-server.service"
         );
     }
 }
