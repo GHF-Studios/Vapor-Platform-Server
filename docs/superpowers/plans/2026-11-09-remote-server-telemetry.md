@@ -44,7 +44,7 @@
 - [x] Sample CPU deltas, memory, uptime, and load from procfs.
 - [x] Add one-shot and recurring modes with bounded timeouts.
 - [x] Document setup and minimum permissions.
-- [ ] Build and verify the checksummed Linux x86_64 install artifact in CI so a worker does not need a Rust toolchain to install the reporter.
+- [x] Build and publish the checksummed Linux x86_64 install artifact in CI so a worker does not need a Rust toolchain to install the reporter. Verified on workflow run `42654239146`; artifact `vapor-node-agent-linux-x86_64` was published successfully.
 
 ### 4. Fleet controls and state clarity
 
@@ -59,7 +59,8 @@
 
 - [x] `cargo check --bin vapor_platform_server --bin vapor_node_agent` on Windows.
 - [x] Composed CI passed on Ubuntu and Windows; Ubuntu compiled and ran `deploy/scripts/test.sh` successfully (main run `42651713649`).
-- [ ] Local Linux cross-check remains unavailable because this workstation lacks `x86_64-linux-gnu-gcc`; native Ubuntu CI is the authoritative Linux build.
+- [x] Native Ubuntu CI built the Linux x86_64 reporter and published the install archive plus checksum sidecar on run `42654239146`.
+- [ ] A local Linux cross-check remains unavailable because this workstation lacks `x86_64-linux-gnu-gcc`; native Ubuntu CI is the authoritative Linux build.
 - [ ] Install the reporter only on a disposable worker after verifying endpoint behavior.
 - [ ] Deploy Platform, confirm the local VPS remains visible, enroll one disposable node, check fresh/stale/revoked behavior, then revoke it.
 
