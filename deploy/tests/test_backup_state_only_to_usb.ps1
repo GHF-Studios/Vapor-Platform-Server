@@ -54,6 +54,9 @@ exit 0
     Set-Content -LiteralPath (Join-Path $scriptFolder 'state_only_recovery_marker.py') -Value 'fixture recovery kit from current main' -Encoding utf8
     & $git -C $sourceRoot add deploy/scripts/state_only_recovery_marker.py
     & $git -C $sourceRoot commit --quiet -m 'Fixture current recovery-kit revision'
+    Set-Content -LiteralPath (Join-Path $sourceRoot '.gitattributes') -Value "deploy/scripts/*.sh text eol=lf`ndeploy/scripts/*.py text eol=lf" -Encoding ascii
+    & $git -C $sourceRoot add .gitattributes
+    & $git -C $sourceRoot commit --quiet -m 'Fixture recovery archive line-ending policy'
     $recoveryKitCommit = (& $git -C $sourceRoot rev-parse HEAD).Trim()
     Set-Content -LiteralPath (Join-Path $scriptFolder 'deployment_scope.py') -Value 'unrelated deployment-scope source' -Encoding utf8
     & $git -C $sourceRoot add deploy/scripts/deployment_scope.py
@@ -115,6 +118,10 @@ with tarfile.open(root / sys.argv[3], "w:gz") as archive:
     Assert-True ($pointer.archive_source_commit -ceq $archiveSourceCommit) 'recovery-kit pointer has the wrong archived application revision'
     Assert-True ($pointer.archive_sha256 -ceq $archiveHash) 'recovery-kit pointer does not bind the snapshot checksum'
     Assert-True ($pointer.files.'recover-state-only-host.sh' -ceq (Get-FileHash -LiteralPath (Join-Path $kitRoot 'recover-state-only-host.sh') -Algorithm SHA256).Hash.ToLowerInvariant()) 'recovery-kit file digest is incorrect'
+    foreach ($name in ($kitFiles | Where-Object { $_.EndsWith('.sh') -or $_.EndsWith('.py') })) {
+        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $kitRoot $name))
+        Assert-True (([System.Array]::IndexOf($bytes, [byte]13)) -lt 0) "exported recovery script $name contains CRLF bytes"
+    }
     $syncReport = Get-Content -LiteralPath (Join-Path $usbRoot 'State-Snapshots\last-sync.json') -Raw | ConvertFrom-Json
     Assert-True ($syncReport.platform_reported -eq $true) 'local sync report does not show the Platform status update'
     $serverReport = Get-Content -LiteralPath (Join-Path $remoteRoot 'owner-usb-sync.json') -Raw | ConvertFrom-Json

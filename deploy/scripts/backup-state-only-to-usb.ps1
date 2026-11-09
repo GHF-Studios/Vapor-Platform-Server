@@ -177,6 +177,7 @@ $kitFiles = @(
     'README-state-only-recovery.txt'
 )
 $archivePaths = @($kitFiles | ForEach-Object { "deploy/scripts/$_" })
+$archiveAttributesPath = '.gitattributes'
 $repositoryRoot = (Resolve-Path -LiteralPath $RecoveryRepositoryPath).Path
 $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $isBare = (& $git -C $repositoryRoot rev-parse --is-bare-repository).Trim()
@@ -205,7 +206,7 @@ $global:LASTEXITCODE = 0
 if ($ancestorExitCode -ne 0) {
     throw 'The snapshot source revision is not reachable from Platform origin/main; refusing to create an unrecoverable USB generation.'
 }
-$recoveryKitCommit = (& $git -C $repositoryRoot log -1 --format=%H $sourceRef -- @archivePaths).Trim()
+$recoveryKitCommit = (& $git -C $repositoryRoot log -1 --format=%H $sourceRef -- @archivePaths $archiveAttributesPath).Trim()
 if ($recoveryKitCommit -notmatch '^[0-9a-f]{40}$') {
     throw 'Could not identify the latest commit containing the recovery-tool files.'
 }
