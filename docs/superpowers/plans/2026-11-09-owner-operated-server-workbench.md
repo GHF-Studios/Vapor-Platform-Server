@@ -16,6 +16,14 @@
 - No metric-triggered lifecycle, automatic job placement, autoscaling, or unattended migration.
 - No shell/command/path/unit-name text from the browser; operation payloads use enums and allowlists.
 - Telemetry credentials do not authorize typed operations.
+- Remote agents initiate outbound Platform connections; the web process must
+  not hold SSH keys for enrolled hosts or expose an inbound shell port.
+- A remote action credential is distinct from the reporter credential and is
+  limited to claiming/reporting the node's already-recorded typed operations.
+- Delivery is at-least-once at the transport boundary but exactly-once in the
+  executor state machine: an operation ID is claimed with compare-and-set,
+  duplicate claims return its current state, and uncertain actions are never
+  re-executed automatically.
 - Root Identity authorization and same-origin mutation checks remain mandatory.
 - Platform coordinates service-owned export/import/deploy contracts and never reads service databases directly.
 - Every operation and migration step is durably recorded before execution; uncertain results are never blindly retried.
@@ -60,6 +68,35 @@
 - [x] Persist service-restart results directly and reboot intent plus the pre-action boot ID before requesting a reboot. Platform self-restart remains unavailable because its recovery-after-restart behavior is not yet verified.
 - [x] Mark reboot success only after observing a changed boot ID; after five minutes without one, mark the outcome unknown and require owner inspection.
 - [ ] Test JSON rejection of arbitrary fields, unit-name injection, unsupported host targets, helper mismatch, and boot-ID reconciliation comprehensively.
+
+### Task 3b: Remote typed executor channel
+
+**Files:** `src/node_fleet.rs`, `src/bin/vapor_node_agent.rs`, a dedicated
+root-owned local action helper and systemd/sudoers installation assets,
+`src/server_operations.rs`, node-agent config/package docs.
+
+- [ ] Keep the current reporter credential telemetry-only. Add a separately
+  generated, one-time operation credential whose hash is stored independently;
+  neither credential may be used for the other's endpoints.
+- [ ] Let an enrolled agent poll only its own pending operation queue over
+  outbound HTTPS. The queue returns the persisted action enum, operation ID,
+  schema version, and expiry; it accepts no command string or caller-selected
+  executable, unit, path, or environment.
+- [ ] Claim an operation atomically before execution. A repeated poll for the
+  same claim returns status without re-running the action. Revocation prevents
+  new claims and result updates; in-flight outcomes remain auditable.
+- [ ] Keep the network agent unprivileged. Route the small enum through a
+  separate root-owned helper with a fixed service allowlist and explicit host
+  identity check; do not grant the telemetry process general root or shell.
+- [ ] Persist action/result and actor on Platform before dispatch; report
+  bounded results and reconcile reboot by boot identity. Lost responses become
+  `outcome_unknown`, never an automatic retry.
+- [ ] Expose remote controls only after the separate executor capability has
+  enrolled and reported a supported schema/action set. A reporter-only node
+  remains telemetry-only in the UI.
+- [ ] Test credential separation, wrong-node access, revocation, concurrent
+  claim races, duplicate delivery, expiry, arbitrary JSON rejection, helper
+  allowlisting, and ambiguous result handling.
 
 ### Task 4: Servers page operation surface
 

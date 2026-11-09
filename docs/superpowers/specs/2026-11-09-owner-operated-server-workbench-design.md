@@ -57,7 +57,23 @@ them, and later move them back.
 The analogy is only about the convenience of a single remote operations
 surface. It does not imply remote screen or keyboard sharing: normal use is
 telemetry, typed controls, previews, audit history, and explicit workflow
-checkpoints. Any future emergency terminal remains a separate high-risk tool.
+checkpoints. Think of it as one owner-operated cockpit for the small server
+fleet, not a remote desktop product. It should make a deliberate operation or
+host move easy to understand and carry through, while keeping the operator in
+control of each meaningful transition.
+
+In particular, a host replacement is a guided handoff, not cloud provisioning:
+the operator obtains/reinstalls the VPS through Strato, registers the new host,
+then uses a resumable Vapor workflow to prepare it, transfer selected
+service-owned state, verify the result, and decide when to retire the old host.
+The same workflow can move responsibilities back. It must be possible to wipe
+and rebuild either test host without treating the other host as an
+autoscaled/automatically assigned worker. Strato remains responsible for VPS
+allocation, reinstall, recovery OS, and provider console access.
+
+Any future browser terminal or remote desktop remains a separate high-risk
+product decision; it is not implied by the fleet workbench or its “single
+remote operations surface” convenience goal.
 
 ## Current evidence
 
