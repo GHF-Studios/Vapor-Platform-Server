@@ -3,7 +3,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -16,6 +15,7 @@ static AUTH_CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock
 struct ServerFleetSnapshot {
     schema_version: u32,
     scope: &'static str,
+    local_node_id: String,
     observed_at_unix: u64,
     reporting_node_count: usize,
     nodes: Vec<ServerNode>,
@@ -86,7 +86,7 @@ impl Sampler {
         let observed_at_unix = unix_now();
         let has_metrics = cpu.is_some() || memory.is_some() || uptime.is_some();
         let node = ServerNode {
-            id: node_id(),
+            id: crate::server_operation_schema::local_node_id(),
             label: node_label(),
             role: "control-plane".to_owned(),
             state: if has_metrics { "online" } else { "unavailable" },
@@ -108,6 +108,7 @@ impl Sampler {
         ServerFleetSnapshot {
             schema_version: 1,
             scope: "local-platform-host-only",
+            local_node_id: node.id.clone(),
             observed_at_unix,
             reporting_node_count: usize::from(has_metrics),
             nodes: vec![node],
@@ -216,20 +217,6 @@ fn read_load_average() -> Option<f64> {
     let contents = std::fs::read_to_string("/proc/loadavg").ok()?;
     let value = contents.split_whitespace().next()?.parse::<f64>().ok()?;
     value.is_finite().then_some(value)
-}
-
-fn node_id() -> String {
-    let machine_id = std::fs::read_to_string("/etc/machine-id")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "local-development-node".to_owned());
-    let digest = Sha256::digest(machine_id.as_bytes());
-    let short_hash = digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("node-{short_hash}")
 }
 
 fn node_label() -> String {

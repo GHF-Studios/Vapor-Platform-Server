@@ -3,9 +3,9 @@
 ## Intent
 
 Give operators one compact, accurate place to review deployment decisions and
-one separate place to understand the machines that run Vapor. Physical server
-nodes are different from the independent service processes already shown by
-Hosting.
+one separate place to understand the small, manually operated set of machines
+that run Vapor. Physical server nodes are different from the independent
+service processes already shown by Hosting.
 
 ## Goals
 
@@ -16,8 +16,8 @@ Hosting.
 - Keep service health in Hosting and deployment lifecycle in Deployments.
 - Establish an outbound-reporting node model that can grow beyond the current
   VPS without exposing a general-purpose remote shell.
-- Preserve Platform as the owner of cross-node inventory and orchestration;
-  service repositories keep their own data and business logic.
+- Preserve Platform as the owner of cross-node inventory; service repositories
+  keep their own data and business logic.
 
 ## Non-goals for this slice
 
@@ -25,6 +25,8 @@ Hosting.
 - Pretending a server exists before it has an enrolled identity and telemetry.
 - Moving service health checks or service-specific operations into the fleet.
 - Adding an external metrics stack or public/player telemetry.
+- Automatically provisioning, removing, scaling, scheduling, or repairing
+  machines based on a role or metric.
 
 ## Approaches considered
 
@@ -53,9 +55,15 @@ Hosting.
 - Compact deployment approvals into a short primary row and collapsible
   evidence details. The action remains bound to the exact current-main SHA and
   validated deployment target; confirmation names both values.
-- Additional nodes, enrollment credential lifecycle, remote agent installation,
-  typed host operations, and aggregate fleet controls are next phases. No
-  unsupported node is displayed as online.
+- Server creation means adding a record for a machine the operator already
+  provisioned. The operator installs its agent manually. Removal from the
+  inventory does not destroy a machine or erase its source/data.
+- `control-plane`, `builder`, `backup`, and `general` are descriptive labels
+  only. They never route work, start services, or alter a node.
+- Any future control is an explicit, typed, operator-triggered action. It must
+  be recorded before execution, report a distinct outcome, and never retry an
+  uncertain destructive action automatically. It is separate from telemetry.
+- No unsupported node is displayed as online.
 
 ## Trust and failure behavior
 
@@ -63,8 +71,10 @@ Hosting.
 - If local metrics are unavailable, return an explicit unavailable state rather
   than zeros.
 - A stale observation is visibly stale and cannot be mistaken for live health.
-- Remote operation authorization is not inferred from telemetry. A future
-  typed action requires a separate capability and audit record.
+- Remote operation authorization is not inferred from telemetry. A typed
+  action requires the existing root Identity session and a durable Platform
+  operation record; it must not turn the telemetry credential into a control
+  credential.
 
 ## Acceptance
 

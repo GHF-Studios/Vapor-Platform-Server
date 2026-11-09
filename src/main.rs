@@ -12,6 +12,8 @@ mod platform_ops_client;
 mod recovery;
 mod recovery_status;
 mod server_fleet;
+mod server_operations;
+mod server_operation_schema;
 mod ssh_access;
 mod ssh_key;
 mod ssh_policy;
@@ -31,6 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     operation_history::initialize().await?;
     emergency_console::initialize().await?;
     node_fleet::initialize().await?;
+    server_operations::initialize().await?;
     server_fleet::initialize();
 
     let app = if env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services") {

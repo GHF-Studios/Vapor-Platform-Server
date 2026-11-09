@@ -356,6 +356,14 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .server-node-management-row p { margin:4px 0 0; font-size:12px; overflow-wrap:anywhere; }
 .server-node-events { margin-top:12px; }
 .server-node-events li { margin:6px 0; color:#aebbc8; font-size:12px; overflow-wrap:anywhere; }
+.server-operation-controls { display:flex; align-items:end; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.server-operation-controls label { display:grid; gap:4px; min-width:220px; margin:0; color:#aebbc8; font-size:12px; }
+.server-operation-list { display:grid; gap:6px; margin-top:10px; }
+.server-operation-item { display:grid; grid-template-columns:minmax(120px,1fr) auto; align-items:start; gap:4px 10px; padding:8px 0; border-top:1px solid #29323d; }
+.server-operation-item small { grid-column:1/-1; color:#9eacba; overflow-wrap:anywhere; }
+.server-operation-state { color:#93d9a7; font-size:11px; text-transform:uppercase; }
+.server-operation-state.failed,.server-operation-state.outcome_unknown { color:#f08b92; }
+.server-operation-state.running,.server-operation-state.accepted { color:#e5cb78; }
 .table-scroll { max-width:100%; overflow-x:auto; }
 .table-scroll:focus-visible { outline:2px solid #8fc5f4; outline-offset:2px; }
 .skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; background:#fff; color:#111; }
@@ -1939,6 +1947,10 @@ const JS: &str = r#"
   const fleetList = document.querySelector('#server-fleet-list');
   const fleetSummary = document.querySelector('#server-fleet-summary');
   const fleetRefresh = document.querySelector('#server-fleet-refresh');
+  const serverActionSelect = document.querySelector('#server-action-service');
+  const serverActionButton = document.querySelector('#server-action-restart');
+  const serverActionStatus = document.querySelector('#server-action-status');
+  const serverOperationList = document.querySelector('#server-operation-list');
     const nodeForm = document.querySelector('#server-node-enroll');
     const nodeLabel = document.querySelector('#server-node-label');
     const nodeRole = document.querySelector('#server-node-role');
@@ -1970,7 +1982,7 @@ const JS: &str = r#"
       term.textContent = label; detail.textContent = value; cell.append(term, detail); parent.append(cell);
     };
     const renderFleet = data => {
-      if (data?.schema_version !== 1 || !['local-platform-host-only', 'platform-host-and-enrolled-nodes'].includes(data?.scope) || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
+      if (data?.schema_version !== 1 || !['local-platform-host-only', 'platform-host-and-enrolled-nodes'].includes(data?.scope) || typeof data.local_node_id !== 'string' || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
       fleetList.replaceChildren();
       const reporting = data.nodes.filter(node => node.state === 'online').length;
       fleetSummary.textContent = `${reporting} of ${data.nodes.length} registered ${data.nodes.length === 1 ? 'server is' : 'servers are'} reporting · sampled ${new Date(Number(data.observed_at_unix) * 1000).toLocaleTimeString()}`;
@@ -1994,6 +2006,7 @@ const JS: &str = r#"
         freshness.textContent = node.state === 'never-reported' ? 'No telemetry received yet.' : `Received ${age < 5 ? 'just now' : `${age}s ago`} · metrics ${node.metrics_state || 'unknown'}`;
         card.append(freshness); fleetList.append(card);
       }
+      if (serverActionSelect) serverActionSelect.dataset.targetNodeId = data.local_node_id || '';
       if (data.nodes.length === 0) fleetList.append(appendText(document.createElement('div'), 'p', 'No servers have been added yet.', 'muted'));
     };
     const refreshFleet = async () => {
@@ -2009,6 +2022,49 @@ const JS: &str = r#"
       } finally { if (fleetRefresh) fleetRefresh.disabled = false; }
     };
     fleetRefresh?.addEventListener('click', refreshFleet); refreshFleet();
+
+    const renderServerOperations = data => {
+      if (!serverOperationList) return;
+      if (!Array.isArray(data?.items)) throw new Error('The operation history response has an unsupported format.');
+      serverOperationList.replaceChildren();
+      for (const operation of data.items.slice(0, 12)) {
+        const item = document.createElement('article'); item.className = 'server-operation-item';
+        const action = operation.action?.kind === 'restart_service' ? `Restart ${operation.action.service}` : operation.action?.kind || 'Unknown action';
+        const title = document.createElement('strong'); title.textContent = action;
+        const state = document.createElement('span'); state.className = `server-operation-state ${operation.state || ''}`; state.textContent = operation.state || 'unknown';
+        const detail = document.createElement('small'); detail.textContent = operation.result_detail || `Requested ${new Date(Number(operation.created_at_unix) * 1000).toLocaleString()}`;
+        item.append(title, state, detail); serverOperationList.append(item);
+      }
+      if (!data.items.length) serverOperationList.append(appendText(document.createElement('div'), 'p', 'No server actions recorded.', 'muted'));
+    };
+    const refreshServerOperations = async () => {
+      if (!serverOperationList) return;
+      try {
+        const response = await fetch('/api/admin/server-operations', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required to operate servers.' : `Action history is unavailable (HTTP ${response.status}).`);
+        renderServerOperations(data);
+      } catch (error) { serverOperationList.replaceChildren(appendText(document.createElement('div'), 'p', error.message || 'Action history is unavailable.', 'muted')); }
+    };
+    refreshServerOperations();
+    serverActionButton?.addEventListener('click', async () => {
+      const target = serverActionSelect?.dataset.targetNodeId || '';
+      const service = serverActionSelect?.value || '';
+      if (!target || !service) { serverActionStatus.textContent = 'The local host identity is unavailable.'; return; }
+      if (!window.confirm(`Restart ${service}? This runs a recorded service action on the Platform host.`)) return;
+      serverActionButton.disabled = true; serverActionStatus.textContent = `Requesting restart of ${service}…`;
+      try {
+        const response = await fetch('/api/admin/server-operations', { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_request_id: crypto.randomUUID(), target_node_id: target, action: { kind: 'restart_service', service }, confirmed: true }), signal: AbortSignal.timeout(15000) });
+        const data = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(data?.error || `Action request failed (HTTP ${response.status}).`);
+        const operation = data.operation;
+        serverActionStatus.textContent = `${operation.state}: ${operation.result_detail || service}`;
+        await refreshServerOperations();
+      } catch (error) {
+        serverActionStatus.textContent = `${error.message || 'The action result is unknown.'} Check action history before retrying.`;
+        await refreshServerOperations();
+      } finally { serverActionButton.disabled = false; }
+    });
 
     const postNodeApi = async (path, body) => {
       const response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(8000) });
@@ -2163,6 +2219,7 @@ pub fn router() -> Router {
         .merge(crate::recovery::router())
         .merge(crate::emergency_console::router())
         .merge(crate::operation_history::router())
+        .merge(crate::server_operations::router())
         .route("/admin/assets/admin.css", get(stylesheet))
         .route("/admin/assets/admin.js", get(script))
         .merge(crate::deploy_requests::router())
@@ -2462,7 +2519,8 @@ fn server_fleet_page_content() -> &'static str {
     concat!(
         "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<section class=\"card\"><h2>Add server</h2><p class=\"muted\">This adds a server to the fleet so its agent can report CPU, memory, load, and uptime. It grants no SSH access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Add server</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time telemetry credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
+        "<section class=\"card\"><h2>Core server actions</h2><p class=\"muted\">Typed, recorded actions for this Platform host. Restarting a service does not change its configuration. Remote-server actions will appear only after that server has an explicitly installed executor. Platform self-restart is intentionally withheld until recovery-after-restart is verified.</p><div class=\"server-operation-controls\"><label>Service<select id=\"server-action-service\"><option value=\"homepage\">Homepage</option><option value=\"docs\">Docs</option><option value=\"identity\">Identity</option><option value=\"diagnostics\">Diagnostics</option><option value=\"registry\">Registry</option><option value=\"artifact\">Artifact</option><option value=\"build_cache\">Build Cache</option><option value=\"caddy\">Web gateway</option></select></label><button id=\"server-action-restart\" type=\"button\">Restart service</button></div><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for local server identity…</p><details><summary>Recent actions</summary><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></details></section>",
+        "<section class=\"card\"><h2>Add server</h2><p class=\"muted\">Register a manually managed server so its agent can report CPU, memory, load, and uptime. Registration does not provision or remove machines, assign jobs, or grant SSH access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose (label only)<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Add server</button></form><p class=\"server-fleet-note\">Purpose is descriptive only; it does not schedule builds, backups, or other work. Operations will be explicit, typed, and recorded.</p><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time telemetry credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
         "<p class=\"muted\">The telemetry credential cannot be used for SSH, shell access, or arbitrary commands.</p>"
     )
 }
@@ -4162,7 +4220,34 @@ mod tests {
         assert!(!page.contains("Enroll a server"));
         assert!(page.contains("This file contains the one-time telemetry credential."));
         assert!(page.contains("id=\"server-node-secret-download\""));
-        assert!(page.contains("no SSH access or service control"));
+        assert!(page.contains("grant SSH access or service control"));
+        assert!(page.contains("does not provision or remove machines, assign jobs"));
+        assert!(page.contains("Purpose is descriptive only"));
+        assert!(page.contains("id=\"server-action-restart\""));
+        assert!(page.contains("id=\"server-operation-list\""));
+        assert!(page.contains("Platform self-restart is intentionally withheld"));
+        assert!(!page.contains("<option value=\"platform\">Platform</option>"));
+    }
+
+    #[tokio::test]
+    async fn server_action_ui_uses_typed_same_origin_operation_requests() {
+        let response = admin_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/assets/admin.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let script = std::str::from_utf8(&body).unwrap();
+        assert!(script.contains("/api/admin/server-operations"));
+        assert!(script.contains("kind: 'restart_service', service"));
+        assert!(script.contains("crypto.randomUUID()"));
+        assert!(script.contains("Check action history before retrying."));
+        assert!(script.contains("window.confirm(`Restart ${service}?"));
     }
 
     #[test]

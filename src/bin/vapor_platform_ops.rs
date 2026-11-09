@@ -1,6 +1,8 @@
 #[cfg_attr(not(unix), allow(dead_code))]
 #[path = "../recovery_status.rs"]
 mod recovery_status;
+#[path = "../server_operation_schema.rs"]
+mod server_operation_schema;
 #[path = "../ssh_cli.rs"]
 mod ssh_cli;
 #[path = "../ssh_policy.rs"]
@@ -158,6 +160,7 @@ mod unix_impl {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use super::server_operation_schema::{local_node_id, ServerAction};
     use super::ssh_policy::PENDING_TTL_SECONDS;
 
     const MAX_INPUT: usize = 8192;
@@ -177,6 +180,8 @@ mod unix_impl {
         expires_at_unix: Option<i64>,
         expected_fingerprint: Option<String>,
         host_admin_confirmed: Option<bool>,
+        target_node_id: Option<String>,
+        action: Option<ServerAction>,
     }
 
     #[derive(serde::Deserialize)]
@@ -541,7 +546,7 @@ mod unix_impl {
         }
         let archive_root_state = match std::fs::symlink_metadata(&root) {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(())
+                return Err(());
             }
             Ok(_) => "available",
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing",
@@ -960,16 +965,22 @@ mod unix_impl {
                     .iter()
                     .any(|capability| capability == "host_admin")
                 {
-                    println!("Connect as this temporary account, then use sudo -i. This does not grant direct root@ SSH login.");
+                    println!(
+                        "Connect as this temporary account, then use sudo -i. This does not grant direct root@ SSH login."
+                    );
                 }
                 let fingerprint: String = row.get("fingerprint");
-                println!("Type the displayed fingerprint exactly to create this temporary SSH account, key file, sudo policy, and expiry timer:");
+                println!(
+                    "Type the displayed fingerprint exactly to create this temporary SSH account, key file, sudo policy, and expiry timer:"
+                );
                 confirm_stdin(&fingerprint)?;
                 let host_admin_confirmed = if capabilities
                     .iter()
                     .any(|capability| capability == "host_admin")
                 {
-                    eprintln!("WARNING: this grants unrestricted root-equivalent sudo through the temporary account until expiry.");
+                    eprintln!(
+                        "WARNING: this grants unrestricted root-equivalent sudo through the temporary account until expiry."
+                    );
                     println!("Type UNRESTRICTED ROOT to confirm:");
                     confirm_stdin("UNRESTRICTED ROOT")?;
                     true
@@ -1006,7 +1017,9 @@ mod unix_impl {
                         if result.rows_affected() != 1 {
                             return Err("account created but grant state changed unexpectedly; inspect with ssh show".to_owned());
                         }
-                        println!("Temporary SSH access active: {username}@{host}; scope [{capabilities_display}]; expires {expires_display}; request {id}.");
+                        println!(
+                            "Temporary SSH access active: {username}@{host}; scope [{capabilities_display}]; expires {expires_display}; request {id}."
+                        );
                     }
                     Err((_, detail)) => {
                         let _ = sqlx::query("UPDATE platform_ssh_access_requests SET status='failed', version=version+1, operation_detail=? WHERE id=? AND status='provisioning' AND version=?")
@@ -1022,7 +1035,9 @@ mod unix_impl {
                 if !matches!(status.as_str(), "active" | "failed") {
                     return Err("only active or failed grants can be revoked".to_owned());
                 }
-                println!("\nType YES to revoke this grant and remove its managed account, key, sudo policy, and expiry timer:");
+                println!(
+                    "\nType YES to revoke this grant and remove its managed account, key, sudo policy, and expiry timer:"
+                );
                 confirm_stdin("YES")?;
                 let id: String = row.get("id");
                 let version: i64 = row.get("version");
@@ -1046,7 +1061,9 @@ mod unix_impl {
             super::ssh_cli::SshCommand::Reconfigure { request_id } => {
                 let row = ssh_request_row(&pool, &request_id).await?;
                 print_ssh_request(&row);
-                println!("\nGrant scope and duration are immutable after approval. Revoke this grant, then submit a new request for the desired scope.");
+                println!(
+                    "\nGrant scope and duration are immutable after approval. Revoke this grant, then submit a new request for the desired scope."
+                );
             }
         }
         Ok(())
@@ -1301,9 +1318,23 @@ mod unix_impl {
             .operation
             .as_deref()
             .ok_or_else(|| (id.clone(), "missing operation"))?;
+        if operation != "server_action"
+            && (input.target_node_id.is_some() || input.action.is_some())
+        {
+            return Err((id, "unexpected server action fields"));
+        }
+        if operation == "server_action"
+            && (input.granted_capabilities.is_some()
+                || input.granted_duration_seconds.is_some()
+                || input.expires_at_unix.is_some()
+                || input.expected_fingerprint.is_some()
+                || input.host_admin_confirmed.is_some())
+        {
+            return Err((id, "unexpected fields for server action"));
+        }
         if !matches!(
             operation,
-            "dispatch_deploy" | "reconcile_deploy" | "grant_ssh" | "revoke_ssh"
+            "dispatch_deploy" | "reconcile_deploy" | "grant_ssh" | "revoke_ssh" | "server_action"
         ) {
             return Err((id, "unsupported operation"));
         }
@@ -1363,8 +1394,117 @@ mod unix_impl {
                 revoke_ssh(&pool, &id, input.expected_version.unwrap_or(0)).await?;
                 Ok((id, "revoked", "temporary SSH grant revoked"))
             }
+            "server_action" => {
+                let target_node_id = input
+                    .target_node_id
+                    .as_deref()
+                    .ok_or_else(|| (id.clone(), "server target is required"))?;
+                let action = input
+                    .action
+                    .as_ref()
+                    .ok_or_else(|| (id.clone(), "server action is required"))?;
+                run_server_action(
+                    &pool,
+                    &id,
+                    input.expected_version.unwrap_or(0),
+                    target_node_id,
+                    action,
+                )
+                .await?;
+                Ok((id, "succeeded", "typed server action completed"))
+            }
             _ => Err((id, "unsupported operation")),
         }
+    }
+
+    async fn run_server_action(
+        pool: &SqlitePool,
+        id: &str,
+        expected_version: i64,
+        target_node_id: &str,
+        action: &ServerAction,
+    ) -> Result<(), (String, &'static str)> {
+        if expected_version != 2 || target_node_id != local_node_id() {
+            return Err((
+                id.to_owned(),
+                "server operation is not current for this host",
+            ));
+        }
+        let row = sqlx::query(
+            "SELECT target_node_id,action_json,state,version,actor_profile_id
+             FROM platform_server_operations WHERE id=?",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| (id.to_owned(), "could not read server operation"))?
+        .ok_or_else(|| (id.to_owned(), "server operation does not exist"))?;
+        let target: String = row.get("target_node_id");
+        let action_json: String = row.get("action_json");
+        let state: String = row.get("state");
+        let version: i64 = row.get("version");
+        if target != target_node_id
+            || state != "running"
+            || version != expected_version
+            || serde_json::to_string(action).ok().as_deref() != Some(action_json.as_str())
+        {
+            return Err((id.to_owned(), "server operation record does not match"));
+        }
+        let Some(unit) = action.systemd_unit() else {
+            return Err((id.to_owned(), "server action is not enabled"));
+        };
+        let result = run_command("/usr/bin/systemctl", &["restart", "--", unit]).await;
+        let (state, event, detail) = match result {
+            Ok(()) => (
+                "succeeded",
+                "succeeded",
+                "approved service restart completed",
+            ),
+            Err(()) => ("failed", "failed", "approved service restart failed"),
+        };
+        let now = unix_now();
+        let actor: String = row.get("actor_profile_id");
+        let mut transaction = pool
+            .begin()
+            .await
+            .map_err(|_| (id.to_owned(), "could not record server operation result"))?;
+        let updated = sqlx::query(
+            "UPDATE platform_server_operations SET state=?,version=version+1,
+                    finished_at_unix=?,result_detail=?
+             WHERE id=? AND state='running' AND version=?",
+        )
+        .bind(state)
+        .bind(now)
+        .bind(detail)
+        .bind(id)
+        .bind(expected_version)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| (id.to_owned(), "could not record server operation result"))?;
+        if updated.rows_affected() != 1 {
+            return Err((
+                id.to_owned(),
+                "server operation changed before result recording",
+            ));
+        }
+        sqlx::query(
+            "INSERT INTO platform_server_operation_events
+             (operation_id,event,state,actor_profile_id,at_unix,detail) VALUES (?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(event)
+        .bind(state)
+        .bind(actor)
+        .bind(now)
+        .bind(detail)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| (id.to_owned(), "could not record server operation event"))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| (id.to_owned(), "could not commit server operation result"))?;
+        result.map_err(|_| (id.to_owned(), "approved service restart failed"))
     }
 
     async fn authorize_root(session_token: &str) -> bool {
@@ -1885,7 +2025,7 @@ mod unix_impl {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => {
-                    return Err((id.to_string(), "could not remove managed SSH access files"))
+                    return Err((id.to_string(), "could not remove managed SSH access files"));
                 }
             }
         }
@@ -1915,7 +2055,7 @@ mod unix_impl {
                 return Err((
                     id.to_string(),
                     "could not create temporary access cleanup lock directory",
-                ))
+                ));
             }
         }
         let directory_metadata = std::fs::symlink_metadata(lock_dir)
@@ -2189,8 +2329,12 @@ mod unix_impl {
         let date = chrono_free_iso(expires).ok_or(())?;
         let service_path = format!("/etc/systemd/system/vapor-ssh-expire-{id}.service");
         let timer_path = format!("/etc/systemd/system/vapor-ssh-expire-{id}.timer");
-        let service = format!("[Unit]\nDescription=Expire temporary Vapor SSH grant {id}\n\n[Service]\nType=oneshot\nExecStart=/usr/local/libexec/vapor-platform-ops --expire {id}\n");
-        let timer = format!("[Unit]\nDescription=Expiry timer for temporary Vapor SSH grant {id}\n\n[Timer]\nOnCalendar={date}\nAccuracySec=1s\nPersistent=true\nUnit=vapor-ssh-expire-{id}.service\n\n[Install]\nWantedBy=timers.target\n");
+        let service = format!(
+            "[Unit]\nDescription=Expire temporary Vapor SSH grant {id}\n\n[Service]\nType=oneshot\nExecStart=/usr/local/libexec/vapor-platform-ops --expire {id}\n"
+        );
+        let timer = format!(
+            "[Unit]\nDescription=Expiry timer for temporary Vapor SSH grant {id}\n\n[Timer]\nOnCalendar={date}\nAccuracySec=1s\nPersistent=true\nUnit=vapor-ssh-expire-{id}.service\n\n[Install]\nWantedBy=timers.target\n"
+        );
         atomic_write_root_file(&service_path, service.as_bytes(), 0o644).map_err(|_| ())?;
         atomic_write_root_file(&timer_path, timer.as_bytes(), 0o644).map_err(|_| ())?;
         run_command("/usr/bin/systemctl", &["daemon-reload"]).await?;
