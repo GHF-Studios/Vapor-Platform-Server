@@ -138,7 +138,7 @@ fn read_config(path: &std::path::Path) -> Result<Config, String> {
         let group_mode = metadata.permissions().mode() & 0o070;
         if !metadata.file_type().is_file()
             || metadata.uid() != 0
-            || metadata.gid() != u64::from(effective_group)
+            || metadata.gid() != effective_group
             || metadata.permissions().mode() & 0o007 != 0
             || group_mode != 0o040
         {
