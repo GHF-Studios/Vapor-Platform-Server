@@ -196,7 +196,13 @@ if ($isBare -cne 'true') {
 if ($LASTEXITCODE -ne 0) { throw 'Could not update recovery tools from Platform main.' }
 $sourceRef = 'FETCH_HEAD'
 & $git -C $repositoryRoot merge-base --is-ancestor $archiveSourceCommit $sourceRef 2>$null
-if ($LASTEXITCODE -ne 0) {
+$ancestorExitCode = $LASTEXITCODE
+# A failed ancestry predicate is an expected validation result for an
+# unrecoverable archive, not a failed process. Clear the native exit code
+# before throwing so callers that handle this validation error can continue
+# and still finish successfully.
+$global:LASTEXITCODE = 0
+if ($ancestorExitCode -ne 0) {
     throw 'The snapshot source revision is not reachable from Platform origin/main; refusing to create an unrecoverable USB generation.'
 }
 $recoveryKitCommit = (& $git -C $repositoryRoot log -1 --format=%H $sourceRef -- @archivePaths).Trim()
