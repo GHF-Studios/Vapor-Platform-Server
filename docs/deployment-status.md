@@ -1,24 +1,33 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-09 00:05 UTC)
+## Current verified state (2026-11-09 01:07 UTC)
 
 - The hourly `Vapor USB Recovery Sync` completed successfully at
-  `2026-11-09T00:05:04Z`. The USB index contains six state-only generations
-  totaling 28,787,911 bytes; the latest archive is
-  `vapor-platform-state-20261108T234117Z-caa08ee1084b.tar.gz` with SHA-256
-  `da3c3d5da8a5bc36ff4779955e9df5b5be7ead61799a6e9f5ee4fc45b6035f24`.
-  The Platform status report confirms the sync and recovery kit are available.
-- The state-only recovery pointer is schema 2 and records separate pins:
-  recovery-kit source `cbcf388536fdce8c18e852a8950fd6cabed5acee` and archived
-  Platform source `20d1d234b6b2886250fc2ade4c3d016aebbdf708`. The former is the
-  latest commit that changed a recovery-kit file; unrelated `main` changes do
-  not create duplicate kit versions. The state archive remains verified, but a
-  clean-host restore drill is still unproven.
-- Platform `main` is at
-  `cd6d4cd31a10774a2249756061f242fd2a18dd68`; Windows recovery tests and Linux
-  composed CI passed. The push workflow classified the changes as `none`, so it
-  created no deployment request and did not deploy application services. The
-  last recorded live Platform revision remains `20d1d234...`.
+  `2026-11-09T01:07:48Z` with task result `0`. It verified all eight indexed
+  state-only archives (38,389,881 payload bytes) and copied the latest archive
+  and recovery kit to the owner USB. The USB archive index and sidecars were
+  independently re-hashed with no mismatches.
+- The latest owner-held archive is
+  `vapor-platform-state-20261109T010116Z-34f63ec46441.tar.gz` with SHA-256
+  `edd21e88ec907b1108914f15561e0201629af14c4b865cd29da876c3bc9a53e9`. Its
+  archived Platform source is `78722c2641b42bfdf493d45b6b92461dccd3e87f`;
+  the separately pinned recovery-kit source is
+  `cbcf388536fdce8c18e852a8950fd6cabed5acee`. This archive was exported after
+  the live deployment completed at `2026-11-09T00:47:09Z`.
+- The VPS deployed-source map records composition
+  `78722c2641b42bfdf493d45b6b92461dccd3e87f` for Platform and all eight service
+  targets. Platform reports the deployment succeeded. Platform, Homepage,
+  Docs, Identity, Diagnostics, Registry, Artifact, Build Cache, and Caddy were
+  all active during the latest check. The three old failed systemd deployment
+  units were reset after their outcomes were confirmed in Platform history;
+  the history records remain intact.
+- Build Cache currently reports both supported targets as unconfigured and
+  without a current snapshot. The optional worker path still lacks the
+  canonical ecosystem/toolchain lock. Local source builds remain the available
+  fallback; no clean-host restore drill has been completed yet.
+- Platform `main` was at `5c01be4` when this snapshot was collected. The
+  archive and recovery kit are checksum-verified on USB, but
+  archive verification is not a substitute for a fresh-host restore drill.
 
 ## Previous checkpoint (2026-11-08 22:05 UTC)
 
