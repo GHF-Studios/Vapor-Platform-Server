@@ -35,9 +35,9 @@
 
 - Standalone Vapor website download, signed updater, install/uninstall, getting-started and working docs. Steam is not required to download/install Vapor.
 - Product adapters/workbenches: Mad Max (local game detection and mod receipts), native Loo Cast (depot content), and isolated Sandbox. Keep their legal/source semantics distinct while reusing widgets.
-- Steam Loo Cast content migration: inspect exact current `App.vapor.toml`, depot layout, Steam launch options, and the three source artifacts. Build a depot staging artifact containing only the three Loo Cast first-party products plus necessary Vapor manifest and optional locator. No Vapor app runtime, compiler toolchain, source checkout, cache, or user state in the Steam app root.
+- Steam Loo Cast content migration: inspect exact current `App.vapor.toml`, depot layout, Steam launch options, and the three source products. Build one self-contained executable depot artifact that embeds `App.vapor.toml` and all three first-party products. No separate product folders, loose locator, Vapor app runtime, compiler toolchain, source checkout, cache, or user state in the Steam app root.
 - Gate first-party product publication server-side. Validate that a user-edited manifest cannot alter product source, license, or publishability.
-- Make standalone install work without Steam. Offer Loo Cast Steam launch as an optional locator into the installed Vapor selector; if Vapor is absent, show clear install guidance and stop. The Steam app root stays limited to `App.vapor.toml` and the final Packagepack artifact; do not add a loose locator binary without a new decision.
+- Make standalone install work without Steam. If the Steam artifact offers a Vapor tools launch action, implement it within the self-contained executable/embedded manifest contract; if Vapor is absent, show clear install guidance and stop. The Steam app root stays limited to the single self-contained executable artifact, which embeds the manifest and products.
 - **Exit:** clean Windows/Linux install + update + uninstall tests, Steam depot install/launch tests for developer and normal-player flows, and a dry-run/restoreable migration of the current power-user install.
 
 ### 4. Clean-room local migration and purge (Client)
@@ -45,7 +45,7 @@
 - Inventory Steam app root, Steam workshop cache/manifest, Steam userdata/shortcuts/registry, `C:\Users\David Jackson\Vapor`, Local/Roaming AppData, PATH, tasks, and historical installer locations.
 - Classify files as Steam-owned depot payload, Vapor-managed, user-authored checkout, game-owned, generated/cache, or unknown. Unknown paths default to preserve.
 - Provide preview, export, and explicit clean-room deletion modes. Keep normal uninstall conservative. Full purge may delete Vapor-owned unsaved data and user-authored checkouts only after they are separately backed up and individually enumerated in the exact preview; unknown paths remain preserved.
-- Re-home Vapor-managed files to documented user/system Vapor directories, then validate old paths are empty except the approved Steam manifest, content artifact, and optional locator.
+- Re-home Vapor-managed files to documented user/system Vapor directories, then validate the Steam app root contains only the single approved self-contained executable artifact (with its embedded manifest/products) and Steam-owned files.
 - **Exit:** recorded before/after inventory with no licensed game files removed and no unreviewed data loss.
 
 ### 5. Optional worker and build cache (Platform + Build Cache)

@@ -11,6 +11,12 @@
 > A second build worker is optional; local source builds, service deployment,
 > and primary-host recovery must remain available without it.
 
+> **Steam packaging update (2026-11-09):** The previous optional loose
+> locator and separate launch-target assumptions are superseded by the
+> owner-approved [`2026-11-08-vapor-platform-and-product-rebuild-charter.md`](2026-11-08-vapor-platform-and-product-rebuild-charter.md).
+> Steam ships one self-contained executable artifact embedding
+> `App.vapor.toml`, Spacetime Engine, Loo Cast Game, and Loo Cast Packagepack.
+
 ## Intent
 
 Reconcile Vapor Client, Vapor's server platform, Loo Cast, and Mad Max into one
@@ -31,15 +37,14 @@ checkout cleanup.
   on Windows and `$HOME/Vapor` on Linux). Vapor owns its application, tools,
   sources, caches, configuration, and state there; Steam does not own those
   files or their lifecycle.
-- The official Loo Cast Steam app mounts one Loo Cast content artifact made up
-  of `App.vapor.toml`, Spacetime Engine, Loo Cast Game, and Loo Cast
-  Packagepack. These first-party products are depot-provided and
+- The official Loo Cast Steam depot contains one self-contained executable
+  artifact embedding `App.vapor.toml`, Spacetime Engine, Loo Cast Game, and
+  Loo Cast Packagepack. These first-party products are depot-provided and
   non-publishable as community content.
-- The Steam app may include a tiny locator/forwarder for its Vapor tools
-  selector launch choice. It only finds the independently installed Vapor and
-  asks it to open the selector; it never bundles, installs, updates, or owns
-  Vapor. If Vapor is absent, it gives clear install guidance. The other launch
-  choice starts Loo Cast.
+- No separate locator/forwarder or product folders are placed in the Steam
+  depot. The exact Steam-start behavior of the executable artifact remains to
+  be designed; it never bundles or installs the independently managed Vapor
+  runtime.
 - The only local Vapor setup roles are **Player** and **Developer**. Developer
   always installs the development toolset, including both supported targets
   and managed cross-compilers; there is no skip option. Server-side ecosystem
@@ -208,10 +213,11 @@ tools by default; Player setup does not install them.
 ### 3. Establish trusted product topology
 
 Move the Loo Cast app/depot identity to the Loo Cast product while retaining
-the one depot-mounted product artifact and a tiny Vapor locator/forwarder for
-the tools-selector launch option. The locator only finds and invokes the
-separate Vapor install. Change the products' source/visibility so they cannot
-be community-published. Add a
+one self-contained executable artifact with the manifest and all three
+first-party products embedded. No separate locator/forwarder is shipped.
+Design the executable's Steam-start behavior without bundling the standalone
+Vapor runtime. Change the products' source/visibility so they cannot be
+community-published. Add a
 Mad Max external-game source adapter that detects the user-owned install,
 maintains a separate derived asset cache, and uses reversible mod receipts.
 Do not put game archives, textures, executables, or other licensed bytes in
@@ -274,9 +280,9 @@ Vapor distribution.
 
 - Exact canonical source/product identities and versioned serialization follow
   active Vapor #1/#2; this design intentionally does not mint a second schema.
-- Exact Steam AppID/depot IDs, locator packaging details, Workshop retirement
-  steps, and migration order require owner-controlled release metadata and are
-  not inferred here.
+- Exact Steam AppID/depot IDs, Steam-start behavior within the single
+  executable artifact, Workshop retirement steps, and migration order require
+  owner-controlled release metadata and are not inferred here.
 - The client-owned location/layout for Vapor home subdirectories should reuse
   the current app updater and source migration contracts rather than invent a
   second path authority.

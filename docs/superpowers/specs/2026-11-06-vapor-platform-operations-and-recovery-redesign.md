@@ -340,9 +340,9 @@ Vapor Client owns standalone install, update, repair, uninstall, managed tools,
 source cache, and local mounts in the user-owned Vapor home. The Loo Cast Steam
 application is a local content source, not the Vapor install root. Its intended
 depot artifact contains exactly the Spacetime Engine, Loo Cast Game, and Loo
-Cast Packagepack, plus `App.vapor.toml` and a tiny locator/forwarder that finds
-the independent Vapor installation for the optional tools-selector launch
-entry. The locator must never carry the Vapor runtime itself.
+Cast Packagepack inside one self-contained executable artifact that also embeds
+`App.vapor.toml`. No separate locator/forwarder is part of the depot. The
+executable artifact must never carry the independently managed Vapor runtime.
 
 The Vapor installer presents only two local setup choices: **Player** and
 **Developer**. Developer setup includes the complete managed developer toolset
@@ -592,7 +592,8 @@ passes.
   manifest claims. Loo Cast/Mad Max proprietary files are absent from all Vapor
   public feeds/artifacts/diagnostic stores.
 - Vapor can be installed/updated/uninstalled independently of Steam; Steam
-  depot files remain a local source and optional locator, never the Vapor home.
+  depot provides one self-contained Loo Cast executable artifact, never the
+  Vapor home or a separate locator.
   Online sign-in uses the required Steam identity flow.
 - A clean-host setup + service export + reinstall + service import restores the
   platform from pinned source, owner-controlled local recovery media, and
@@ -626,8 +627,9 @@ passes.
   dependency for local build or primary-host operation.
 - Loo Cast is locally mounted Steam content; Mad Max is externally acquired
   local game content; Vapor does not distribute either game's files.
-- Steam installs only Loo Cast's three products plus app manifest and a thin
-  optional Vapor locator; Vapor owns its independent user-home lifecycle.
+- Steam installs one self-contained executable artifact embedding Loo Cast's
+  three products and `App.vapor.toml`; Vapor owns its independent user-home
+  lifecycle and is not bundled in the depot.
 - Steam remains the required sign-in provider for Vapor identities; GitHub is
   linked where developer, publishing, or repository authority requires it.
 - Recovery backups are intentionally unencrypted on an owner-held 128 GB USB

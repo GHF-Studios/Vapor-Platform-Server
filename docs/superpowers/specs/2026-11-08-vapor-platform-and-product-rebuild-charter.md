@@ -14,8 +14,8 @@ This is pre-alpha. Weak implementations may be replaced outright. The acceptable
 
 ```mermaid
 flowchart TB
-  Steam[Steam: Loo Cast depot content only] --> Locator[Small optional Vapor locator]
-  Locator --> Runtime[Standalone Vapor install in Vapor home]
+  Steam[Steam: one self-contained Loo Cast executable artifact]
+  Steam -. optional tools launch, if retained .-> Runtime[Standalone Vapor install in Vapor home]
   Runtime --> LC[Loo Cast project adapter]
   Runtime --> MM[Mad Max Modding project adapter]
   Runtime --> Sandbox[Developer sandbox]
@@ -61,17 +61,15 @@ flowchart TB
 ### Standalone runtime and project boundary
 
 - Vapor is installed, updated, and uninstalled independently of Steam. Its managed binaries, source checkouts, toolchains, caches, settings, and state live under Vapor-owned user/system locations, not in a Steam app directory.
-- The Loo Cast Steam app root is limited to `App.vapor.toml` and one final
-  Packagepack archive. That archive contains the three first-party local
-  content entries: Spacetime Engine (Engine), Loo Cast (Game), and Loo Cast
-  Packagepack (Packagepack). Do not
-  add a third loose root item. If Steam needs a direct “Vapor tools” launch
-  option, resolve it inside the package/manifest launch contract or through
-  Steam metadata, without bundling the Vapor runtime. The locator may only
-  find/forward to a separately installed Vapor and must show clear install
-  guidance when Vapor is absent; it never installs Vapor implicitly. Steam
-  content must not carry developer toolchains, build caches, or Vapor user
-  state.
+- The Loo Cast Steam depot contains one self-contained executable artifact.
+  That artifact embeds `App.vapor.toml` and the three first-party local
+  products: Spacetime Engine (Engine), Loo Cast (Game), and Loo Cast
+  Packagepack (Packagepack). Do not split those products into separate depot
+  folders or add a loose Vapor locator/helper. The executable artifact may
+  provide the Steam launch entrypoint into the separately installed Vapor
+  tools selector; it must show clear install guidance when Vapor is absent and
+  must never bundle or implicitly install the Vapor runtime. Steam content
+  must not carry developer toolchains, build caches, or Vapor user state.
 - The three first-party Loo Cast content entries are depot-provided/local-only
   and cannot be made community-publishable by editing `App.vapor.toml` or
   another client manifest. The owning server policy is authoritative.
@@ -191,9 +189,10 @@ Registry and build terminology are further constrained by
    policy. The Project workspace work adds a normal public session without
    granting global roles and keeps root operator login as a separate session;
    it does not change linked-provider or account-merge policy.
-2. Exact mechanism for Steam's optional Vapor tools launch action. The root
-   contents are not open-ended: only `App.vapor.toml` and the final
-   Packagepack artifact are allowed.
+2. Exact launch behavior of the self-contained Steam executable when it is
+   started from Steam, including how it finds the separately installed Vapor
+   tools selector and reports when Vapor is absent. The depot remains one
+   executable artifact containing its embedded manifest and three products.
 3. Which Windows locations are Vapor-owned historical paths and which user-created checkouts are valuable work. Generate a dry-run inventory and allow review before clean-room deletion.
 4. Second node provider/OS/capacity/cost and whether it is a builder, backup replica, or both. Keep local fallback until measured.
 
@@ -202,7 +201,10 @@ Registry and build terminology are further constrained by
 - A clean Windows and Linux install starts Vapor without the Loo Cast app
   installed. Steam's optional launch action locates Vapor without owning its
   runtime, and reports installation guidance when Vapor is absent.
-- Steam depot contains only the agreed Loo Cast content artifact/manifest/locator and no Vapor-managed runtime, toolchains, state, or caches.
+- Steam depot contains one self-contained executable artifact embedding
+  `App.vapor.toml` and the Engine, Game, and Packagepack products; it contains
+  no separately loose locator, Vapor-managed runtime, toolchains, state, or
+  caches.
 - Vapor uninstall and full clean-room purge report exact paths and have separately tested preserve/export and delete modes.
 - Public download/getting-started/docs links work; Platform admin pages are task-oriented, compact, accessible, and have real unavailable/failed/partial states.
 - Public, personal dashboard, Project workspace, and operator experiences have

@@ -10,6 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-03-vapor-standalone-product-platform-design.md`
 
+> **Current Steam packaging decision (2026-11-09):** The older optional
+> locator/forwarder plan below is superseded by the
+> [2026-11-08 Platform and Product Rebuild Charter](../specs/2026-11-08-vapor-platform-and-product-rebuild-charter.md):
+> one self-contained executable artifact embeds the manifest and all three
+> first-party products; no separate locator is shipped.
+
 ## Global Constraints
 
 - Vapor is installed, updated, repaired, and uninstalled independently of Steam.
@@ -25,7 +31,7 @@
 - Keep one current signed build snapshot per supported target and rolling lock. A second VPS worker is optional; source builds and service deployment retain a local fallback when it is absent. See [`../vapor-build-snapshot-contract.md`](../vapor-build-snapshot-contract.md) for the current boundary and implementation status.
 - Install Vapor independently under the user's Vapor home (`%USERPROFILE%\Vapor` or `$HOME/Vapor`); Steam must not own Vapor application files, tools, caches, configuration, or state.
 - The only local setup roles are `Player` and `Developer`. Developer setup always includes the development toolset, both supported targets, and managed cross-compilers; it cannot be skipped. Server-side ecosystem authorization is separate from these local roles.
-- The Loo Cast Steam mount is one depot-provided content artifact (`App.vapor.toml`, Engine, Game, Packagepack) plus only the small Steam launch locator/forwarder needed to find the separate Vapor installation and open its tools selector. The locator never bundles or installs Vapor.
+- The Loo Cast Steam target is one self-contained executable artifact embedding `App.vapor.toml`, Engine, Game, and Packagepack. A separate locator/forwarder is not part of the depot payload; the exact Steam-start behavior of the artifact remains open.
 - Mad Max maps to Vapor's layers: locally acquired `MadMax.exe`/required original runtime files are the Engine source; scripts/content are the Game layer; `MadMaxModding` is the integration Packagepack that manages ASI-loader and bridge setup so Vapor content can participate. The Packagepack never contains Mad Max game files.
 
 ## Review Focus
@@ -75,8 +81,9 @@ permissions, or operational data into one UI.
   does not yet have a release, state that clearly rather than showing a fake
   download.
 - Explain that Loo Cast and Mad Max game files are acquired locally through
-  their respective sources and are not distributed by Vapor. Explain the
-  Loo Cast Steam locator's role without implying Steam installs Vapor.
+  their respective sources and are not distributed by Vapor. Explain that
+  Steam provides one self-contained Loo Cast artifact and does not install or
+  own the standalone Vapor runtime.
 - Keep registration, identity, and local install actions at their actual
   owning surfaces; the public page must not pretend to install or authorize a
   product itself.
@@ -200,14 +207,14 @@ permissions, or operational data into one UI.
 - Create: Loo Cast depot/product migration plan after identifiers are verified.
 
 **Interfaces:**
-- Loo Cast source: trusted local depot mounting one artifact (`App.vapor.toml`, Engine, Game, and Packagepack); the small Steam locator only finds the separate Vapor installation and opens its tools selector.
+- Loo Cast source: trusted local depot mounting one self-contained executable artifact with embedded manifest, Engine, Game, and Packagepack; no separate locator is included.
 - Mad Max source: user-selected local game installation; source files are never uploaded; derived index/cache is stored separately and can be rebuilt.
 - Mad Max layers: Engine source is the local executable/runtime; Game is the script/content and installed-mod composition; `MadMaxModding` Packagepack owns the loader/bridge compatibility lifecycle. Mods may target the Engine, Game, or other mods/Packagepacks using Vapor's canonical dependency/conflict/override semantics.
 - Output: product/source records conforming to Task 3’s canonical identity contract.
 
 - [ ] Verify Loo Cast Steam AppID/depot IDs, launch choices, existing Workshop item IDs, and owner-controlled retirement sequence; do not infer replacement identifiers.
 - [ ] Move Loo Cast first-party content out of public Workshop semantics and mark it server-authoritatively local-only.
-- [ ] Keep the official Steam app's Loo Cast launch path and add the locator-only Vapor tools-selector handoff; it must never bundle, install, update, or own Vapor. Missing Vapor shows install guidance.
+- [ ] Keep the official Steam app's launch behavior within the single self-contained executable artifact; any Vapor tools-selector handoff must not bundle, install, update, or own Vapor. Missing Vapor shows install guidance.
 - [ ] Add Mad Max install discovery, local source validation, separate derived cache, and reversible mod receipts using the Mad Max detailed plan.
 - [ ] Implement `MadMaxModding` as the integration Packagepack: install/check/repair the ASI loader and Mad Max bridge, record their versions and provenance, and make the game receptive to Vapor-managed content. Keep game files out of the Packagepack; acquire third-party loader files from an authorized source if redistribution is not allowed.
 - [ ] Map mod targets to Engine, Game, and other installed mods/Packagepacks through Vapor's canonical identity and dependency/conflict/override contracts; do not add a Mad Max-only parallel manifest schema.
