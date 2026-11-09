@@ -22,6 +22,25 @@ fn normalize_command_output(output: &str) -> Result<String, ()> {
     Ok(output.to_owned())
 }
 
+fn normalize_bounded_key_value_output(output: &str) -> Result<String, ()> {
+    if output
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r'))
+    {
+        return Err(());
+    }
+    let output = output.trim();
+    if output.is_empty()
+        || output.lines().count() > 8
+        || output.lines().any(|line| {
+            line.len() > 256 || !line.split_once('=').is_some_and(|(key, _)| !key.is_empty())
+        })
+    {
+        return Err(());
+    }
+    Ok(output.to_owned())
+}
+
 #[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Clone, Copy)]
 struct SshGrantHostState {
@@ -809,22 +828,7 @@ mod unix_impl {
         max_bytes: usize,
     ) -> Result<String, ()> {
         let output = capture_command_output_bounded(path, args, max_bytes).await?;
-        if output
-            .chars()
-            .any(|character| character.is_control() && !matches!(character, '\n' | '\r'))
-        {
-            return Err(());
-        }
-        let output = output.trim();
-        if output.is_empty()
-            || output.lines().count() > 8
-            || output.lines().any(|line| {
-                line.len() > 256 || !line.split_once('=').is_some_and(|(key, _)| !key.is_empty())
-            })
-        {
-            return Err(());
-        }
-        Ok(output.to_owned())
+        super::normalize_bounded_key_value_output(&output)
     }
 
     async fn capture_command_output_bounded(
@@ -2599,9 +2603,9 @@ fn main() {
 #[cfg(test)]
 mod endpoint_tests {
     use super::{
-        active_ssh_grant_host_state_is_consistent, normalize_command_output,
-        record_stopped_deploy_failure, valid_deployment_target, valid_identity_authz_endpoint,
-        SshGrantHostState,
+        active_ssh_grant_host_state_is_consistent, normalize_bounded_key_value_output,
+        normalize_command_output, record_stopped_deploy_failure, valid_deployment_target,
+        valid_identity_authz_endpoint, SshGrantHostState,
     };
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Row;
@@ -2618,6 +2622,28 @@ mod endpoint_tests {
         );
         assert!(normalize_command_output("active\nunknown").is_err());
         assert!(normalize_command_output("active\0").is_err());
+    }
+
+    #[test]
+    fn bounded_systemd_properties_accept_valid_multiline_output_and_reject_bad_output() {
+        let valid = concat!(
+            "LoadState=loaded\n",
+            "ActiveState=inactive\n",
+            "Result=success\n",
+            "ExecMainStartTimestampMonotonic=123\n",
+            "ExecMainStartTimestamp=Mon 2026-11-09 14:00:00 UTC\n"
+        );
+        assert_eq!(
+            normalize_bounded_key_value_output(valid),
+            Ok(valid.trim().to_owned())
+        );
+
+        assert!(normalize_bounded_key_value_output("").is_err());
+        assert!(normalize_bounded_key_value_output("broken-property").is_err());
+        assert!(normalize_bounded_key_value_output("=missing-key\n").is_err());
+        assert!(normalize_bounded_key_value_output("LoadState=loaded\0\n").is_err());
+        assert!(normalize_bounded_key_value_output(&format!("{}=x", "k".repeat(257))).is_err());
+        assert!(normalize_bounded_key_value_output(&format!("{}", "k=x\n".repeat(9))).is_err());
     }
 
     #[test]
