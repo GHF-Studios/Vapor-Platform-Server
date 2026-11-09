@@ -12,17 +12,16 @@ same tested commit. Download `vapor-node-agent-linux-x86_64.tar.gz` and its
 
 ```sh
 sha256sum -c vapor-node-agent-linux-x86_64.tar.gz.sha256
-mkdir -m 0700 /tmp/vapor-node-agent-install
-tar -xzf vapor-node-agent-linux-x86_64.tar.gz -C /tmp/vapor-node-agent-install
+install_dir="$(mktemp -d)"
+trap 'rm -rf -- "$install_dir"' EXIT
+tar -xzf vapor-node-agent-linux-x86_64.tar.gz -C "$install_dir"
+sudo install -o root -g root -m 0755 "$install_dir/vapor-node-agent" /usr/local/bin/vapor-node-agent
+sudo install -o root -g root -m 0644 "$install_dir/vapor-node-agent.service" /etc/systemd/system/vapor-node-agent.service
 ```
 
 The archive contains the reporter binary, this README, and the systemd unit. It
-is built for Linux x86_64. Install the binary and unit with root ownership:
-
-```sh
-sudo install -o root -g root -m 0755 /tmp/vapor-node-agent-install/vapor-node-agent /usr/local/bin/vapor-node-agent
-sudo install -o root -g root -m 0644 /tmp/vapor-node-agent-install/vapor-node-agent.service /etc/systemd/system/vapor-node-agent.service
-```
+is built for Linux x86_64. The temporary directory is unique and removed when
+the shell exits.
 
 ## Configure
 
