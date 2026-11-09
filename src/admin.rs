@@ -337,6 +337,8 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .server-fleet-toolbar { display:flex; justify-content:space-between; align-items:center; gap:10px; }
 .server-fleet-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:10px; }
 .server-node { padding:12px; }
+.server-node-select { display:block; width:100%; padding:0; border:0; color:inherit; text-align:left; background:transparent; }
+.server-node-select[aria-pressed="true"] { outline:2px solid #7bc6a4; outline-offset:3px; border-radius:4px; }
 .server-node-header { display:flex; justify-content:space-between; align-items:center; gap:10px; }
 .server-node-header h3 { margin:0; font-size:15px; }
 .server-node-role { color:#9eacba; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
@@ -348,16 +350,35 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .server-node-status.stale { color:#e5cb78; }
 .server-node-status.unavailable { color:#f08b92; }
 .server-fleet-note { margin:8px 0 0; color:#9eacba; font-size:12px; }
-.server-node-enroll { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
-.server-node-enroll label { display:grid; gap:4px; min-width:180px; color:#aebbc8; font-size:12px; }
+.server-node-connect-form { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
+.server-node-form { padding:12px; margin:12px 0; border:1px solid #34404e; border-radius:6px; background:#111821; }
+.server-node-form h4 { flex-basis:100%; margin:0; }
+.server-node-form p { flex-basis:100%; }
+.server-node-connect-form label { display:grid; gap:4px; min-width:180px; color:#aebbc8; font-size:12px; }
 .server-node-secret { margin:12px 0; padding:12px; border:1px solid #8c7a3e; border-radius:6px; background:#19180f; }
 .server-node-secret pre { padding:10px; overflow-wrap:anywhere; white-space:pre-wrap; user-select:all; background:#10151b; }
 .server-node-management-row { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 0; border-top:1px solid #29323d; }
 .server-node-management-row p { margin:4px 0 0; font-size:12px; overflow-wrap:anywhere; }
 .server-node-events { margin-top:12px; }
 .server-node-events li { margin:6px 0; color:#aebbc8; font-size:12px; overflow-wrap:anywhere; }
+.server-room-tabs { display:flex; gap:4px; flex-wrap:wrap; margin:0 0 14px; border-bottom:1px solid #29323d; }
+.server-room-tabs [role="tab"] { border:0; border-bottom:2px solid transparent; border-radius:0; padding:8px 12px; color:#aebbc8; background:transparent; }
+.server-room-tabs [role="tab"][aria-selected="true"] { color:#e5edf4; border-bottom-color:#7bc6a4; }
+.server-room-panel[hidden], .server-node-form[hidden], .server-node-secret[hidden] { display:none !important; }
+.server-room-selected { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:8px; }
+.server-room-selected h2 { margin:0; }
+.server-room-selected p { margin:0; }
+.server-selected-overview .server-node-metrics { grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); }
+.server-node-records { margin-top:16px; }
+.server-room-actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; margin:12px 0; }
+.server-room-actions > button { min-height:42px; text-align:left; }
+.server-room-actions small { display:block; margin-top:3px; color:#aebbc8; font-size:11px; font-weight:400; }
+.server-node-setup-steps { display:grid; gap:4px; margin:8px 0; color:#b7c7d4; }
+.server-node-secret pre[hidden] { display:none !important; }
 .server-operation-controls { display:flex; align-items:end; flex-wrap:wrap; gap:8px; margin:10px 0; }
 .server-operation-controls label { display:grid; gap:4px; min-width:220px; margin:0; color:#aebbc8; font-size:12px; }
+.server-module-actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:6px; margin:10px 0; }
+.server-module-actions button { min-height:38px; text-align:left; }
 .server-operation-list { display:grid; gap:6px; margin-top:10px; }
 .server-operation-item { display:grid; grid-template-columns:minmax(120px,1fr) auto; align-items:start; gap:4px 10px; padding:8px 0; border-top:1px solid #29323d; }
 .server-operation-item small { grid-column:1/-1; color:#9eacba; overflow-wrap:anywhere; }
@@ -1947,14 +1968,13 @@ const JS: &str = r#"
   const fleetList = document.querySelector('#server-fleet-list');
   const fleetSummary = document.querySelector('#server-fleet-summary');
   const fleetRefresh = document.querySelector('#server-fleet-refresh');
-  const serverActionSelect = document.querySelector('#server-action-service');
   const serverActionTarget = document.querySelector('#server-action-target');
-  const serverActionButton = document.querySelector('#server-action-restart');
+  const serverModuleActions = document.querySelector('#server-module-actions');
   const serverRebootButton = document.querySelector('#server-action-reboot');
   const serverActionStatus = document.querySelector('#server-action-status');
   const serverOperationList = document.querySelector('#server-operation-list');
   const serverLabelById = new Map();
-    const nodeForm = document.querySelector('#server-node-enroll');
+    const nodeForm = document.querySelector('#server-node-connect-form');
     const nodeSlot = document.querySelector('#server-node-slot');
     const nodeLabel = document.querySelector('#server-node-label');
     const nodeRole = document.querySelector('#server-node-role');
@@ -1962,11 +1982,66 @@ const JS: &str = r#"
     const nodeManagement = document.querySelector('#server-node-management');
     const nodeSecretPanel = document.querySelector('#server-node-secret');
     const nodeSecretValue = document.querySelector('#server-node-secret-value');
-    const nodeSecretCopy = document.querySelector('#server-node-secret-copy');
     const nodeSecretDownload = document.querySelector('#server-node-secret-download');
     const nodeSecretClose = document.querySelector('#server-node-secret-close');
+    const nodeStartNew = document.querySelector('#server-node-start-new');
+    const nodeStartReplacement = document.querySelector('#server-node-start-replacement');
+    const nodeCancel = document.querySelector('#server-node-cancel');
+    const nodeFormTitle = document.querySelector('#server-node-form-title');
+    const nodeFormCopy = document.querySelector('#server-node-form-copy');
+    const nodeSubmit = document.querySelector('#server-node-submit');
+    const nodeSecretReveal = document.querySelector('#server-node-secret-reveal');
+    const selectedServerName = document.querySelector('#server-selected-name');
+    const selectedServerState = document.querySelector('#server-selected-state');
+    const selectedServerOverview = document.querySelector('#server-selected-overview');
     let createdNodeConfig = null;
+    let connectionMode = 'new';
+    let selectedServerId = null;
+    let lastFleetData = null;
+    let serverOperationData = null;
   if (fleetList && fleetSummary) {
+    const serverTabs = [...document.querySelectorAll('[data-server-tab]')];
+    const serverPanels = [...document.querySelectorAll('[data-server-panel]')];
+    const activateServerTool = name => {
+      for (const tab of serverTabs) {
+        const active = tab.dataset.serverTab === name;
+        tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
+      }
+      for (const panel of serverPanels) panel.hidden = panel.dataset.serverPanel !== name;
+    };
+    for (const tab of serverTabs) {
+      tab.addEventListener('click', () => activateServerTool(tab.dataset.serverTab));
+      tab.addEventListener('keydown', event => {
+        const index = serverTabs.indexOf(tab);
+        const next = event.key === 'ArrowRight' ? (index + 1) % serverTabs.length : event.key === 'ArrowLeft' ? (index + serverTabs.length - 1) % serverTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? serverTabs.length - 1 : -1;
+        if (next >= 0) { event.preventDefault(); serverTabs[next].focus(); activateServerTool(serverTabs[next].dataset.serverTab); }
+      });
+    }
+    const renderSelectedServer = node => {
+      if (!node) return;
+      selectedServerId = node.id;
+      if (selectedServerName) selectedServerName.textContent = node.label || 'Unnamed server';
+      const stateLabels = { online: 'Online', stale: 'Stale telemetry', revoked: 'Disconnected', 'never-reported': 'Waiting for first check-in', unavailable: 'Unavailable' };
+      const controlState = node.id === lastFleetData?.local_node_id || node.executor_online ? 'typed controls ready' : 'telemetry only · typed controls unavailable';
+      if (selectedServerState) selectedServerState.textContent = `${stateLabels[node.state] || 'Unavailable'} · ${node.role || 'server'} · ${controlState}`;
+      if (selectedServerOverview) {
+        selectedServerOverview.replaceChildren();
+        const metrics = document.createElement('dl'); metrics.className = 'server-node-metrics';
+        metric(metrics, 'CPU · host total', Number.isFinite(node.cpu_percent) ? `${Number(node.cpu_percent).toFixed(1)}% · ${node.logical_cpu_count || '?'} cores` : 'Unavailable');
+        metric(metrics, 'Memory · host total', node.memory_total_bytes != null && node.memory_available_bytes != null ? `${formatBytes(Number(node.memory_total_bytes) - Number(node.memory_available_bytes))} used / ${formatBytes(node.memory_total_bytes)}` : 'Unavailable');
+        metric(metrics, 'Uptime', formatUptime(node.uptime_seconds));
+        metric(metrics, 'Load · 1 min', Number.isFinite(node.load_average_1m) ? Number(node.load_average_1m).toFixed(2) : 'Unavailable');
+        selectedServerOverview.append(metrics);
+      }
+      for (const button of fleetList.querySelectorAll('[data-node-id]')) button.setAttribute('aria-pressed', String(button.dataset.nodeId === selectedServerId));
+      if (serverActionTarget) {
+        const option = [...serverActionTarget.options].find(candidate => candidate.value === node.id);
+        if (option && !option.disabled) serverActionTarget.value = node.id;
+        else serverActionTarget.value = '';
+        syncTargetControls();
+      }
+      if (serverOperationData) renderServerOperations(serverOperationData);
+    };
     const formatBytes = value => {
       let amount = Number(value);
       if (!Number.isFinite(amount) || amount < 0) return 'Unavailable';
@@ -1987,6 +2062,7 @@ const JS: &str = r#"
     };
     const renderFleet = data => {
       if (data?.schema_version !== 1 || !['local-platform-host-only', 'platform-host-and-enrolled-nodes'].includes(data?.scope) || typeof data.local_node_id !== 'string' || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
+      lastFleetData = data;
       fleetList.replaceChildren();
       const reporting = data.nodes.filter(node => node.state === 'online').length;
       fleetSummary.textContent = `${reporting} of ${data.nodes.length} registered ${data.nodes.length === 1 ? 'server is' : 'servers are'} reporting · sampled ${new Date(Number(data.observed_at_unix) * 1000).toLocaleTimeString()}`;
@@ -1995,29 +2071,31 @@ const JS: &str = r#"
       for (const node of data.nodes) {
         serverLabelById.set(node.id, node.label || node.id);
         const card = document.createElement('article'); card.className = 'server-node card';
+        const select = document.createElement('button'); select.type = 'button'; select.className = 'server-node-select'; select.dataset.nodeId = node.id; select.setAttribute('aria-pressed', String(node.id === selectedServerId));
         const header = document.createElement('div'); header.className = 'server-node-header';
         const title = document.createElement('h3'); title.textContent = node.label || node.id || 'Unnamed server';
         const stateLabels = { online: 'Online', stale: 'Stale', revoked: 'Revoked', 'never-reported': 'Never reported', unavailable: 'Unavailable' };
         const status = document.createElement('span'); status.className = `server-node-status${node.state === 'online' ? '' : node.state === 'stale' ? ' stale' : ' unavailable'}`;
         status.textContent = stateLabels[node.state] || 'Unavailable';
-        header.append(title, status); card.append(header);
-        const role = document.createElement('p'); role.className = 'server-node-role'; role.textContent = `${node.role || 'server'} · slot ${node.slot_id || 'unknown'} · installation ${node.id || 'identity unavailable'}`; card.append(role);
+        header.append(title, status); select.append(header);
+        const role = document.createElement('p'); role.className = 'server-node-role'; role.textContent = node.role || 'server';
         const metrics = document.createElement('dl'); metrics.className = 'server-node-metrics';
         metric(metrics, 'CPU', Number.isFinite(node.cpu_percent) ? `${Number(node.cpu_percent).toFixed(1)}% · ${node.logical_cpu_count || '?'} cores` : `Sampling · ${node.logical_cpu_count || '?'} cores`);
         metric(metrics, 'Memory', node.memory_total_bytes != null && node.memory_available_bytes != null ? `${formatBytes(Number(node.memory_total_bytes) - Number(node.memory_available_bytes))} used / ${formatBytes(node.memory_total_bytes)}` : 'Unavailable');
         metric(metrics, 'Uptime', formatUptime(node.uptime_seconds));
         metric(metrics, 'Load · 1 min', Number.isFinite(node.load_average_1m) ? Number(node.load_average_1m).toFixed(2) : 'Unavailable');
-        card.append(metrics);
         const freshness = document.createElement('p'); freshness.className = 'server-fleet-note';
         const age = Math.max(0, Math.floor(Date.now() / 1000) - Number(node.observed_at_unix || data.observed_at_unix));
         freshness.textContent = node.state === 'never-reported' ? 'No telemetry received yet.' : `Received ${age < 5 ? 'just now' : `${age}s ago`} · metrics ${node.metrics_state || 'unknown'}`;
-        card.append(freshness); fleetList.append(card);
+        select.addEventListener('click', () => renderSelectedServer(node)); card.append(select, role, metrics, freshness); fleetList.append(card);
       }
       if (serverActionTarget && data.local_node_id) {
         serverActionTarget.dataset.localNodeId = data.local_node_id;
         if (!serverActionTarget.options.length) serverActionTarget.add(new Option('Core server · this Platform host', data.local_node_id));
       }
       if (data.nodes.length === 0) fleetList.append(appendText(document.createElement('div'), 'p', 'No servers have been added yet.', 'muted'));
+      const selected = data.nodes.find(node => node.id === selectedServerId) || data.nodes.find(node => node.id === data.local_node_id) || data.nodes[0];
+      if (selected) renderSelectedServer(selected);
     };
     const refreshFleet = async () => {
       if (fleetRefresh) fleetRefresh.disabled = true;
@@ -2036,8 +2114,10 @@ const JS: &str = r#"
     const renderServerOperations = data => {
       if (!serverOperationList) return;
       if (!Array.isArray(data?.items)) throw new Error('The operation history response has an unsupported format.');
+      serverOperationData = data;
       serverOperationList.replaceChildren();
-      for (const operation of data.items.slice(0, 12)) {
+      const visibleItems = (selectedServerId ? data.items.filter(operation => operation.target_node_id === selectedServerId) : data.items).slice(0, 12);
+      for (const operation of visibleItems) {
         const item = document.createElement('article'); item.className = 'server-operation-item';
         const action = operation.action?.kind === 'restart_service' ? `Restart ${operation.action.service}` : operation.action?.kind === 'reboot_host' ? 'Reboot host' : operation.action?.kind || 'Unknown action';
         const title = document.createElement('strong'); title.textContent = action;
@@ -2045,7 +2125,7 @@ const JS: &str = r#"
         const detail = document.createElement('small'); detail.textContent = `${serverLabelById.get(operation.target_node_id) || operation.target_node_id} · ${operation.result_detail || `Requested ${new Date(Number(operation.created_at_unix) * 1000).toLocaleString()}`}`;
         item.append(title, state, detail); serverOperationList.append(item);
       }
-      if (!data.items.length) serverOperationList.append(appendText(document.createElement('div'), 'p', 'No server actions recorded.', 'muted'));
+      if (!visibleItems.length) serverOperationList.append(appendText(document.createElement('div'), 'p', 'No actions recorded for this server.', 'muted'));
     };
     const refreshServerOperations = async () => {
       if (!serverOperationList) return;
@@ -2062,16 +2142,19 @@ const JS: &str = r#"
     }, 5000);
     const syncTargetControls = () => {
       if (!serverActionTarget) return;
-      const local = serverActionTarget.value === serverActionTarget.dataset.localNodeId;
-      for (const option of serverActionSelect?.options || []) option.disabled = !local && ['caddy'].includes(option.value);
+      const hasTarget = Boolean(serverActionTarget.value);
+      const local = hasTarget && serverActionTarget.value === serverActionTarget.dataset.localNodeId;
+      for (const button of serverModuleActions?.querySelectorAll('[data-service]') || []) button.disabled = !hasTarget || (!local && button.dataset.service === 'caddy');
       if (serverRebootButton) serverRebootButton.disabled = !local;
-      if (!local && serverActionSelect?.selectedOptions[0]?.disabled) serverActionSelect.value = 'docs';
     };
-    serverActionTarget?.addEventListener('change', syncTargetControls);
+    serverActionTarget?.addEventListener('change', () => {
+      const node = lastFleetData?.nodes?.find(candidate => candidate.id === serverActionTarget.value);
+      if (node) renderSelectedServer(node);
+      else syncTargetControls();
+    });
     const submitServerAction = async (action, description) => {
       const target = serverActionTarget?.value || '';
       if (!target) { serverActionStatus.textContent = 'Choose an available host first.'; return; }
-      if (serverActionButton) serverActionButton.disabled = true;
       if (serverRebootButton) serverRebootButton.disabled = true;
       serverActionStatus.textContent = `Requesting ${description}…`;
       try {
@@ -2086,16 +2169,20 @@ const JS: &str = r#"
         serverActionStatus.textContent = `${error.message || 'The action result is unknown.'} Check action history before retrying.`;
         await refreshServerOperations();
       } finally {
-        if (serverActionButton) serverActionButton.disabled = false;
         if (serverRebootButton) serverRebootButton.disabled = false;
       }
     };
-    serverActionButton?.addEventListener('click', async () => {
-      const service = serverActionSelect?.value || '';
-      if (!service) { serverActionStatus.textContent = 'Choose a service first.'; return; }
+    serverModuleActions?.addEventListener('click', async event => {
+      const button = event.target.closest('button[data-service]');
+      if (!button || button.disabled) return;
+      const service = button.dataset.service;
+      const label = button.dataset.label || service;
       const target = serverActionTarget?.selectedOptions?.[0]?.textContent || 'selected server';
-      if (!window.confirm(`Restart ${service} on ${target}? This records and queues a typed action.`)) return;
-      await submitServerAction({ kind: 'restart_service', service }, `restart of ${service}`);
+      if (!serverActionTarget?.value) { serverActionStatus.textContent = 'Choose a machine with an available typed executor first.'; return; }
+      if (!window.confirm(`Restart ${label} on ${target}? This records and queues a typed action.`)) return;
+      button.disabled = true;
+      try { await submitServerAction({ kind: 'restart_service', service }, `restart of ${label}`); }
+      finally { syncTargetControls(); }
     });
     serverRebootButton?.addEventListener('click', async () => {
       const target = serverActionTarget?.value || '';
@@ -2133,7 +2220,12 @@ const JS: &str = r#"
           const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${slot.role} · ${slot.status} · ${slot.current_node_id ? `current installation ${slot.current_node_id}` : 'no active installation'} · slot ${slot.id}`;
           details.append(title, meta); row.append(details); nodeManagement.append(row);
         }
+        if (nodeStartReplacement) nodeStartReplacement.disabled = nodeSlot.options.length <= 1;
         const incarnationHeading = document.createElement('h3'); incarnationHeading.textContent = 'Host installations'; nodeManagement.append(incarnationHeading);
+        for (const node of data.nodes) {
+          const fleetNode = lastFleetData?.nodes?.find(candidate => candidate.id === node.id);
+          if (fleetNode) fleetNode.executor_online = node.status === 'active' && node.executor_enabled && node.executor_online;
+        }
         if (serverActionTarget) {
           const selectedTarget = serverActionTarget.value;
           serverActionTarget.replaceChildren();
@@ -2144,7 +2236,9 @@ const JS: &str = r#"
               serverActionTarget.add(new Option(`${node.label} · ${node.role}`, node.id));
             }
           }
-          if ([...serverActionTarget.options].some(option => option.value === selectedTarget)) serverActionTarget.value = selectedTarget;
+          const desiredTarget = selectedServerId || selectedTarget;
+          if ([...serverActionTarget.options].some(option => option.value === desiredTarget)) serverActionTarget.value = desiredTarget;
+          else serverActionTarget.value = '';
           syncTargetControls();
         }
         for (const node of data.nodes) {
@@ -2166,6 +2260,8 @@ const JS: &str = r#"
           }
           nodeManagement.append(row);
         }
+        const selectedFleetNode = lastFleetData?.nodes?.find(node => node.id === selectedServerId);
+        if (selectedFleetNode) renderSelectedServer(selectedFleetNode);
         const recentEvents = data.events.slice(0, 8);
         if (recentEvents.length) {
           const disclosure = document.createElement('details'); disclosure.className = 'server-node-events';
@@ -2176,12 +2272,12 @@ const JS: &str = r#"
           }
           disclosure.append(summary, list); nodeManagement.append(disclosure);
         }
-        nodeStatus.textContent = `${data.slots.length} logical ${data.slots.length === 1 ? 'slot' : 'slots'} · ${data.nodes.length} host installations, including history.`;
+        nodeStatus.textContent = `${data.slots.length} server places · ${data.nodes.length} connections, including history.`;
       } catch (error) { nodeManagement.replaceChildren(); nodeStatus.textContent = error.message || 'Server records are unavailable.'; }
     };
     const syncSlotSelection = () => {
       const selected = nodeSlot?.selectedOptions?.[0];
-      const slot = selected?.value ? selected : null;
+      const slot = connectionMode === 'replacement' && selected?.value ? selected : null;
       if (slot) {
         nodeLabel.value = slot.dataset.label;
         nodeRole.value = slot.dataset.role;
@@ -2190,26 +2286,58 @@ const JS: &str = r#"
         nodeLabel.readOnly = false; nodeRole.disabled = false;
       }
     };
+    const startConnection = mode => {
+      connectionMode = mode;
+      if (mode === 'replacement' && nodeSlot.options.length <= 1) {
+        nodeStatus.textContent = 'There is no vacant server place to reconnect. Revoke the old installation first, or use Add server.';
+        return;
+      }
+      nodeForm.hidden = false;
+      clearCreatedNodeSecret();
+      if (mode === 'new') {
+        nodeForm.reset(); nodeSlot.value = ''; nodeSlot.disabled = true;
+        nodeFormTitle.textContent = 'Add server';
+        nodeFormCopy.textContent = 'This machine must already exist with your provider. Vapor prepares its connection only.';
+        nodeSubmit.textContent = 'Prepare connection';
+      } else {
+        nodeSlot.disabled = false;
+        nodeForm.reset();
+        nodeSlot.selectedIndex = 1;
+        nodeFormTitle.textContent = 'Reconnect replacement';
+        nodeFormCopy.textContent = 'Use this after wiping or replacing a machine. Its server place and history stay the same.';
+        nodeSubmit.textContent = 'Prepare replacement connection';
+      }
+      syncSlotSelection();
+      nodeForm.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      (mode === 'replacement' ? nodeSlot : nodeLabel).focus();
+    };
+    nodeStartNew?.addEventListener('click', () => startConnection('new'));
+    nodeStartReplacement?.addEventListener('click', () => startConnection('replacement'));
+    nodeCancel?.addEventListener('click', () => { nodeForm.reset(); nodeForm.hidden = true; nodeSlot.disabled = false; syncSlotSelection(); });
     nodeSlot?.addEventListener('change', syncSlotSelection);
     nodeForm?.addEventListener('submit', async event => {
       event.preventDefault();
-      if (!window.confirm('Enroll this host installation? Its separate telemetry and typed-executor credentials will be shown once.')) return;
-      const submit = nodeForm.querySelector('button[type="submit"]'); submit.disabled = true; nodeStatus.textContent = 'Adding server…';
+      if (connectionMode === 'replacement' && !nodeSlot.value) { nodeStatus.textContent = 'Choose a vacant server place for the replacement.'; return; }
+      const submit = nodeForm.querySelector('button[type="submit"]'); submit.disabled = true; nodeStatus.textContent = 'Preparing the connection…';
       try {
         const request = { label: nodeLabel.value, role: nodeRole.value };
         if (nodeSlot.value) request.slot_id = nodeSlot.value;
         const created = await postNodeApi('/api/admin/server-nodes', request);
         nodeSecretValue.textContent = `Telemetry credential:\n${created.reporter_credential}\n\nTyped executor credential:\n${created.executor_credential}\n\n${created.warning}`;
         createdNodeConfig = { id: created.id, reporterCredential: created.reporter_credential, executorCredential: created.executor_credential };
+        nodeSecretValue.hidden = true; nodeSecretReveal.textContent = 'Show one-time credentials'; nodeSecretReveal.setAttribute('aria-expanded', 'false');
         nodeSecretPanel.hidden = false;
-        nodeStatus.textContent = `${created.label} installation enrolled in slot ${created.slot_id}. Download its config or copy the credential now; the secret will not be shown again.`;
-        nodeForm.reset(); syncSlotSelection(); await refreshNodeManagement(); await refreshFleet();
+        nodeForm.hidden = true;
+        nodeStatus.textContent = `Connection prepared for ${created.label}. Download the config, install the node agent, and wait for its first check-in.`;
+        nodeForm.reset(); nodeSlot.disabled = false; syncSlotSelection(); await refreshNodeManagement(); await refreshFleet();
       } catch (error) { nodeStatus.textContent = error.message || 'Could not add server.'; }
       finally { submit.disabled = false; }
     });
-    nodeSecretCopy?.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(nodeSecretValue.textContent); nodeStatus.textContent = 'Both one-time credentials copied. Store them only in the node agent’s protected configuration.'; }
-      catch { nodeStatus.textContent = 'Clipboard access was denied. Select and copy the one-time credential manually.'; }
+    nodeSecretReveal?.addEventListener('click', () => {
+      const reveal = nodeSecretValue.hidden;
+      nodeSecretValue.hidden = !reveal;
+      nodeSecretReveal.textContent = reveal ? 'Hide one-time credentials' : 'Show one-time credentials';
+      nodeSecretReveal.setAttribute('aria-expanded', String(reveal));
     });
     nodeSecretDownload?.addEventListener('click', () => {
       const current = createdNodeConfig;
@@ -2227,7 +2355,7 @@ const JS: &str = r#"
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       nodeStatus.textContent = 'Config downloaded. It contains separate telemetry and typed-executor secrets; transfer it privately, install it as root-owned and readable only by the agent group, then delete the extra copy.';
     });
-    const clearCreatedNodeSecret = () => { nodeSecretValue.textContent = ''; createdNodeConfig = null; nodeSecretPanel.hidden = true; };
+    const clearCreatedNodeSecret = () => { nodeSecretValue.textContent = ''; nodeSecretValue.hidden = true; createdNodeConfig = null; nodeSecretPanel.hidden = true; };
     nodeSecretClose?.addEventListener('click', clearCreatedNodeSecret);
     window.addEventListener('pagehide', clearCreatedNodeSecret, { once: true });
     refreshNodeManagement();
@@ -2599,11 +2727,16 @@ async fn server_fleet_page() -> Response {
 
 fn server_fleet_page_content() -> &'static str {
     concat!(
-        "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
-        "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<section class=\"card\"><h2>Server actions</h2><p class=\"muted\">Choose a host and restart an eligible Vapor service. Each action is recorded before that host receives it. Remote actions need an installed typed executor; reboot and gateway controls remain core-host only.</p><div class=\"server-operation-controls\"><label>Server<select id=\"server-action-target\"><option value=\"\">Loading hosts…</option></select></label><label>Service<select id=\"server-action-service\"><option value=\"homepage\">Homepage</option><option value=\"docs\">Docs</option><option value=\"identity\">Identity</option><option value=\"diagnostics\">Diagnostics</option><option value=\"registry\">Registry</option><option value=\"artifact\">Artifact</option><option value=\"build_cache\">Build Cache</option><option value=\"caddy\">Web gateway</option></select></label><button id=\"server-action-restart\" type=\"button\">Restart service</button><button id=\"server-action-reboot\" type=\"button\">Reboot host…</button></div><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for server inventory…</p><details><summary>Recent actions</summary><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></details></section>",
-        "<section class=\"card\"><h2>Add server installation</h2><p class=\"muted\">Register a fresh host installation to report CPU, memory, load, and uptime. A logical slot stays stable when its OS is wiped; re-enroll the replacement into that same vacant slot. Registration never provisions hardware.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Install into<select id=\"server-node-slot\" name=\"slot_id\"><option value=\"\">Create a new logical slot</option></select></label><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose (descriptive)<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Enroll installation</button></form><p class=\"server-fleet-note\">Purpose is descriptive only; it does not schedule builds, backups, or other work. Typed operations are authored by the root operator; the separate executor credential can only claim/report actions already recorded for this installation.</p><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains one-time telemetry and typed-executor credentials.</strong> Keep it private; the credentials are separately scoped and will not be shown again after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credentials</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
-        "<p class=\"muted\">The telemetry credential cannot be used for SSH, shell access, or arbitrary commands.</p>"
+        "<p class=\"eyebrow\">Infrastructure · Operator workbench</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Inspect and operate the machines that run Vapor. Use named controls for routine work; the separately gated console is there for tasks the tools do not cover.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
+        "<section class=\"card\" aria-labelledby=\"server-machines-title\"><div class=\"server-fleet-toolbar\"><h2 id=\"server-machines-title\">Machines</h2><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div></div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
+        "<section class=\"card server-room\" aria-label=\"Selected server tools\"><header class=\"server-room-selected\"><div><p class=\"eyebrow\">Selected machine</p><h2 id=\"server-selected-name\">Core server</h2></div><p id=\"server-selected-state\" class=\"muted\">Waiting for inventory…</p></header><div class=\"server-room-tabs\" role=\"tablist\" aria-label=\"Server tools\"><button id=\"server-tab-overview\" type=\"button\" role=\"tab\" aria-selected=\"true\" aria-controls=\"server-panel-overview\" tabindex=\"0\" data-server-tab=\"overview\">Overview</button><button id=\"server-tab-services\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-services\" tabindex=\"-1\" data-server-tab=\"services\">Services</button><button id=\"server-tab-access\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-access\" tabindex=\"-1\" data-server-tab=\"access\">SSH access</button><button id=\"server-tab-activity\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-activity\" tabindex=\"-1\" data-server-tab=\"activity\">Activity</button><button id=\"server-tab-console\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-console\" tabindex=\"-1\" data-server-tab=\"console\">Console</button><button id=\"server-tab-connections\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-connections\" tabindex=\"-1\" data-server-tab=\"connections\">Connections</button></div>",
+        "<section id=\"server-panel-overview\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-overview\" data-server-panel=\"overview\"><h3>Host overview</h3><p class=\"muted\">CPU, memory, load, and uptime below describe the selected machine as a whole. Service-by-service readings are not collected yet.</p><div id=\"server-selected-overview\" class=\"server-selected-overview\" role=\"status\">Select a machine to inspect its latest sample.</div></section>",
+        "<section id=\"server-panel-services\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-services\" data-server-panel=\"services\" hidden><h3>Services and modules</h3><p class=\"muted\">Choose a named module on the selected machine. Current health and process-level resource readings are not collected per machine yet. <a href=\"/admin/hosting\">View service health</a>.</p><div class=\"server-operation-controls\"><label>Machine<select id=\"server-action-target\"><option value=\"\">Loading hosts…</option></select></label></div><div id=\"server-module-actions\" class=\"server-module-actions\"><button type=\"button\" data-service=\"homepage\" data-label=\"Homepage\">Restart Homepage</button><button type=\"button\" data-service=\"docs\" data-label=\"Docs\">Restart Docs</button><button type=\"button\" data-service=\"identity\" data-label=\"Identity\">Restart Identity</button><button type=\"button\" data-service=\"diagnostics\" data-label=\"Diagnostics\">Restart Diagnostics</button><button type=\"button\" data-service=\"registry\" data-label=\"Registry\">Restart Registry</button><button type=\"button\" data-service=\"artifact\" data-label=\"Artifact\">Restart Artifact</button><button type=\"button\" data-service=\"build_cache\" data-label=\"Build Cache\">Restart Build Cache</button><button type=\"button\" data-service=\"caddy\" data-label=\"Web gateway\">Restart Web gateway</button></div><p class=\"muted\">Restarting the machine or web gateway is currently limited to the core server.</p><button id=\"server-action-reboot\" type=\"button\">Restart machine…</button><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for server inventory…</p></section>",
+        "<section id=\"server-panel-access\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-access\" data-server-panel=\"access\" hidden><h3>SSH authorizations</h3><p class=\"muted\">Review temporary SSH requests and active grants for the core server. Remote-host SSH management is not connected to this workbench yet.</p><a class=\"button-link\" href=\"/admin/ssh-access\">Open SSH access manager</a></section>",
+        "<section id=\"server-panel-activity\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-activity\" data-server-panel=\"activity\" hidden><h3>Recent server actions</h3><p class=\"muted\">Every action is recorded before it is sent to a machine. An uncertain result is shown for review and is never silently repeated.</p><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></section>",
+        "<section id=\"server-panel-console\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-console\" data-server-panel=\"console\" hidden><h3>Emergency console</h3><p class=\"muted\">This is a separate, time-limited root shell for the core server. It is not shared desktop access; typed server tools remain the normal path.</p><a class=\"button-link\" href=\"/admin/emergency-console\">Open emergency console controls</a></section>",
+        "<section id=\"server-panel-connections\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-connections\" data-server-panel=\"connections\" hidden><h3>Connect a machine</h3><p class=\"muted\">Provision the VPS through your provider first. Vapor then records the machine and prepares its outbound monitoring and typed-action connection.</p><div class=\"server-room-actions\"><button id=\"server-node-start-new\" type=\"button\">Add server<small>Connect a new machine you already own</small></button><button id=\"server-node-start-replacement\" type=\"button\">Reconnect replacement<small>Attach a fresh install to a vacant server place</small></button></div><form id=\"server-node-connect-form\" class=\"server-node-connect-form server-node-form\" hidden><h4 id=\"server-node-form-title\">Add server</h4><p id=\"server-node-form-copy\" class=\"muted\">This prepares Vapor’s connection; it does not provision hardware.</p><label>Server place<select id=\"server-node-slot\" name=\"slot_id\"><option value=\"\">Create a new place</option></select></label><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Primary use<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button id=\"server-node-submit\" type=\"submit\">Prepare connection</button><button id=\"server-node-cancel\" type=\"button\">Cancel</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><h4>Connection prepared</h4><ol class=\"server-node-setup-steps\"><li>Download the config file.</li><li>Install the tested Vapor node-agent package on that machine.</li><li>Start the agent and return here; it appears online after it checks in.</li></ol><p class=\"muted\">The config contains two one-time credentials. Platform stores only their separate hashes. Keep the download private and remove extra copies.</p><pre id=\"server-node-secret-value\" hidden></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-download\" type=\"button\">Download agent config</button><button id=\"server-node-secret-reveal\" type=\"button\" aria-expanded=\"false\">Show one-time credentials</button><button id=\"server-node-secret-close\" type=\"button\">Clear setup data</button></div></div><details class=\"server-node-records\"><summary>Connection records and history</summary><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></details></section>",
+        "</section>"
     )
 }
 
@@ -4298,20 +4431,30 @@ mod tests {
         assert!(nav.contains("Infrastructure"));
         assert!(page.contains("id=\"server-fleet-list\""));
         assert!(page.contains("id=\"server-fleet-refresh\""));
-        assert!(page.contains("Add server installation"));
-        assert!(!page.contains("Enroll a server"));
+        assert!(page.contains("role=\"tablist\""));
+        assert_eq!(page.matches("id=\"server-panel-services\"").count(), 1);
+        assert!(page.contains("data-server-tab=\"overview\""));
+        assert!(page.contains("data-server-tab=\"services\""));
+        assert!(page.contains("data-server-tab=\"access\""));
+        assert!(page.contains("data-server-tab=\"console\""));
+        assert!(page.contains("data-server-tab=\"connections\""));
+        assert!(page.contains("Add server"));
+        assert!(page.contains("Reconnect replacement"));
+        assert!(!page.to_ascii_lowercase().contains("enroll"));
         assert!(page.contains("id=\"server-node-slot\""));
-        assert!(page.contains("A logical slot stays stable when its OS is wiped"));
-        assert!(page.contains("one-time telemetry and typed-executor credentials"));
+        assert!(page.contains("machine you already own"));
         assert!(page.contains("id=\"server-node-secret-download\""));
-        assert!(page.contains("separate executor credential can only claim/report actions already recorded"));
-        assert!(page.contains("Registration never provisions hardware"));
-        assert!(page.contains("Purpose is descriptive only"));
-        assert!(page.contains("does not schedule builds, backups, or other work"));
-        assert!(page.contains("id=\"server-action-restart\""));
+        assert!(page.contains("id=\"server-node-secret-value\" hidden"));
+        assert!(page.contains("process-level resource readings are not collected per machine yet"));
+        assert!(page.contains("/admin/ssh-access"));
+        assert!(page.contains("/admin/emergency-console"));
+        assert!(page.contains("/admin/hosting"));
+        assert!(page.contains("id=\"server-module-actions\""));
+        assert!(page.contains("data-service=\"homepage\""));
+        assert!(page.contains("data-service=\"build_cache\""));
         assert!(page.contains("id=\"server-action-reboot\""));
         assert!(page.contains("id=\"server-operation-list\""));
-        assert!(page.contains("reboot and gateway controls remain core-host only"));
+        assert!(page.contains("limited to the core server"));
         assert!(!page.contains("<option value=\"platform\">Platform</option>"));
     }
 
@@ -4333,9 +4476,13 @@ mod tests {
         assert!(script.contains("kind: 'restart_service', service"));
         assert!(script.contains("crypto.randomUUID()"));
         assert!(script.contains("Check action history before retrying."));
-        assert!(script.contains("window.confirm(`Restart ${service} on ${target}?"));
+        assert!(script.contains("window.confirm(`Restart ${label} on ${target}?"));
         assert!(script.contains("Type exactly:\\n${expected}"));
         assert!(script.contains("kind: 'reboot_host', confirmation"));
+        assert!(script.contains("event.key === 'ArrowRight'"));
+        assert!(script.contains("aria-selected"));
+        assert!(script.contains("data-server-panel"));
+        assert!(script.contains("telemetry only · typed controls unavailable"));
     }
 
     #[test]
