@@ -36,6 +36,7 @@ pub(crate) struct ServerNode {
     pub(crate) memory_available_bytes: Option<u64>,
     pub(crate) uptime_seconds: Option<u64>,
     pub(crate) load_average_1m: Option<f64>,
+    pub(crate) network: Option<crate::network_telemetry::NetworkSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,10 +57,27 @@ pub fn initialize() {
     let _ = FLEET_SNAPSHOT.set(shared.clone());
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
+        let mut last_network_sample = 0_i64;
         interval.tick().await;
         loop {
             interval.tick().await;
             let snapshot = sampler.snapshot();
+            let network = snapshot.nodes.first().and_then(|node| node.network.clone());
+            let sampled_at = snapshot.observed_at_unix as i64;
+            if sampled_at.saturating_sub(last_network_sample) >= 30 {
+                if let Some(network) = network {
+                    if crate::node_fleet::record_local_network_sample(
+                        &snapshot.local_node_id,
+                        sampled_at,
+                        &network,
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        last_network_sample = sampled_at;
+                    }
+                }
+            }
             if let Ok(mut current) = shared.write() {
                 *current = snapshot;
             }
@@ -84,6 +102,7 @@ impl Sampler {
         let memory = read_meminfo();
         let uptime = read_uptime();
         let load_average_1m = read_load_average();
+        let network = crate::network_telemetry::read_network_snapshot();
         let observed_at_unix = unix_now();
         let has_metrics = cpu.is_some() || memory.is_some() || uptime.is_some();
         let node = ServerNode {
@@ -106,6 +125,7 @@ impl Sampler {
             memory_available_bytes: memory.map(|values| values.1),
             uptime_seconds: uptime,
             load_average_1m,
+            network,
         };
         ServerFleetSnapshot {
             schema_version: 1,
@@ -116,6 +136,17 @@ impl Sampler {
             nodes: vec![node],
         }
     }
+}
+
+pub(crate) fn local_network_snapshot(
+    node_id: &str,
+) -> Option<(i64, crate::network_telemetry::NetworkSnapshot)> {
+    let snapshot = FLEET_SNAPSHOT.get()?.read().ok()?.clone();
+    if snapshot.local_node_id != node_id {
+        return None;
+    }
+    let node = snapshot.nodes.into_iter().find(|node| node.id == node_id)?;
+    Some((snapshot.observed_at_unix as i64, node.network?))
 }
 
 pub async fn admin_snapshot(headers: HeaderMap) -> Response {

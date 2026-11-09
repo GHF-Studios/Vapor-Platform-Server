@@ -88,9 +88,14 @@ is defined in [`vapor-content-and-build-domain-contract.md`](vapor-content-and-b
 The Platform also exposes a private `/admin/servers` inventory for physical
 hosts. It samples the current Platform host's CPU, memory, load, and uptime on
 a background interval and serves a cached snapshot through a root-authorized
-API. Additional nodes can be explicitly enrolled and report bounded telemetry
-through the Linux node agent; Platform stores a digest of each telemetry-only
-credential and keeps the last validated sample. A separate executor credential
+API. It also samples Linux interface counters and aggregate TCP states locally;
+the root-only Diagnostics tab exposes bounded traffic history from the same
+Platform state database. Additional nodes can be explicitly enrolled and
+report bounded telemetry through the Linux node agent; Platform stores a digest
+of each telemetry-only credential and keeps the last validated sample, with
+schema-2 network counters where available. Network history is aggregate,
+non-loopback, and retained for at most seven days; endpoint addresses and packet
+contents are not part of periodic reports. A separate executor credential
 allows an online node agent to claim only owner-authored, expiring typed
 service-restart operations and report their results. It cannot create actions
 or carry shell text. This is intentionally distinct from Hosting, which reports

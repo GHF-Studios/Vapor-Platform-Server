@@ -6,6 +6,7 @@ mod deploy_requests;
 mod emergency_console;
 mod github_oidc;
 mod node_fleet;
+mod network_telemetry;
 mod operation_history;
 mod pagination;
 mod platform_ops_client;

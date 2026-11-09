@@ -1,4 +1,8 @@
 #[cfg(target_os = "linux")]
+#[path = "../network_telemetry.rs"]
+mod network_telemetry;
+
+#[cfg(target_os = "linux")]
 use reqwest::Url;
 #[cfg(target_os = "linux")]
 use serde::{Deserialize, Serialize};
@@ -35,6 +39,7 @@ struct TelemetryReport {
     uptime_seconds: i64,
     load_average_1m: f64,
     agent_version: String,
+    network: Option<network_telemetry::NetworkSnapshot>,
 }
 
 #[cfg(target_os = "linux")]
@@ -275,12 +280,7 @@ async fn poll_operations(
     interval.tick().await;
     loop {
         interval.tick().await;
-        let response = match client
-            .get(&endpoint)
-            .bearer_auth(&credential)
-            .send()
-            .await
-        {
+        let response = match client.get(&endpoint).bearer_auth(&credential).send().await {
             Ok(response) if response.status().is_success() => response,
             _ => continue,
         };
@@ -320,7 +320,8 @@ async fn poll_operations(
             Ok(result) => result,
             Err(_) => RemoteResult {
                 state: "outcome_unknown".to_owned(),
-                detail: "executor result was not conclusive; inspect the host before retrying".to_owned(),
+                detail: "executor result was not conclusive; inspect the host before retrying"
+                    .to_owned(),
             },
         };
         let _ = send_remote_result(
@@ -426,7 +427,7 @@ fn sample(sampler: &mut Sampler) -> Result<Option<TelemetryReport>, String> {
         .map_err(|_| "system clock is before the Unix epoch")?
         .as_secs() as i64;
     Ok(Some(TelemetryReport {
-        schema_version: 1,
+        schema_version: 2,
         sampled_at_unix,
         cpu_percent,
         logical_cpu_count,
@@ -435,6 +436,7 @@ fn sample(sampler: &mut Sampler) -> Result<Option<TelemetryReport>, String> {
         uptime_seconds,
         load_average_1m,
         agent_version: VERSION.to_owned(),
+        network: network_telemetry::read_network_snapshot(),
     }))
 }
 
@@ -549,4 +551,50 @@ fn read_load_average() -> Result<f64, String> {
         return Err("load average is invalid".to_owned());
     }
     Ok(load)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod network_report_tests {
+    use super::network_telemetry::{InterfaceCounters, NetworkSnapshot, TcpStateCounts};
+    use super::TelemetryReport;
+
+    #[test]
+    fn schema_two_report_contains_aggregate_network_data_without_peer_details() {
+        let report = TelemetryReport {
+            schema_version: 2,
+            sampled_at_unix: 1_700_000_000,
+            cpu_percent: 5.0,
+            logical_cpu_count: 2,
+            memory_total_bytes: 1024,
+            memory_available_bytes: 512,
+            uptime_seconds: 60,
+            load_average_1m: 0.25,
+            agent_version: "test".to_owned(),
+            network: Some(NetworkSnapshot {
+                interfaces: vec![InterfaceCounters {
+                    name: "eth0".to_owned(),
+                    loopback: false,
+                    rx_bytes: 100,
+                    rx_packets: 2,
+                    rx_errors: 0,
+                    rx_dropped: 0,
+                    tx_bytes: 80,
+                    tx_packets: 1,
+                    tx_errors: 0,
+                    tx_dropped: 0,
+                }],
+                tcp_states: TcpStateCounts {
+                    established: 3,
+                    ..Default::default()
+                },
+            }),
+        };
+        let value = serde_json::to_value(report).unwrap();
+
+        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["network"]["interfaces"][0]["rx_bytes"], 100);
+        assert_eq!(value["network"]["tcp_states"]["established"], 3);
+        assert!(value.get("remote_address").is_none());
+        assert!(value.get("process_name").is_none());
+    }
 }

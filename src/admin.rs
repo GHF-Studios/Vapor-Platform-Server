@@ -350,6 +350,11 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .server-node-status.stale { color:#e5cb78; }
 .server-node-status.unavailable { color:#f08b92; }
 .server-fleet-note { margin:8px 0 0; color:#9eacba; font-size:12px; }
+.server-network-interfaces { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px; }
+.server-network-interface { border:1px solid #33414e; border-radius:6px; padding:8px 10px; background:#111820; }
+.server-network-interface p { margin:4px 0 0; font-size:12px; color:#b7c3cf; }
+.server-network-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.server-network-chart { display:block; width:100%; height:120px; margin:10px 0; border:1px solid #33414e; border-radius:6px; background:#111820; }
 .server-node-connect-form { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
 .server-node-form { padding:12px; margin:12px 0; border:1px solid #34404e; border-radius:6px; background:#111821; }
 .server-node-form h4 { flex-basis:100%; margin:0; }
@@ -1994,6 +1999,12 @@ const JS: &str = r#"
     const selectedServerName = document.querySelector('#server-selected-name');
     const selectedServerState = document.querySelector('#server-selected-state');
     const selectedServerOverview = document.querySelector('#server-selected-overview');
+  const networkPanel = document.querySelector('#server-network-panel');
+  const networkStatus = document.querySelector('#server-network-status');
+  const networkDetails = document.querySelector('#server-network-details');
+  const networkRange = document.querySelector('#server-network-range');
+  const networkCanvas = document.querySelector('#server-network-chart');
+  const networkRefresh = document.querySelector('#server-network-refresh');
     let createdNodeConfig = null;
     let connectionMode = 'new';
     let selectedServerId = null;
@@ -2008,6 +2019,7 @@ const JS: &str = r#"
         tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
       }
       for (const panel of serverPanels) panel.hidden = panel.dataset.serverPanel !== name;
+      if (name === 'diagnostics' && selectedServerId) refreshNetwork();
     };
     for (const tab of serverTabs) {
       tab.addEventListener('click', () => activateServerTool(tab.dataset.serverTab));
@@ -2019,6 +2031,7 @@ const JS: &str = r#"
     }
     const renderSelectedServer = node => {
       if (!node) return;
+      if (networkRequest && networkRequestServerId !== node.id) { networkRefreshKey = `${node.id}:${networkRange?.value || '1h'}`; networkRequest.abort(); }
       selectedServerId = node.id;
       if (selectedServerName) selectedServerName.textContent = node.label || 'Unnamed server';
       const stateLabels = { online: 'Online', stale: 'Stale telemetry', revoked: 'Disconnected', 'never-reported': 'Waiting for first check-in', unavailable: 'Unavailable' };
@@ -2041,6 +2054,7 @@ const JS: &str = r#"
         syncTargetControls();
       }
       if (serverOperationData) renderServerOperations(serverOperationData);
+      if (networkPanel && !networkPanel.hidden) refreshNetwork();
     };
     const formatBytes = value => {
       let amount = Number(value);
@@ -2110,6 +2124,82 @@ const JS: &str = r#"
       } finally { if (fleetRefresh) fleetRefresh.disabled = false; }
     };
     fleetRefresh?.addEventListener('click', refreshFleet); refreshFleet();
+
+    let networkRequest = null;
+    let networkRequestServerId = null;
+    let networkRequestKey = null;
+    let networkRefreshKey = null;
+    let lastNetworkData = null;
+    const drawNetworkChart = samples => {
+      if (!networkCanvas) return;
+      const context = networkCanvas.getContext('2d'); if (!context) return;
+      const width = networkCanvas.clientWidth || 640; const height = 120; const ratio = window.devicePixelRatio || 1;
+      networkCanvas.width = Math.round(width * ratio); networkCanvas.height = Math.round(height * ratio);
+      context.scale(ratio, ratio); context.clearRect(0, 0, width, height);
+      context.strokeStyle = '#526070'; context.lineWidth = 1; context.beginPath(); context.moveTo(0, height - 18); context.lineTo(width, height - 18); context.stroke();
+      if (!Array.isArray(samples) || samples.length < 2) return;
+      const rates = key => samples.slice(1).map((sample, index) => {
+        const previous = samples[index]; const elapsed = Number(sample.sampled_at_unix) - Number(previous.sampled_at_unix);
+        const delta = Number(sample[key]) - Number(previous[key]);
+        return elapsed > 0 && delta >= 0 ? delta / elapsed : null;
+      }).filter(Number.isFinite);
+      const inbound = rates('rx_bytes'); const outbound = rates('tx_bytes');
+      if (inbound.length < 2 || outbound.length < 2) return;
+      const maximum = Math.max(...inbound, ...outbound, 1);
+      for (const [series, color] of [[inbound, '#77d6a7'], [outbound, '#79b8ff']]) {
+        context.strokeStyle = color; context.lineWidth = 2; context.beginPath();
+        series.forEach((rate, index) => { const x = index * (width / Math.max(1, series.length - 1)); const y = height - 20 - ((rate / maximum) * (height - 34)); index ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke();
+      }
+    };
+    const refreshNetwork = async () => {
+      if (!networkPanel || !selectedServerId) return;
+      const serverId = selectedServerId; const range = networkRange?.value || '1h'; const requestKey = `${serverId}:${range}`;
+      if (networkRequest) {
+        if (networkRequestKey !== requestKey) { networkRefreshKey = requestKey; networkRequest.abort(); }
+        return;
+      }
+      networkRequest = new AbortController(); networkRequestServerId = serverId; networkRequestKey = requestKey; if (networkRefresh) networkRefresh.disabled = true;
+      if (networkStatus) networkStatus.textContent = 'Loading network sample…';
+      try {
+        const response = await fetch(`/api/admin/server-nodes/${encodeURIComponent(serverId)}/network?window=${encodeURIComponent(range)}`, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.any([networkRequest.signal, AbortSignal.timeout(6000)]) });
+        const data = await response.json().catch(() => null);
+        if (serverId !== selectedServerId || range !== (networkRange?.value || '1h')) return;
+        if (!response.ok) throw new Error(response.status === 404 ? 'No network sample is available for this server yet.' : `Network diagnostics unavailable (HTTP ${response.status}).`);
+        lastNetworkData = data;
+        const sample = data.network;
+        networkDetails.replaceChildren();
+        if (sample) {
+          const interfaces = document.createElement('div'); interfaces.className = 'server-network-interfaces';
+          for (const item of sample.interfaces || []) {
+            const card = document.createElement('article'); card.className = 'server-network-interface';
+            const title = document.createElement('strong'); title.textContent = item.name;
+            const direction = document.createElement('p'); direction.textContent = `${item.loopback ? 'Loopback' : 'Network'} · RX ${formatBytes(Number(item.rx_bytes))} · TX ${formatBytes(Number(item.tx_bytes))}`;
+            const health = document.createElement('p'); health.textContent = `Errors ${Number(item.rx_errors) + Number(item.tx_errors)} · drops ${Number(item.rx_dropped) + Number(item.tx_dropped)} · packets ${Number(item.rx_packets) + Number(item.tx_packets)}`;
+            card.append(title, direction, health); interfaces.append(card);
+          }
+          const states = document.createElement('p'); states.className = 'muted';
+          const counts = sample.tcp_states || {}; const otherStates = Object.entries(counts).filter(([key]) => !['established', 'listen'].includes(key)).reduce((total, [, count]) => total + Number(count || 0), 0);
+          states.textContent = `TCP sockets · established ${Number(counts.established || 0)} · listening ${Number(counts.listen || 0)} · other states ${otherStates}`;
+          networkDetails.append(interfaces, states);
+          const age = data.observed_at_unix == null ? null : Math.max(0, Math.floor(Date.now() / 1000) - Number(data.observed_at_unix));
+          const points = data.samples || []; const previous = points.length > 1 ? points[points.length - 2] : null; const latest = points.at(-1);
+          const elapsed = previous && latest ? Number(latest.sampled_at_unix) - Number(previous.sampled_at_unix) : 0;
+          const rate = (key) => { const delta = previous && latest ? Number(latest[key]) - Number(previous[key]) : -1; return elapsed > 0 && delta >= 0 ? `${formatBytes(delta / elapsed)}/s` : '—'; };
+          networkStatus.textContent = age == null ? 'Interface counters have not been reported.' : `${age > 90 ? 'STALE · ' : ''}Latest sample ${age < 10 ? 'just now' : `${age}s ago`} · RX ${rate('rx_bytes')} · TX ${rate('tx_bytes')} · chart green RX / blue TX`;
+        } else {
+          networkDetails.append(appendText(document.createElement('div'), 'p', 'Network metrics are unavailable; this agent may need an update.', 'muted'));
+          networkStatus.textContent = 'No compatible network sample.';
+        }
+        drawNetworkChart(data.samples || []);
+      } catch (error) { if (error.name !== 'AbortError' && networkStatus) networkStatus.textContent = error.message || 'Network diagnostics unavailable.'; }
+      finally {
+        networkRequest = null; networkRequestServerId = null; networkRequestKey = null; if (networkRefresh) networkRefresh.disabled = false;
+        if (networkRefreshKey && networkPanel && !networkPanel.hidden) { networkRefreshKey = null; refreshNetwork(); }
+      }
+    };
+    networkRefresh?.addEventListener('click', refreshNetwork);
+    networkRange?.addEventListener('change', refreshNetwork);
+    window.addEventListener('resize', () => { if (networkPanel && !networkPanel.hidden && lastNetworkData) drawNetworkChart(lastNetworkData.samples || []); }, { passive: true });
 
     const renderServerOperations = data => {
       if (!serverOperationList) return;
@@ -2729,9 +2819,10 @@ fn server_fleet_page_content() -> &'static str {
     concat!(
         "<p class=\"eyebrow\">Infrastructure · Operator workbench</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Inspect and operate the machines that run Vapor. Use named controls for routine work; the separately gated console is there for tasks the tools do not cover.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\" aria-labelledby=\"server-machines-title\"><div class=\"server-fleet-toolbar\"><h2 id=\"server-machines-title\">Machines</h2><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div></div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<section class=\"card server-room\" aria-label=\"Selected server tools\"><header class=\"server-room-selected\"><div><p class=\"eyebrow\">Selected machine</p><h2 id=\"server-selected-name\">Core server</h2></div><p id=\"server-selected-state\" class=\"muted\">Waiting for inventory…</p></header><div class=\"server-room-tabs\" role=\"tablist\" aria-label=\"Server tools\"><button id=\"server-tab-overview\" type=\"button\" role=\"tab\" aria-selected=\"true\" aria-controls=\"server-panel-overview\" tabindex=\"0\" data-server-tab=\"overview\">Overview</button><button id=\"server-tab-services\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-services\" tabindex=\"-1\" data-server-tab=\"services\">Services</button><button id=\"server-tab-access\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-access\" tabindex=\"-1\" data-server-tab=\"access\">SSH access</button><button id=\"server-tab-activity\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-activity\" tabindex=\"-1\" data-server-tab=\"activity\">Activity</button><button id=\"server-tab-console\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-console\" tabindex=\"-1\" data-server-tab=\"console\">Console</button><button id=\"server-tab-connections\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-connections\" tabindex=\"-1\" data-server-tab=\"connections\">Connections</button></div>",
+        "<section class=\"card server-room\" aria-label=\"Selected server tools\"><header class=\"server-room-selected\"><div><p class=\"eyebrow\">Selected machine</p><h2 id=\"server-selected-name\">Core server</h2></div><p id=\"server-selected-state\" class=\"muted\">Waiting for inventory…</p></header><div class=\"server-room-tabs\" role=\"tablist\" aria-label=\"Server tools\"><button id=\"server-tab-overview\" type=\"button\" role=\"tab\" aria-selected=\"true\" aria-controls=\"server-panel-overview\" tabindex=\"0\" data-server-tab=\"overview\">Overview</button><button id=\"server-tab-services\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-services\" tabindex=\"-1\" data-server-tab=\"services\">Services</button><button id=\"server-tab-diagnostics\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-diagnostics\" tabindex=\"-1\" data-server-tab=\"diagnostics\">Diagnostics</button><button id=\"server-tab-access\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-access\" tabindex=\"-1\" data-server-tab=\"access\">SSH access</button><button id=\"server-tab-activity\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-activity\" tabindex=\"-1\" data-server-tab=\"activity\">Activity</button><button id=\"server-tab-console\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-console\" tabindex=\"-1\" data-server-tab=\"console\">Console</button><button id=\"server-tab-connections\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-connections\" tabindex=\"-1\" data-server-tab=\"connections\">Connections</button></div>",
         "<section id=\"server-panel-overview\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-overview\" data-server-panel=\"overview\"><h3>Host overview</h3><p class=\"muted\">CPU, memory, load, and uptime below describe the selected machine as a whole. Service-by-service readings are not collected yet.</p><div id=\"server-selected-overview\" class=\"server-selected-overview\" role=\"status\">Select a machine to inspect its latest sample.</div></section>",
         "<section id=\"server-panel-services\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-services\" data-server-panel=\"services\" hidden><h3>Services and modules</h3><p class=\"muted\">Choose a named module on the selected machine. Current health and process-level resource readings are not collected per machine yet. <a href=\"/admin/hosting\">View service health</a>.</p><div class=\"server-operation-controls\"><label>Machine<select id=\"server-action-target\"><option value=\"\">Loading hosts…</option></select></label></div><div id=\"server-module-actions\" class=\"server-module-actions\"><button type=\"button\" data-service=\"homepage\" data-label=\"Homepage\">Restart Homepage</button><button type=\"button\" data-service=\"docs\" data-label=\"Docs\">Restart Docs</button><button type=\"button\" data-service=\"identity\" data-label=\"Identity\">Restart Identity</button><button type=\"button\" data-service=\"diagnostics\" data-label=\"Diagnostics\">Restart Diagnostics</button><button type=\"button\" data-service=\"registry\" data-label=\"Registry\">Restart Registry</button><button type=\"button\" data-service=\"artifact\" data-label=\"Artifact\">Restart Artifact</button><button type=\"button\" data-service=\"build_cache\" data-label=\"Build Cache\">Restart Build Cache</button><button type=\"button\" data-service=\"caddy\" data-label=\"Web gateway\">Restart Web gateway</button></div><p class=\"muted\">Restarting the machine or web gateway is currently limited to the core server.</p><button id=\"server-action-reboot\" type=\"button\">Restart machine…</button><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for server inventory…</p></section>",
+        "<section id=\"server-panel-diagnostics\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-diagnostics\" data-server-panel=\"diagnostics\" hidden><div class=\"server-network-toolbar\"><h3>Network traffic</h3><label>History<select id=\"server-network-range\"><option value=\"1h\">1 hour</option><option value=\"6h\">6 hours</option><option value=\"24h\">24 hours</option><option value=\"7d\">7 days</option></select></label><button id=\"server-network-refresh\" type=\"button\">Refresh</button></div><p id=\"server-network-status\" class=\"muted\" role=\"status\" aria-live=\"polite\">Choose a server to inspect network counters.</p><canvas id=\"server-network-chart\" class=\"server-network-chart\" height=\"120\" aria-label=\"Inbound traffic history chart\"></canvas><div id=\"server-network-details\"></div><p class=\"muted\">Traffic history excludes loopback from totals. The agent reports interface counters and TCP state counts; it does not retain peer addresses or packet contents.</p></section>",
         "<section id=\"server-panel-access\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-access\" data-server-panel=\"access\" hidden><h3>SSH authorizations</h3><p class=\"muted\">Review temporary SSH requests and active grants for the core server. Remote-host SSH management is not connected to this workbench yet.</p><a class=\"button-link\" href=\"/admin/ssh-access\">Open SSH access manager</a></section>",
         "<section id=\"server-panel-activity\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-activity\" data-server-panel=\"activity\" hidden><h3>Recent server actions</h3><p class=\"muted\">Every action is recorded before it is sent to a machine. An uncertain result is shown for review and is never silently repeated.</p><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></section>",
         "<section id=\"server-panel-console\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-console\" data-server-panel=\"console\" hidden><h3>Emergency console</h3><p class=\"muted\">This is a separate, time-limited root shell for the core server. It is not shared desktop access; typed server tools remain the normal path.</p><a class=\"button-link\" href=\"/admin/emergency-console\">Open emergency console controls</a></section>",
@@ -4434,6 +4525,9 @@ mod tests {
         assert!(page.contains("role=\"tablist\""));
         assert_eq!(page.matches("id=\"server-panel-services\"").count(), 1);
         assert!(page.contains("data-server-tab=\"overview\""));
+        assert!(page.contains("data-server-tab=\"diagnostics\""));
+        assert!(page.contains("id=\"server-network-range\""));
+        assert!(page.contains("id=\"server-network-chart\""));
         assert!(page.contains("data-server-tab=\"services\""));
         assert!(page.contains("data-server-tab=\"access\""));
         assert!(page.contains("data-server-tab=\"console\""));
@@ -4482,6 +4576,10 @@ mod tests {
         assert!(script.contains("event.key === 'ArrowRight'"));
         assert!(script.contains("aria-selected"));
         assert!(script.contains("data-server-panel"));
+        assert!(script.contains("/network?window="));
+        assert!(script.contains("cache: 'no-store'"));
+        assert!(script.contains("AbortSignal.timeout(6000)"));
+        assert!(script.contains("chart green RX / blue TX"));
         assert!(script.contains("telemetry only · typed controls unavailable"));
     }
 

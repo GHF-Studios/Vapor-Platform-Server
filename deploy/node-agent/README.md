@@ -1,10 +1,12 @@
 # Vapor node agent
 
-This standalone Linux utility sends only CPU, memory, uptime, one-minute load,
-sample time, and reporter version to an enrolled Platform node. The optional
-separate executor credential can only claim and report already-recorded typed
-service-restart operations for this node; it cannot create operations or send
-commands.
+This standalone Linux utility sends CPU, memory, uptime, one-minute load,
+sample time, reporter version, and bounded network aggregates to an enrolled
+Platform node. Network reports contain interface counters and TCP state counts;
+they do not contain endpoints, peer addresses, process names, or packet data.
+The optional separate executor credential can only claim and report
+already-recorded typed service-restart operations for this node; it cannot
+create operations or send commands.
 
 ## Obtain the tested package
 
@@ -100,5 +102,11 @@ sudo systemctl enable --now vapor-node-agent.service
 
 The service sends one report every 30 seconds, uses normal HTTPS certificate
 validation, refuses redirects, and has bounded connection/request timeouts.
+Network fields use report schema 2. Platform continues to accept schema-1
+agents; network metrics are marked unavailable until a schema-2 agent checks
+in. The root-only Server Diagnostics view retains aggregate, non-loopback
+traffic samples for at most seven days in Platform state. Per-interface
+counters are held only as the latest sample. No player Diagnostics data is
+involved.
 Revoke the node in Platform to stop accepting reports; removing the unit and
 configuration from the host is a separate cleanup step.

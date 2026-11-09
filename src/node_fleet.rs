@@ -1,6 +1,6 @@
 use crate::server_fleet::ServerNode;
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -33,6 +33,12 @@ struct NodeState {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct NetworkQuery {
+    window: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateNodeRequest {
     label: String,
     role: String,
@@ -58,6 +64,29 @@ pub(crate) struct TelemetryReport {
     uptime_seconds: i64,
     load_average_1m: f64,
     agent_version: String,
+    #[serde(default)]
+    network: Option<crate::network_telemetry::NetworkSnapshot>,
+}
+
+#[derive(Serialize)]
+struct NetworkHistorySample {
+    sampled_at_unix: i64,
+    rx_bytes: i64,
+    tx_bytes: i64,
+    rx_errors: i64,
+    tx_errors: i64,
+    rx_dropped: i64,
+    tx_dropped: i64,
+    tcp_states: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct NetworkResponse {
+    schema_version: u32,
+    node_id: String,
+    observed_at_unix: Option<i64>,
+    network: Option<crate::network_telemetry::NetworkSnapshot>,
+    samples: Vec<NetworkHistorySample>,
 }
 
 #[derive(Serialize)]
@@ -129,10 +158,11 @@ pub(crate) fn router() -> Router {
 fn router_with_state(state: NodeState) -> Router {
     Router::new()
         .route("/api/admin/server-nodes", get(list_nodes).post(create_node))
+        .route("/api/admin/server-nodes/{id}/network", get(node_network))
         .route("/api/admin/server-nodes/{id}/revoke", post(revoke_node))
         .route("/api/fleet/v1/nodes/{id}/telemetry", post(report_telemetry))
         .with_state(state)
-        .layer(DefaultBodyLimit::max(4096))
+        .layer(DefaultBodyLimit::max(16 * 1024))
         .route_layer(axum::middleware::from_fn(no_store))
 }
 
@@ -163,8 +193,55 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
             memory_available_bytes INTEGER,
             uptime_seconds INTEGER,
             load_average_1m REAL,
-            agent_version TEXT
+            agent_version TEXT,
+            network_json TEXT,
+            network_sampled_at_unix INTEGER
         )",
+    )
+    .execute(&pool)
+    .await?;
+    let columns = sqlx::query("PRAGMA table_info(platform_server_nodes)")
+        .fetch_all(&pool)
+        .await?;
+    if !columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "network_json")
+    {
+        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN network_json TEXT")
+            .execute(&pool)
+            .await?;
+    }
+    if !columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "network_sampled_at_unix")
+    {
+        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN network_sampled_at_unix INTEGER")
+            .execute(&pool)
+            .await?;
+    }
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS platform_server_network_samples (
+            node_id TEXT NOT NULL,
+            sampled_at_unix INTEGER NOT NULL,
+            rx_bytes INTEGER NOT NULL,
+            tx_bytes INTEGER NOT NULL,
+            rx_errors INTEGER NOT NULL,
+            tx_errors INTEGER NOT NULL,
+            rx_dropped INTEGER NOT NULL,
+            tx_dropped INTEGER NOT NULL,
+            tcp_states_json TEXT NOT NULL,
+            PRIMARY KEY(node_id,sampled_at_unix)
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("DELETE FROM platform_server_network_samples WHERE sampled_at_unix<?")
+        .bind(unix_now().saturating_sub(7 * 24 * 60 * 60))
+        .execute(&pool)
+        .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_platform_server_network_samples_time
+         ON platform_server_network_samples(node_id,sampled_at_unix DESC)",
     )
     .execute(&pool)
     .await?;
@@ -212,7 +289,9 @@ async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let columns = sqlx::query("PRAGMA table_info(platform_server_nodes)")
         .fetch_all(pool)
         .await?;
-    let has_slot_id = columns.iter().any(|row| row.get::<String, _>("name") == "slot_id");
+    let has_slot_id = columns
+        .iter()
+        .any(|row| row.get::<String, _>("name") == "slot_id");
     if !has_slot_id {
         sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN slot_id TEXT")
             .execute(pool)
@@ -233,9 +312,11 @@ async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .iter()
         .any(|row| row.get::<String, _>("name") == "executor_last_seen_at_unix")
     {
-        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN executor_last_seen_at_unix INTEGER")
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "ALTER TABLE platform_server_nodes ADD COLUMN executor_last_seen_at_unix INTEGER",
+        )
+        .execute(pool)
+        .await?;
     }
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS platform_server_slots (
@@ -311,7 +392,7 @@ pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error
     let rows = sqlx::query(
         "SELECT id,slot_id,label,role,status,created_at_unix,last_report_received_at_unix,
                 sampled_at_unix,cpu_percent,logical_cpu_count,memory_total_bytes,
-                memory_available_bytes,uptime_seconds,load_average_1m
+                memory_available_bytes,uptime_seconds,load_average_1m,network_json
          FROM platform_server_nodes ORDER BY status,label,id",
     )
     .fetch_all(&state.pool)
@@ -339,7 +420,9 @@ pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error
                 && row.get::<Option<i64>, _>("uptime_seconds").is_some();
             ServerNode {
                 id: row.get("id"),
-                slot_id: row.get::<Option<String>, _>("slot_id").unwrap_or_else(|| row.get("id")),
+                slot_id: row
+                    .get::<Option<String>, _>("slot_id")
+                    .unwrap_or_else(|| row.get("id")),
                 label: row.get("label"),
                 role: row.get("role"),
                 state,
@@ -364,6 +447,10 @@ pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error
                     .get::<Option<i64>, _>("uptime_seconds")
                     .and_then(|value| u64::try_from(value).ok()),
                 load_average_1m: row.get("load_average_1m"),
+                network: row
+                    .get::<Option<String>, _>("network_json")
+                    .and_then(|value| serde_json::from_str(&value).ok())
+                    .filter(crate::network_telemetry::valid_network_snapshot),
             }
         })
         .collect())
@@ -470,12 +557,11 @@ async fn create_node(
     let slot_version = if new_slot {
         None
     } else {
-        let slot = sqlx::query(
-            "SELECT status,version,label,role FROM platform_server_slots WHERE id=?",
-        )
-        .bind(&slot_id)
-        .fetch_optional(&mut *transaction)
-        .await;
+        let slot =
+            sqlx::query("SELECT status,version,label,role FROM platform_server_slots WHERE id=?")
+                .bind(&slot_id)
+                .fetch_optional(&mut *transaction)
+                .await;
         match slot {
             Ok(Some(slot))
                 if slot.get::<String, _>("status") == "vacant"
@@ -485,10 +571,18 @@ async fn create_node(
                 Some(slot.get::<i64, _>("version"))
             }
             Ok(Some(_)) => {
-                return error(StatusCode::CONFLICT, "server_slot_not_vacant_or_details_changed")
+                return error(
+                    StatusCode::CONFLICT,
+                    "server_slot_not_vacant_or_details_changed",
+                )
             }
             Ok(None) => return error(StatusCode::NOT_FOUND, "server_slot_not_found"),
-            Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_node_state_unavailable"),
+            Err(_) => {
+                return error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "server_node_state_unavailable",
+                )
+            }
         }
     };
     if let Some(version) = slot_version {
@@ -637,19 +731,22 @@ async fn revoke_node(
     .execute(&mut *transaction)
     .await;
     if !updated.is_ok_and(|result| result.rows_affected() == 1) {
-        return error(StatusCode::CONFLICT, "server_node_changed_or_already_revoked");
+        return error(
+            StatusCode::CONFLICT,
+            "server_node_changed_or_already_revoked",
+        );
     }
     let slot_updated = sqlx::query(
         "UPDATE platform_server_slots SET status='vacant',current_node_id=NULL,
                 version=version+1,changed_at_unix=?,changed_by_profile_id=?
          WHERE id=? AND current_node_id=? AND status='active'",
     )
-        .bind(now)
-        .bind(&actor)
-        .bind(slot_id.as_deref().unwrap_or_default())
-        .bind(&id)
-        .execute(&mut *transaction)
-        .await;
+    .bind(now)
+    .bind(&actor)
+    .bind(slot_id.as_deref().unwrap_or_default())
+    .bind(&id)
+    .execute(&mut *transaction)
+    .await;
     if !slot_updated.is_ok_and(|result| result.rows_affected() == 1) {
         return error(StatusCode::CONFLICT, "server_slot_changed_or_missing");
     }
@@ -687,11 +784,26 @@ async fn report_telemetry(
         );
     }
     let credential_sha256 = sha256_hex(credential.as_bytes());
+    let network_json = report
+        .network
+        .as_ref()
+        .and_then(|snapshot| serde_json::to_string(snapshot).ok());
+    let mut transaction = match state.pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_node_state_unavailable",
+            )
+        }
+    };
     let updated = sqlx::query(
         "UPDATE platform_server_nodes
          SET last_report_received_at_unix=?,sampled_at_unix=?,cpu_percent=?,
              logical_cpu_count=?,memory_total_bytes=?,memory_available_bytes=?,
-             uptime_seconds=?,load_average_1m=?,agent_version=?
+             uptime_seconds=?,load_average_1m=?,agent_version=?,
+             network_json=COALESCE(?,network_json),
+             network_sampled_at_unix=CASE WHEN ? IS NULL THEN network_sampled_at_unix ELSE ? END
          WHERE id=? AND status='active' AND credential_sha256=?
            AND (last_report_received_at_unix IS NULL OR last_report_received_at_unix<=?)
            AND (sampled_at_unix IS NULL OR sampled_at_unix<?)",
@@ -705,14 +817,34 @@ async fn report_telemetry(
     .bind(report.uptime_seconds)
     .bind(report.load_average_1m)
     .bind(&report.agent_version)
+    .bind(&network_json)
+    .bind(&network_json)
+    .bind(&network_json.as_ref().map(|_| report.sampled_at_unix))
     .bind(&id)
     .bind(&credential_sha256)
     .bind(now.saturating_sub(REPORT_MIN_INTERVAL_SECONDS))
     .bind(report.sampled_at_unix)
-    .execute(&state.pool)
+    .execute(&mut *transaction)
     .await;
     match updated {
         Ok(result) if result.rows_affected() == 1 => {
+            if let Some(snapshot) = report.network.as_ref() {
+                if insert_network_sample(&mut transaction, &id, report.sampled_at_unix, snapshot)
+                    .await
+                    .is_err()
+                    || transaction.commit().await.is_err()
+                {
+                    return error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "network_sample_storage_unavailable",
+                    );
+                }
+            } else if transaction.commit().await.is_err() {
+                return error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "server_node_state_unavailable",
+                );
+            }
             let mut response = StatusCode::NO_CONTENT.into_response();
             response.headers_mut().insert(
                 CACHE_CONTROL,
@@ -721,6 +853,7 @@ async fn report_telemetry(
             response
         }
         Ok(_) => {
+            let _ = transaction.rollback().await;
             let row = sqlx::query(
                 "SELECT status,credential_sha256,last_report_received_at_unix,sampled_at_unix
                  FROM platform_server_nodes WHERE id=?",
@@ -763,7 +896,12 @@ async fn report_telemetry(
 }
 
 fn valid_report(report: &TelemetryReport, now: i64) -> bool {
-    report.schema_version == 1
+    (report.schema_version == 1 && report.network.is_none()
+        || report.schema_version == 2
+            && report
+                .network
+                .as_ref()
+                .map_or(true, crate::network_telemetry::valid_network_snapshot))
         && report.sampled_at_unix >= now.saturating_sub(REPORT_FRESHNESS_SECONDS)
         && report.sampled_at_unix <= now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
         && report.cpu_percent.is_finite()
@@ -781,6 +919,176 @@ fn valid_report(report: &TelemetryReport, now: i64) -> bool {
             .agent_version
             .bytes()
             .all(|byte| byte.is_ascii_graphic())
+}
+
+async fn insert_network_sample(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    node_id: &str,
+    sampled_at_unix: i64,
+    snapshot: &crate::network_telemetry::NetworkSnapshot,
+) -> Result<(), sqlx::Error> {
+    use crate::network_telemetry::InterfaceCounters;
+    fn sum(interfaces: &[InterfaceCounters], value: impl Fn(&InterfaceCounters) -> u64) -> i64 {
+        interfaces
+            .iter()
+            .filter(|interface| !interface.loopback)
+            .map(value)
+            .fold(0_u64, u64::saturating_add)
+            .min(i64::MAX as u64) as i64
+    }
+    let tcp_states_json =
+        serde_json::to_string(&snapshot.tcp_states).unwrap_or_else(|_| "{}".to_owned());
+    sqlx::query(
+        "INSERT OR IGNORE INTO platform_server_network_samples
+         (node_id,sampled_at_unix,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped,tcp_states_json)
+         VALUES (?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(node_id)
+    .bind(sampled_at_unix)
+    .bind(sum(&snapshot.interfaces, |item| item.rx_bytes))
+    .bind(sum(&snapshot.interfaces, |item| item.tx_bytes))
+    .bind(sum(&snapshot.interfaces, |item| item.rx_errors))
+    .bind(sum(&snapshot.interfaces, |item| item.tx_errors))
+    .bind(sum(&snapshot.interfaces, |item| item.rx_dropped))
+    .bind(sum(&snapshot.interfaces, |item| item.tx_dropped))
+    .bind(tcp_states_json)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query("DELETE FROM platform_server_network_samples WHERE sampled_at_unix<?")
+        .bind(sampled_at_unix.saturating_sub(7 * 24 * 60 * 60))
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query(
+        "DELETE FROM platform_server_network_samples
+         WHERE rowid IN (
+             SELECT rowid FROM platform_server_network_samples WHERE node_id=?
+             ORDER BY sampled_at_unix DESC LIMIT -1 OFFSET 20160
+         )",
+    )
+    .bind(node_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn record_local_network_sample(
+    node_id: &str,
+    sampled_at_unix: i64,
+    snapshot: &crate::network_telemetry::NetworkSnapshot,
+) -> Result<(), sqlx::Error> {
+    let state = NODE_STATE.get().ok_or(sqlx::Error::PoolTimedOut)?;
+    if node_id != crate::server_operation_schema::local_node_id()
+        || !crate::network_telemetry::valid_network_snapshot(snapshot)
+    {
+        return Err(sqlx::Error::Protocol(
+            "invalid local network sample".to_owned(),
+        ));
+    }
+    let mut transaction = state.pool.begin().await?;
+    insert_network_sample(&mut transaction, node_id, sampled_at_unix, snapshot).await?;
+    transaction.commit().await
+}
+
+async fn node_network(
+    State(state): State<NodeState>,
+    Path(id): Path<String>,
+    Query(query): Query<NetworkQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_root(&state, &headers).await {
+        return response;
+    }
+    let seconds = match query.window.as_deref().unwrap_or("1h") {
+        "1h" => 60 * 60,
+        "6h" => 6 * 60 * 60,
+        "24h" => 24 * 60 * 60,
+        "7d" => 7 * 24 * 60 * 60,
+        _ => return error(StatusCode::BAD_REQUEST, "network_window_invalid"),
+    };
+    let local_id = crate::server_operation_schema::local_node_id();
+    let (latest_at, network) = if id == local_id {
+        crate::server_fleet::local_network_snapshot(&id)
+            .map(|(sampled_at, snapshot)| (Some(sampled_at), Some(snapshot)))
+            .unwrap_or((None, None))
+    } else {
+        let row = sqlx::query(
+            "SELECT status,network_sampled_at_unix,network_json FROM platform_server_nodes WHERE id=?",
+        )
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await;
+        let row = match row {
+            Ok(Some(row)) if row.get::<String, _>("status") == "active" => row,
+            Ok(Some(_)) => return error(StatusCode::NOT_FOUND, "server_node_unavailable"),
+            Ok(None) => return error(StatusCode::NOT_FOUND, "server_node_unavailable"),
+            Err(_) => {
+                return error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "server_node_state_unavailable",
+                )
+            }
+        };
+        let network = row
+            .get::<Option<String>, _>("network_json")
+            .and_then(|value| {
+                serde_json::from_str::<crate::network_telemetry::NetworkSnapshot>(&value).ok()
+            })
+            .filter(crate::network_telemetry::valid_network_snapshot);
+        (row.get("network_sampled_at_unix"), network)
+    };
+    let since = unix_now().saturating_sub(seconds);
+    let bucket_seconds = (seconds / 1008).max(1);
+    let rows = sqlx::query(
+        "WITH bucketed AS (
+             SELECT node_id,sampled_at_unix,CAST(sampled_at_unix / ? AS INTEGER) AS bucket
+             FROM platform_server_network_samples WHERE node_id=? AND sampled_at_unix>=?
+         ), chosen AS (
+             SELECT node_id,bucket,MAX(sampled_at_unix) AS sampled_at_unix
+             FROM bucketed GROUP BY node_id,bucket
+         )
+         SELECT s.sampled_at_unix,s.rx_bytes,s.tx_bytes,s.rx_errors,s.tx_errors,
+                s.rx_dropped,s.tx_dropped,s.tcp_states_json
+         FROM platform_server_network_samples s
+         JOIN chosen c ON c.node_id=s.node_id AND c.sampled_at_unix=s.sampled_at_unix
+         ORDER BY s.sampled_at_unix ASC LIMIT 1008",
+    )
+    .bind(bucket_seconds)
+    .bind(&id)
+    .bind(since)
+    .fetch_all(&state.pool)
+    .await;
+    match rows {
+        Ok(rows) => {
+            let samples = rows
+                .into_iter()
+                .map(|row| NetworkHistorySample {
+                    sampled_at_unix: row.get("sampled_at_unix"),
+                    rx_bytes: row.get("rx_bytes"),
+                    tx_bytes: row.get("tx_bytes"),
+                    rx_errors: row.get("rx_errors"),
+                    tx_errors: row.get("tx_errors"),
+                    rx_dropped: row.get("rx_dropped"),
+                    tx_dropped: row.get("tx_dropped"),
+                    tcp_states: serde_json::from_str(&row.get::<String, _>("tcp_states_json"))
+                        .unwrap_or(serde_json::Value::Null),
+                })
+                .collect();
+            private_json(
+                StatusCode::OK,
+                NetworkResponse {
+                    schema_version: 1,
+                    node_id: id,
+                    observed_at_unix: latest_at,
+                    network,
+                    samples,
+                },
+            )
+        }
+        Err(_) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "network_history_unavailable",
+        ),
+    }
 }
 
 fn bearer_credential<'a>(headers: &'a HeaderMap, expected_id: &str) -> Option<&'a str> {
@@ -896,7 +1204,9 @@ async fn insert_node_event(
 fn node_record(row: sqlx::sqlite::SqliteRow) -> NodeRecord {
     NodeRecord {
         id: row.get("id"),
-        slot_id: row.get::<Option<String>, _>("slot_id").unwrap_or_else(|| row.get("id")),
+        slot_id: row
+            .get::<Option<String>, _>("slot_id")
+            .unwrap_or_else(|| row.get("id")),
         label: row.get("label"),
         role: row.get("role"),
         status: row.get("status"),
@@ -999,6 +1309,44 @@ mod tests {
     use std::time::Duration;
     use tower::ServiceExt;
 
+    #[test]
+    fn telemetry_schema_accepts_v1_and_optional_v2_but_rejects_unknown_or_invalid_networks() {
+        let now = super::unix_now();
+        let base = serde_json::json!({
+            "sampled_at_unix": now,
+            "cpu_percent": 1.0,
+            "logical_cpu_count": 2,
+            "memory_total_bytes": 1024,
+            "memory_available_bytes": 512,
+            "uptime_seconds": 10,
+            "load_average_1m": 0.1,
+            "agent_version": "test"
+        });
+        for version in [1, 2] {
+            let mut value = base.clone();
+            value["schema_version"] = serde_json::json!(version);
+            let report: super::TelemetryReport = serde_json::from_value(value).unwrap();
+            assert!(super::valid_report(&report, now));
+        }
+        let mut unsupported = base.clone();
+        unsupported["schema_version"] = serde_json::json!(3);
+        let report: super::TelemetryReport = serde_json::from_value(unsupported).unwrap();
+        assert!(!super::valid_report(&report, now));
+
+        let mut invalid = base;
+        invalid["schema_version"] = serde_json::json!(2);
+        invalid["network"] = serde_json::json!({
+            "interfaces": (0..17).map(|index| serde_json::json!({
+                "name": format!("eth{index}"), "loopback": false,
+                "rx_bytes": 0, "rx_packets": 0, "rx_errors": 0, "rx_dropped": 0,
+                "tx_bytes": 0, "tx_packets": 0, "tx_errors": 0, "tx_dropped": 0
+            })).collect::<Vec<_>>(),
+            "tcp_states": serde_json::to_value(crate::network_telemetry::TcpStateCounts::default()).unwrap()
+        });
+        let report: super::TelemetryReport = serde_json::from_value(invalid).unwrap();
+        assert!(!super::valid_report(&report, now));
+    }
+
     async fn root_auth_server() -> (String, tokio::task::JoinHandle<()>) {
         use axum::routing::post;
         let app = axum::Router::new().route(
@@ -1022,7 +1370,10 @@ mod tests {
             .method(method)
             .uri(uri)
             .header(header::ORIGIN, "https://vapor.ghf-studios.site")
-            .header(header::COOKIE, format!("vapor_identity_session={}", "a".repeat(40)))
+            .header(
+                header::COOKIE,
+                format!("vapor_identity_session={}", "a".repeat(40)),
+            )
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_string()))
             .unwrap()
@@ -1056,7 +1407,26 @@ mod tests {
                 memory_available_bytes INTEGER,
                 uptime_seconds INTEGER,
                 load_average_1m REAL,
-                agent_version TEXT
+                agent_version TEXT,
+                network_json TEXT,
+                network_sampled_at_unix INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE platform_server_network_samples (
+                node_id TEXT NOT NULL,
+                sampled_at_unix INTEGER NOT NULL,
+                rx_bytes INTEGER NOT NULL,
+                tx_bytes INTEGER NOT NULL,
+                rx_errors INTEGER NOT NULL,
+                tx_errors INTEGER NOT NULL,
+                rx_dropped INTEGER NOT NULL,
+                tx_dropped INTEGER NOT NULL,
+                tcp_states_json TEXT NOT NULL,
+                PRIMARY KEY(node_id,sampled_at_unix)
             )",
         )
         .execute(&pool)
@@ -1104,13 +1474,12 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let incarnation_slot_id: String = sqlx::query_scalar(
-            "SELECT slot_id FROM platform_server_nodes WHERE id=?",
-        )
-        .bind(&node_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let incarnation_slot_id: String =
+            sqlx::query_scalar("SELECT slot_id FROM platform_server_nodes WHERE id=?")
+                .bind(&node_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(slot_id, node_id);
         assert_eq!(current_node_id, node_id);
@@ -1118,13 +1487,12 @@ mod tests {
         assert_eq!(slot_label, "Build node");
         assert_eq!(slot_role, "builder");
 
-        let (local_slot, local_node, local_role): (String, String, String) = sqlx::query_as(
-            "SELECT id,current_node_id,role FROM platform_server_slots WHERE id=?",
-        )
-        .bind(crate::server_operation_schema::local_slot_id())
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (local_slot, local_node, local_role): (String, String, String) =
+            sqlx::query_as("SELECT id,current_node_id,role FROM platform_server_slots WHERE id=?")
+                .bind(crate::server_operation_schema::local_slot_id())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(local_slot, "core");
         assert_eq!(local_node, crate::server_operation_schema::local_node_id());
         assert_eq!(local_role, "control-plane");
@@ -1146,13 +1514,12 @@ mod tests {
 
         super::initialize_slots(&pool).await.unwrap();
 
-        let current_node_id: Option<String> = sqlx::query_scalar(
-            "SELECT current_node_id FROM platform_server_slots WHERE id=?",
-        )
-        .bind(&node_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let current_node_id: Option<String> =
+            sqlx::query_scalar("SELECT current_node_id FROM platform_server_slots WHERE id=?")
+                .bind(&node_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let historical_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM platform_server_nodes WHERE id=? AND status='revoked'",
         )
@@ -1195,7 +1562,12 @@ mod tests {
         let created_body = axum::body::to_bytes(created_response.into_body(), 4096)
             .await
             .unwrap();
-        assert_eq!(created_status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&created_body));
+        assert_eq!(
+            created_status,
+            StatusCode::CREATED,
+            "{}",
+            String::from_utf8_lossy(&created_body)
+        );
         let created: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
         let old_node_id = created["id"].as_str().unwrap().to_owned();
         let slot_id = created["slot_id"].as_str().unwrap().to_owned();
@@ -1232,20 +1604,18 @@ mod tests {
         assert_ne!(old_node_id, new_node_id);
         assert_eq!(replacement["slot_id"], slot_id);
 
-        let (old_status, new_slot_id): (String, String) = sqlx::query_as(
-            "SELECT n.status,n.slot_id FROM platform_server_nodes n WHERE n.id=?",
-        )
-        .bind(old_node_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let (slot_status, current_node_id): (String, String) = sqlx::query_as(
-            "SELECT status,current_node_id FROM platform_server_slots WHERE id=?",
-        )
-        .bind(&slot_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (old_status, new_slot_id): (String, String) =
+            sqlx::query_as("SELECT n.status,n.slot_id FROM platform_server_nodes n WHERE n.id=?")
+                .bind(old_node_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let (slot_status, current_node_id): (String, String) =
+            sqlx::query_as("SELECT status,current_node_id FROM platform_server_slots WHERE id=?")
+                .bind(&slot_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(old_status, "revoked");
         assert_eq!(new_slot_id, slot_id);
         assert_eq!(slot_status, "active");
@@ -1272,6 +1642,114 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_string()))
             .unwrap()
+    }
+
+    fn telemetry_request_v2(
+        node_id: &str,
+        credential: &str,
+        sampled_at_unix: i64,
+    ) -> Request<Body> {
+        let body = serde_json::json!({
+            "schema_version": 2,
+            "sampled_at_unix": sampled_at_unix,
+            "cpu_percent": 24.5,
+            "logical_cpu_count": 8,
+            "memory_total_bytes": 16_000_000_000i64,
+            "memory_available_bytes": 8_000_000_000i64,
+            "uptime_seconds": 1234,
+            "load_average_1m": 1.25,
+            "agent_version": "1.0.0",
+            "network": {
+                "interfaces": [{"name":"eth0","loopback":false,"rx_bytes":300,"rx_packets":3,"rx_errors":0,"rx_dropped":0,"tx_bytes":200,"tx_packets":2,"tx_errors":0,"tx_dropped":0}],
+                "tcp_states": {"established":2,"syn_sent":0,"syn_received":0,"fin_wait_1":0,"fin_wait_2":0,"time_wait":1,"close":0,"close_wait":0,"last_ack":0,"listen":1,"closing":0,"other":0}
+            }
+        });
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/fleet/v1/nodes/{node_id}/telemetry"))
+            .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn schema_two_network_report_is_stored_and_available_only_to_root() {
+        let pool = test_pool().await;
+        let node_id = uuid::Uuid::new_v4().to_string();
+        let credential = format!("v1.{node_id}.{}.{}", "a".repeat(32), "b".repeat(32));
+        let now = super::unix_now();
+        sqlx::query(
+            "INSERT INTO platform_server_nodes
+             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+             VALUES (?, 'Test node', 'general', 'active', ?, 1, ?, 'test-profile')",
+        )
+        .bind(&node_id)
+        .bind(sha256_hex(credential.as_bytes()))
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (authz_endpoint, authz_task) = root_auth_server().await;
+        let app = router_with_state(NodeState {
+            pool: pool.clone(),
+            authz_endpoint,
+            service_token: Some("a".repeat(64)),
+            client: reqwest::Client::builder().build().unwrap(),
+        });
+        let accepted = app
+            .clone()
+            .oneshot(telemetry_request_v2(&node_id, &credential, now))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+        sqlx::query(
+            "INSERT INTO platform_server_network_samples
+             (node_id,sampled_at_unix,rx_bytes,tx_bytes,rx_errors,tx_errors,rx_dropped,tx_dropped,tcp_states_json)
+             VALUES (?,?,200,100,0,0,0,0,'{}')",
+        )
+        .bind(&node_id)
+        .bind(now - 30)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(admin_request(
+                "GET",
+                &format!("/api/admin/server-nodes/{node_id}/network?window=1h"),
+                serde_json::Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "private, no-store"
+        );
+        let value: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 16 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["network"]["interfaces"][0]["rx_bytes"], 300);
+        assert_eq!(value["samples"][0]["rx_bytes"], 200);
+        assert_eq!(value["samples"][1]["rx_bytes"], 300);
+        assert!(value["samples"][0].get("remote_address").is_none());
+
+        let invalid_window = app
+            .clone()
+            .oneshot(admin_request(
+                "GET",
+                &format!("/api/admin/server-nodes/{node_id}/network?window=30d"),
+                serde_json::Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid_window.status(), StatusCode::BAD_REQUEST);
+        authz_task.abort();
     }
 
     #[tokio::test]
