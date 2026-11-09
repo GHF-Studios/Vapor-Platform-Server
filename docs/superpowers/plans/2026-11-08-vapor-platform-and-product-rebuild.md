@@ -67,7 +67,39 @@
 5. Adversarial review accepts the changes; no private keys/secrets in repos or logs.
 6. Deployment itself is a visible, individually authorized action after source and rollback target are ready.
 
-## Current verified checkpoint (2026-11-08)
+## Current verified checkpoint (2026-11-09 01:07 UTC)
+
+- Platform source `0b21c964df4f08a5ab5c99f893548ead199ef67d` is on `main`; the
+  currently deployed composition remains
+  `78722c2641b42bfdf493d45b6b92461dccd3e87f`, completed at
+  `2026-11-09T00:47:09Z`. The deployed-source inventory pins Platform and all
+  eight service targets to that composition. Platform, Homepage, Docs,
+  Identity, Diagnostics, Registry, Artifact, Build Cache, and Caddy are active.
+- The three old failed deployment systemd units were confirmed against their
+  retained Platform operation records and cleared from systemd's failed-unit
+  list. Their Platform history was not changed.
+- The owner USB is the freshly formatted `E:` volume (`BACKUPS`). Its
+  `VaporRecovery` root contains the state snapshots and recovery kit. The
+  scheduled `Vapor USB Recovery Sync` completed at `2026-11-09T01:07:48Z` with
+  result `0`; all eight indexed archives and every recovery-kit file hash were
+  verified. Total snapshot payload is 38,389,881 bytes.
+- The newest USB archive is
+  `vapor-platform-state-20261109T010116Z-34f63ec46441.tar.gz` with SHA-256
+  `edd21e88ec907b1108914f15561e0201629af14c4b865cd29da876c3bc9a53e9`. It
+  records the deployed Platform source `78722c2641b42bfdf493d45b6b92461dccd3e87f`;
+  the recovery-tool kit is independently pinned to
+  `cbcf388536fdce8c18e852a8950fd6cabed5acee`.
+- A clean-host restore is not proven. This Windows workstation has no Linux
+  hypervisor/WSL environment available, and the disposable Ubuntu host is not
+  ready. Do not infer a successful restore from the archive validation.
+- Build Cache reports both supported target triples as unconfigured and without
+  a current snapshot. No optional worker is configured. The available
+  `Vapor-Client` checkout is still dirty and has no canonical ecosystem
+  `Vapor.lock` or toolchain lock, so no official snapshot identity/recipe can
+  safely be invented. Keep local source builds as the fallback and preserve
+  the dirty checkout.
+
+## Historical checkpoint (2026-11-08)
 
 - Main VPS exports remain available and an owner USB is mounted at `E:` (`BACKUPS`), with recovery files under `E:\VaporRecovery`.
 - The hourly current-user task `Vapor USB Recovery Sync` is registered, uses the inbox Windows PowerShell executable, last returned success (`0`), and is scheduled for catch-up while the owner is signed in.
