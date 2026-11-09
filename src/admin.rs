@@ -777,10 +777,14 @@ const JS: &str = r#"
       const list = document.createElement('ul');
       for (const pin of (Array.isArray(item.submodules) ? item.submodules : [])) appendText(list, 'li', `${pin.path}: ${pin.commit}`);
       pins.append(summary, list); card.append(pins);
-      if (orderReady) appendText(card, 'p', 'Next in deploy order · approving queues this exact revision.', 'muted');
+      const currentMain = typeof item.current_main_commit === 'string' ? item.current_main_commit.toLowerCase() : null;
+      const revisionCurrent = currentMain !== null && String(item.commit || '').toLowerCase() === currentMain;
+      if (!currentMain) appendText(card, 'p', 'Could not verify GitHub main. Approval is disabled until the current revision can be checked.', 'approval-state-warning');
+      else if (!revisionCurrent) appendText(card, 'p', `Superseded by current main ${currentMain.slice(0, 12)}. Reject this stale request and review the current one.`, 'approval-state-warning');
+      else if (orderReady) appendText(card, 'p', 'Current main · next in deploy order.', 'muted');
       else appendText(card, 'p', 'Waiting for an earlier deploy request to be decided or completed.', 'muted');
       const approveForm = confirmationForm(item, 'I reviewed this exact revision and target', 'Approve and queue', button => submitDecision(button, 'deploy', item, 'approve', { expected_version: item.version, confirmed: true, reason: 'approved in Platform Approvals' }));
-      if (!orderReady || !selectionValid) approveForm.querySelector('button').disabled = true;
+      if (!orderReady || !selectionValid || !revisionCurrent) approveForm.querySelector('button').disabled = true;
       card.append(approveForm);
       card.append(confirmationForm(item, 'I intend to reject this request', 'Reject', button => submitDecision(button, 'deploy', item, 'reject', { expected_version: item.version, confirmed: true, reason: 'rejected in Platform Approvals' })));
     };

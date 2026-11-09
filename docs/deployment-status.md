@@ -1,55 +1,55 @@
 # Vapor server deployment status
 
-## Current verified state (2026-11-09 01:47 UTC)
+## Current verified state (2026-11-09 09:00 UTC)
 
-- The repaired state-only USB sync completed successfully at
-  `2026-11-09T01:22:54Z`, then a fresh-destination USB run completed at
-  `2026-11-09T01:25:23Z`. The fresh run fetched all eight generations from the
-  VPS (38,389,881 bytes), verified archive, sidecar, and recovery-kit hashes,
-  and reported success to Platform. The installed scheduled-task script
-  matches the tested repository copy. Existing recovery data was preserved;
-  the fresh run used a separate USB destination.
-- The latest owner-held archive is
-  `vapor-platform-state-20261109T010116Z-34f63ec46441.tar.gz` with SHA-256
-  `edd21e88ec907b1108914f15561e0201629af14c4b865cd29da876c3bc9a53e9`. Its
-  archived Platform source is `78722c2641b42bfdf493d45b6b92461dccd3e87f`;
-  the separately pinned recovery-kit source is
-  `cbcf388536fdce8c18e852a8950fd6cabed5acee`. This archive was exported after
-  the live deployment completed at `2026-11-09T00:47:09Z`.
-- The VPS deployed-source map records composition
-  `78722c2641b42bfdf493d45b6b92461dccd3e87f` for Platform and all eight service
-  targets. Platform reports the deployment succeeded. Platform, Homepage,
-  Docs, Identity, Diagnostics, Registry, Artifact, Build Cache, and Caddy were
-  all active during the latest check; `systemctl --failed` returned no failed
-  units. The three old failed systemd deployment units were reset after their
-  outcomes were confirmed in Platform history; the history records remain
-  intact.
-- Public `/`, `/downloads`, `/docs/`, `/login`, `/dashboard`, and
-  `/operator/login` return HTTP 200. All 29 same-origin links in the Docs index
-  resolved successfully. Unauthenticated `/admin`, `/admin/approvals`, and
-  `/admin/recovery` return HTTP 401, as required; authenticated operator
-  workflows still need an end-to-end browser check.
-- Build Cache currently reports both supported targets as unconfigured and
-  without a current snapshot. The optional worker path still lacks the
-  canonical ecosystem/toolchain lock. Local source builds remain the available
-  fallback; no clean-host restore drill has been completed yet.
-- Platform `main` is at `081d60b32654eb8bac7855310221dbe8d7cbd615`. Its Windows
-  CI had falsely failed after the state-only USB test correctly caught an
-  unreachable archived revision: Git's expected exit code `1` leaked from that
-  handled validation into PowerShell's final process status. The predicate now
-  clears the native exit code before reporting the expected validation error.
-  The test passes locally with exit code `0`; the pushed composed run
-  `42547112705` passed both Linux root CI and all Windows recovery tests.
-  Deployment submission was correctly skipped for this local-recovery-only
-  change, so live composition remains `78722c2641b42bfdf493d45b6b92461dccd3e87f`.
-- The emergency web console remains disabled by default: its enable flag is
-  absent from the live Platform environment, and its enable guard also requires
-  an isolated admin origin. The unauthenticated console route returns `401`.
-- The archive and recovery kit are checksum-verified on USB, but archive
-  verification is not a substitute for a fresh-host restore drill. Build Cache
-  still reports both target triples unconfigured with no current snapshots;
-  the optional worker and canonical ecosystem/toolchain lock are not yet in
-  place. Local source builds remain the fallback.
+- The primary VPS is in independent `services` mode. Platform composition
+  `19117b021b88cc478c342f612ac2d28fbdf03a29` is deployed; the Platform,
+  Homepage, Docs, Identity, Diagnostics, Registry, Artifact, and Build Cache
+  units are active. The Platform health check passed locally and through the
+  public domain. No request-specific deployment worker is active; periodic
+  deploy polling remains retired. The state-only export timer remains active.
+- That one-time root cutover installed GitHub Actions OIDC verification after
+  the prior live API rejected the new workflow token with `401` and its old
+  credential error. It used the exact Linux/Windows-CI-passing commit and the
+  existing deploy script's root migration path; all deployment health checks
+  passed. No service credentials or long-lived GitHub Actions secrets were
+  added.
+- GitHub Actions run `42588893190` passed composed Linux CI, Windows recovery
+  tests, and deploy-request submission. It created request
+  `ec044eeb-636d-4167-a38a-74954f83a229`, pending for commit
+  `e2aff6a60118bc8649177af2c3a370a6455b5986`, scope `service`, target
+  `platform`. Its signed run key is `42588893190:1`. The earlier run
+  `42586875123` failed only at submission because it reached the old live
+  endpoint before cutover. Platform `main` is now at `e2aff6a`.
+- The queue has three pending requests and nine older approved requests whose
+  dispatch state is failed; there are no active workers. The two oldest pending
+  commits, `6001a3e` and `1f84ef2`, are already ancestors of the deployed
+  `19117b0` composition. Re-deploying them would roll the server backward.
+  They must be closed as stale before the newer `e2aff6a` request can be
+  approved. Do not bulk-dispatch the nine failed approvals.
+- The owner-held `E:` drive remains mounted as `BACKUPS` (exFAT, about 119.5
+  GiB). Its hourly `Vapor USB Recovery Sync` task is Ready and last completed
+  with result `0`. The current sync verified 16 generations totaling
+  76,801,427 bytes. The newest archive is
+  `vapor-platform-state-20261109T085857Z-46bf686f8522.tar.gz` (4,800,478
+  bytes; SHA-256
+  `5d8095dea8835037dcb9ffdaaf12bc121d60a845af08b851d57ac9e595326a39`),
+  pinned to Platform source `19117b0`; the matching recovery kit is pinned
+  separately to `f9236de5`. The archive passed the bundle validator and the
+  Windows sync reported all 16 generations verified. No USB wipe was needed.
+- A disposable Ubuntu state-only restore drill has completed, but its final
+  marker is still waiting for real provider and owner-dashboard checks; the
+  test used placeholder Steam/GitHub values. Therefore rebuild and state import
+  are exercised, while full provider reauthorization after recovery remains
+  incomplete.
+- Build Cache still has `0/2` configured/current target snapshots, and no
+  optional worker node is producing them. The primary VPS remains the working
+  local-build fallback. A canonical ecosystem/toolchain lock and native worker
+  lifecycle are still outstanding; the 1-vCPU VPS is not a suitable concurrent
+  compiler worker.
+- The emergency web console remains disabled by default. Authenticated browser
+  flows still need an owner-session check. Those gaps remain separate from the
+  verified service health and USB synchronization above.
 
 ## Previous checkpoint (2026-11-08 22:05 UTC)
 

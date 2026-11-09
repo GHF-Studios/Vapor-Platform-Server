@@ -25,6 +25,12 @@ old failed dispatch is retried later.
   approved revision to equal its current head. A retry of a superseded ancestor
   is closed without deployment; deploying the newer head already includes its
   ancestors.
+- CI checks that its tested SHA is still `main` before submission, and the
+  Platform API repeats that check when accepting a request. The approvals API
+  exposes the current `main` SHA; it refuses stale approvals before recording
+  them, and the inbox disables their approval action while leaving rejection
+  available. The worker check remains the final race-safe guard if `main`
+  advances after approval.
 - Known pre-claim dispatch failures do not block the queue. An unknown outcome
   does block it until an operator resolves it, because a worker may still have
   changed the host.
@@ -39,7 +45,8 @@ separate stages.
 
 ## Verification
 
-Tests cover stale queued work, older-request gating at approval and claim,
-ordered wake-up after a worker completes, stale dispatch recovery, and the
-worker's current-main guard. The host is checked after each sequential live
-deployment.
+Required automated coverage includes stale queued work, older-request gating
+at approval and claim, ordered wake-up after a worker completes, stale dispatch
+recovery, and the worker's current-main guard. Current-main checks at request
+creation and approval must also be covered before this change is considered
+fully verified. The host is checked after each sequential live deployment.

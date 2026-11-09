@@ -76,8 +76,28 @@ jobs:
           echo "target=${target}" >> "${GITHUB_OUTPUT}"
           echo "Resolved deployment target: ${target}"
 
-      - name: Submit exact revision for root approval
+      - name: Skip a revision superseded while CI was running
+        id: freshness
         if: steps.deployment_target.outputs.target != 'none'
+        env:
+          REQUEST_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_main="$(git ls-remote --exit-code origin refs/heads/main | awk 'NR == 1 { print $1 }')"
+          if [[ ! "${current_main}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve current Platform main; refusing to submit a staleable request." >&2
+            exit 1
+          fi
+          if [[ "${current_main}" != "${REQUEST_SHA}" ]]; then
+            echo "current=false" >> "${GITHUB_OUTPUT}"
+            echo "Skipping ${REQUEST_SHA}: Platform main advanced to ${current_main} while CI was running."
+          else
+            echo "current=true" >> "${GITHUB_OUTPUT}"
+            echo "Tested revision is still current main."
+          fi
+
+      - name: Submit exact revision for root approval
+        if: steps.deployment_target.outputs.target != 'none' && steps.freshness.outputs.current == 'true'
         env:
           VAPOR_DEPLOY_PUBLIC_BASE: https://vapor.ghf-studios.site
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -142,6 +162,10 @@ jobs:
             --data "${payload}" \
             "${VAPOR_DEPLOY_PUBLIC_BASE%/}/api/admin/deploy-requests")"
           unset GITHUB_OIDC_TOKEN
+          if [[ "${status}" == "409" ]] && grep -Fq 'This tested revision was superseded by current main commit' "${response_file}"; then
+            echo "Platform main advanced during submission; no deployment request was created."
+            exit 0
+          fi
           if [[ "${status}" != "202" ]]; then
             echo "deploy request was not accepted (HTTP ${status})" >&2
             cat "${response_file}" >&2

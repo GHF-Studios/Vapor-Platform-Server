@@ -107,6 +107,7 @@ struct DeployRequestSummary {
     dispatch_detail: Option<String>,
     retry_eligible: bool,
     approval_order_ready: bool,
+    current_main_commit: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -268,6 +269,25 @@ async fn create_request(
     };
     if let Err(message) = validate_request(&request) {
         return (StatusCode::BAD_REQUEST, message).into_response();
+    }
+    let current_main_commit = match fetch_current_main_commit(&state.client).await {
+        Ok(commit) => commit,
+        Err(()) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "GitHub main could not be checked; no deployment request was created. Retry after GitHub is available.\n",
+            )
+                .into_response();
+        }
+    };
+    if request.commit != current_main_commit {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "This tested revision was superseded by current main commit {current_main_commit}; no deployment request was created.\n"
+            ),
+        )
+            .into_response();
     }
     if !crate::github_oidc::matches_deploy_request(
         &claims,
@@ -458,6 +478,9 @@ async fn list_requests(
             Ok(rows) => rows,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
+    // The repository is public and is already the authority for approved source.
+    // A page needs only one lookup, shared by every row on that page.
+    let current_main_commit = fetch_current_main_commit(&state.client).await.ok();
     let page = match Page::from_items(rows, page_size, |row| PageCursor {
         created_at_unix: row.get("created_at_unix"),
         id: row.get("id"),
@@ -512,6 +535,7 @@ async fn list_requests(
                     unix_now(),
                 ),
                 approval_order_ready: row.get("approval_order_ready"),
+                current_main_commit: current_main_commit.clone(),
             })
         })
         .collect::<Vec<_>>();
@@ -655,8 +679,8 @@ async fn decide_request(
         return (StatusCode::BAD_REQUEST, "invalid decision reason\n").into_response();
     }
     if approve {
-        let stored_json = match sqlx::query_scalar::<_, String>(
-            "SELECT request_json FROM platform_deploy_requests WHERE id = ? AND status = 'pending' AND version = ?",
+        let stored_request = match sqlx::query_as::<_, (String, String)>(
+            "SELECT commit_hash, request_json FROM platform_deploy_requests WHERE id = ? AND status = 'pending' AND version = ?",
         )
         .bind(&id)
         .bind(request.expected_version)
@@ -667,10 +691,29 @@ async fn decide_request(
             Ok(None) => return (StatusCode::CONFLICT, "request is expired or no longer pending at that version\n").into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
-        if request_server_mode(&stored_json).is_none() {
+        if request_server_mode(&stored_request.1).is_none() {
             return (
                 StatusCode::CONFLICT,
                 "this legacy request has no valid deployment target; reject it and submit a fresh CI request\n",
+            )
+                .into_response();
+        }
+        let current_main_commit = match fetch_current_main_commit(&state.client).await {
+            Ok(commit) => commit,
+            Err(()) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "GitHub main could not be checked; no approval was saved. Retry after GitHub is available.\n",
+                )
+                    .into_response();
+            }
+        };
+        if stored_request.0 != current_main_commit {
+            return (
+                StatusCode::CONFLICT,
+                format!(
+                    "This request is superseded by current main commit {current_main_commit}; no approval was saved. Reject this stale request, then review the current request.\n"
+                ),
             )
                 .into_response();
         }
@@ -742,6 +785,42 @@ async fn decide_request(
             )
         }
     }
+}
+
+const MAX_GITHUB_REF_RESPONSE_BYTES: usize = 8192;
+
+#[derive(Deserialize)]
+struct GithubCommitResponse {
+    sha: String,
+}
+
+async fn fetch_current_main_commit(client: &reqwest::Client) -> Result<String, ()> {
+    let mut response = client
+        .get("https://api.github.com/repos/GHF-Studios/Vapor-Platform-Server/commits/main")
+        .header(reqwest::header::USER_AGENT, "Vapor-Platform-Server")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|_| ())?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_GITHUB_REF_RESPONSE_BYTES as u64)
+    {
+        return Err(());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+        if body.len().saturating_add(chunk.len()) > MAX_GITHUB_REF_RESPONSE_BYTES {
+            return Err(());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let commit: GithubCommitResponse = serde_json::from_slice(&body).map_err(|_| ())?;
+    if commit.sha.len() != 40 || !commit.sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(());
+    }
+    Ok(commit.sha.to_ascii_lowercase())
 }
 
 async fn has_earlier_open_request(
