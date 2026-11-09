@@ -47,6 +47,7 @@ struct DeployRequestState {
     identity_root_authz_url: String,
     identity_root_authz_token: Option<String>,
     public_origin: String,
+    main_commit_url: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -242,6 +243,7 @@ fn state() -> DeployRequestState {
         ),
         identity_root_authz_token: std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok(),
         public_origin: crate::admin_auth::browser_admin_origin(),
+        main_commit_url: GITHUB_MAIN_COMMIT_URL.to_string(),
     }
 }
 
@@ -270,7 +272,9 @@ async fn create_request(
     if let Err(message) = validate_request(&request) {
         return (StatusCode::BAD_REQUEST, message).into_response();
     }
-    let current_main_commit = match fetch_current_main_commit(&state.client).await {
+    let current_main_commit = match fetch_main_commit_at(&state.client, &state.main_commit_url)
+        .await
+    {
         Ok(commit) => commit,
         Err(()) => {
             return (
@@ -480,7 +484,9 @@ async fn list_requests(
         };
     // The repository is public and is already the authority for approved source.
     // A page needs only one lookup, shared by every row on that page.
-    let current_main_commit = fetch_current_main_commit(&state.client).await.ok();
+    let current_main_commit = fetch_main_commit_at(&state.client, &state.main_commit_url)
+        .await
+        .ok();
     let page = match Page::from_items(rows, page_size, |row| PageCursor {
         created_at_unix: row.get("created_at_unix"),
         id: row.get("id"),
@@ -698,7 +704,9 @@ async fn decide_request(
             )
                 .into_response();
         }
-        let current_main_commit = match fetch_current_main_commit(&state.client).await {
+        let current_main_commit = match fetch_main_commit_at(&state.client, &state.main_commit_url)
+            .await
+        {
             Ok(commit) => commit,
             Err(()) => {
                 return (
@@ -794,10 +802,6 @@ const GITHUB_MAIN_COMMIT_URL: &str =
 #[derive(Deserialize)]
 struct GithubCommitResponse {
     sha: String,
-}
-
-async fn fetch_current_main_commit(client: &reqwest::Client) -> Result<String, ()> {
-    fetch_main_commit_at(client, GITHUB_MAIN_COMMIT_URL).await
 }
 
 async fn fetch_main_commit_at(client: &reqwest::Client, url: &str) -> Result<String, ()> {
@@ -2187,17 +2191,21 @@ async fn no_store(request: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_main_commit_at, fetch_request_rows, is_current_main_revision,
+        approve_request, fetch_main_commit_at, fetch_request_rows, is_current_main_revision,
         read_bounded_identity_response, request_scope, request_server_mode, request_service_target,
-        same_request_shape, validate_request, CreateDeployRequest, IdentityCredentialDecision,
-        SubmodulePin, SERVICE_DEPLOY_TARGETS, SUBMODULES,
+        same_request_shape, validate_request, CreateDeployRequest, DeployRequestState,
+        IdentityCredentialDecision, SubmodulePin, SERVICE_DEPLOY_TARGETS, SUBMODULES,
     };
     use crate::pagination::{Page, PageCursor};
-    use axum::routing::get;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use axum::routing::{get, post};
     use axum::Router;
+    use serde_json::json;
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Row;
     use tokio::net::TcpListener;
+    use tower::ServiceExt;
 
     fn valid_request() -> CreateDeployRequest {
         CreateDeployRequest {
@@ -2219,6 +2227,121 @@ mod tests {
                 .to_string(),
             summary: "Composed Platform CI passed.".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn stale_approval_route_returns_conflict_without_changing_the_request() {
+        const SESSION: &str = "vapor-session-12345678-1234-4234-9234-123456789abc-12345678-1234-4234-9234-123456789abc";
+        const SERVICE_TOKEN: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let current_main = "fedcba9876543210fedcba9876543210fedcba98";
+
+        let github_app = Router::new().route(
+            "/ref",
+            get(move || async move { axum::Json(json!({"sha": current_main})) }),
+        );
+        let github_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let github_address = github_listener.local_addr().unwrap();
+        let github_task = tokio::spawn(async move {
+            axum::serve(github_listener, github_app).await.unwrap();
+        });
+
+        let identity_app = Router::new().route(
+            "/authorize",
+            post(|| async {
+                axum::Json(json!({
+                    "allowed": true,
+                    "expires_at_unix": i64::MAX,
+                    "profile_id": "test-root-profile"
+                }))
+            }),
+        );
+        let identity_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let identity_address = identity_listener.local_addr().unwrap();
+        let identity_task = tokio::spawn(async move {
+            axum::serve(identity_listener, identity_app).await.unwrap();
+        });
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE platform_deploy_requests (
+                id TEXT PRIMARY KEY, request_json TEXT NOT NULL, commit_hash TEXT NOT NULL,
+                status TEXT NOT NULL, version INTEGER NOT NULL, created_at_unix INTEGER NOT NULL,
+                expires_at_unix INTEGER NOT NULL, decided_by_profile_id TEXT,
+                decided_at_unix INTEGER, decision_reason TEXT,
+                dispatch_state TEXT NOT NULL DEFAULT 'not_attempted',
+                dispatch_attempts INTEGER NOT NULL DEFAULT 0,
+                dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut stale = valid_request();
+        stale.commit = "0123456789abcdef0123456789abcdef01234567".to_string();
+        let request_json = serde_json::to_string(&stale).unwrap();
+        let now = super::unix_now();
+        sqlx::query(
+            "INSERT INTO platform_deploy_requests
+             (id, request_json, commit_hash, status, version, created_at_unix, expires_at_unix)
+             VALUES ('stale-request', ?, ?, 'pending', 1, ?, ?)",
+        )
+        .bind(request_json)
+        .bind(&stale.commit)
+        .bind(now - 1)
+        .bind(now + 3600)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = DeployRequestState {
+            pool: pool.clone(),
+            client: reqwest::Client::new(),
+            identity_root_authz_url: format!("http://{identity_address}/authorize"),
+            identity_root_authz_token: Some(SERVICE_TOKEN.to_string()),
+            public_origin: "https://admin.example".to_string(),
+            main_commit_url: format!("http://{github_address}/ref"),
+        };
+        let app = Router::new()
+            .route(
+                "/api/admin/deploy-requests/{id}/approve",
+                post(approve_request),
+            )
+            .with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/deploy-requests/stale-request/approve")
+                    .header("origin", "https://admin.example")
+                    .header("cookie", format!("vapor_identity_session={SESSION}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"expected_version":1,"confirmed":true,"reason":"reviewed"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("no approval was saved"));
+        let row = sqlx::query_as::<_, (String, i64, Option<String>, Option<i64>, Option<String>)>(
+            "SELECT status, version, decided_by_profile_id, decided_at_unix, decision_reason
+             FROM platform_deploy_requests WHERE id = 'stale-request'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, ("pending".to_string(), 1, None, None, None));
+
+        github_task.abort();
+        identity_task.abort();
     }
 
     #[test]
