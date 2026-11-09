@@ -1009,6 +1009,8 @@ mod unix_impl {
                     expires_at_unix: Some(expires),
                     expected_fingerprint: Some(fingerprint),
                     host_admin_confirmed: Some(host_admin_confirmed),
+                    target_node_id: None,
+                    action: None,
                 };
                 match grant_ssh(&pool, &id, &input).await {
                     Ok(()) => {
