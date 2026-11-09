@@ -377,3 +377,23 @@ the order, so UI sorting is not a safety boundary. An approved revision that
 is no longer the current protected `main` head is closed before deployment; a
 newer main commit already contains its ancestors, so replaying the older
 snapshot would only risk replacing newer live code.
+
+For recovery from pre-alpha queue clutter, the same root-only helper can close
+one exact failed dispatch or reject one exact superseded pending request. Both
+commands require the current request version and a reason. A failed dispatch
+can be closed only while it is still `approved` with `dispatch_state=failed`;
+uncertain or queued work is never retired. A pending request is rejected only
+when it belongs to this repository's `main`, is unexpired, and its commit is
+not the current GitHub `main` revision.
+
+```bash
+python3 /opt/vapor-platform-server/deploy/scripts/deploy-request-queue.py \
+  --database /var/lib/vapor-server/platform/platform.sqlite3 \
+  retire-failed-dispatch --id <request-uuid> --version <current-version> \
+  --reason "historical dispatch failed before a worker started"
+
+python3 /opt/vapor-platform-server/deploy/scripts/deploy-request-queue.py \
+  --database /var/lib/vapor-server/platform/platform.sqlite3 \
+  reject-superseded-pending --id <request-uuid> --version <current-version> \
+  --reason "superseded by current main"
+```

@@ -166,7 +166,6 @@ def claim(db, request_id):
         db.execute("ROLLBACK")
         raise
 
-
 def complete(db, request_id, version, result, detail):
     if result not in ("succeeded", "failed"):
         raise ValueError("invalid terminal result")
@@ -185,7 +184,6 @@ def complete(db, request_id, version, result, detail):
     except Exception:
         db.execute("ROLLBACK")
         raise
-
 
 def approve_and_queue(db, request_id, expected_commit, reason, now=None):
     try:
@@ -257,6 +255,7 @@ def approve_and_queue(db, request_id, expected_commit, reason, now=None):
         db.execute("ROLLBACK")
         raise
 
+
     # This command is called only by the root-only CLI entrypoint. It starts
     # the existing fixed request unit; no caller-supplied executable or args.
     try:
@@ -290,6 +289,87 @@ def approve_and_queue(db, request_id, expected_commit, reason, now=None):
         raise RuntimeError("approval was recorded, but the fixed deploy worker could not be queued; retry is available")
     return 0
 
+
+def _validate_root_decision(request_id, expected_version, reason):
+    try:
+        canonical_id = str(uuid.UUID(request_id))
+    except (ValueError, AttributeError):
+        raise ValueError("request ID must be a canonical UUID") from None
+    if canonical_id != request_id:
+        raise ValueError("request ID must be a canonical UUID")
+    if not isinstance(expected_version, int) or expected_version < 1:
+        raise ValueError("expected version must be a positive integer")
+    if not isinstance(reason, str) or not 4 <= len(reason.strip()) <= 500:
+        raise ValueError("decision reason must contain 4 to 500 characters")
+    if any(ord(character) < 32 or ord(character) == 127 for character in reason):
+        raise ValueError("decision reason cannot contain control characters")
+    return canonical_id, reason.strip()
+
+
+def retire_failed_dispatch(db, request_id, expected_version, reason, now=None):
+    """Close only an approved request whose queue dispatch definitively failed."""
+    canonical_id, reason = _validate_root_decision(request_id, expected_version, reason)
+    now = int(time.time()) if now is None else int(now)
+    detail = (
+        "Closed by the local root operator before deployment. "
+        f"No deployment worker was queued. Reason: {reason}"
+    )
+    decision_reason = f"Closed after failed dispatch: {reason}"
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        changed = db.execute(
+            "UPDATE platform_deploy_requests SET status='failed', version=version+1, "
+            "decided_by_profile_id=NULL, decided_at_unix=?, decision_reason=?, "
+            "result_detail=?, dispatch_detail=? "
+            "WHERE id=? AND status='approved' AND version=? AND dispatch_state='failed'",
+            (now, decision_reason, detail, detail, canonical_id, expected_version),
+        ).rowcount
+        db.execute("COMMIT")
+        return changed == 1
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+
+
+def reject_superseded_pending(db, request_id, expected_version, reason, now=None):
+    """Reject one pending Platform main request only when it is no longer current."""
+    canonical_id, reason = _validate_root_decision(request_id, expected_version, reason)
+    current_main = fetch_current_main_commit()
+    now = int(time.time()) if now is None else int(now)
+    decision_reason = f"Local root operator rejection of superseded request: {reason}"
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        row = db.execute(
+            "SELECT * FROM platform_deploy_requests WHERE id=? AND status='pending' AND version=?",
+            (canonical_id, expected_version),
+        ).fetchone()
+        if row is None:
+            db.execute("COMMIT")
+            return False
+        request = decode_request(row)
+        if (
+            row["repository"] != "GHF-Studios/Vapor-Platform-Server"
+            or row["branch"] != "main"
+            or request.get("repository") != row["repository"]
+            or request.get("branch") != row["branch"]
+            or request.get("commit") != row["commit_hash"]
+            or row["dispatch_state"] != "not_attempted"
+            or row["commit_hash"].lower() == current_main.lower()
+            or int(row["expires_at_unix"]) <= now
+        ):
+            db.execute("COMMIT")
+            return False
+        changed = db.execute(
+            "UPDATE platform_deploy_requests SET status='rejected', version=version+1, "
+            "decided_by_profile_id=NULL, decided_at_unix=?, decision_reason=? "
+            "WHERE id=? AND status='pending' AND version=? AND dispatch_state='not_attempted' AND expires_at_unix>?",
+            (now, decision_reason, canonical_id, expected_version, now),
+        ).rowcount
+        db.execute("COMMIT")
+        return changed == 1
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
 
 def next_ready(db):
     """Return the oldest approved queued request only when it is the next open item."""
@@ -364,6 +444,11 @@ def main():
     approve.add_argument("--id", required=True)
     approve.add_argument("--commit", required=True)
     approve.add_argument("--reason", required=True)
+    for command in ("retire-failed-dispatch", "reject-superseded-pending"):
+        decision = subparsers.add_parser(command)
+        decision.add_argument("--id", required=True)
+        decision.add_argument("--version", required=True, type=int)
+        decision.add_argument("--reason", required=True)
     verify = subparsers.add_parser("verify")
     verify.add_argument("--id", required=True)
     verify.add_argument("--version", required=True, type=int)
@@ -374,8 +459,8 @@ def main():
     subparsers.add_parser("next")
     args = parser.parse_args()
 
-    if args.command == "approve-and-queue" and getattr(os, "geteuid", lambda: -1)() != 0:
-        print("deploy-request-queue: approval requires root SSH access", file=sys.stderr)
+    if args.command in {"approve-and-queue", "retire-failed-dispatch", "reject-superseded-pending"} and getattr(os, "geteuid", lambda: -1)() != 0:
+        print("deploy-request-queue: decision requires root SSH access", file=sys.stderr)
         return 1
 
     try:
@@ -388,6 +473,18 @@ def main():
                 result = approve_and_queue(db, args.id, args.commit, args.reason)
                 print(json.dumps({"id": args.id, "status": "approved", "dispatch_state": "dispatching"}))
                 return result
+            if args.command == "retire-failed-dispatch":
+                changed = retire_failed_dispatch(db, args.id, args.version, args.reason)
+                if not changed:
+                    raise ValueError("request is not the expected approved failed-dispatch version")
+                print(json.dumps({"id": args.id, "status": "failed", "dispatch_state": "failed", "worker_queued": False}))
+                return 0
+            if args.command == "reject-superseded-pending":
+                changed = reject_superseded_pending(db, args.id, args.version, args.reason)
+                if not changed:
+                    raise ValueError("request is not an unexpired superseded pending Platform main request at that version")
+                print(json.dumps({"id": args.id, "status": "rejected", "superseded": True}))
+                return 0
             if args.command == "verify":
                 verify_claim(
                     db,

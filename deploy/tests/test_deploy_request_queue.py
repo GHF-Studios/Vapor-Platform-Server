@@ -142,7 +142,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         self.assertEqual(row["version"], 2)
         self.assertIsNone(row["decided_by_profile_id"])
         self.assertEqual(row["decided_at_unix"], 200)
-        self.assertIn("local root operator", row["decision_reason"].lower())
+        self.assertIn("Local root operator approval", row["decision_reason"])
         self.assertIn("owner-authorized pre-alpha deploy", row["decision_reason"])
         self.assertEqual(row["dispatch_state"], "dispatching")
         self.assertEqual(row["dispatch_attempts"], 1)
@@ -151,6 +151,103 @@ class DeployRequestQueueTests(unittest.TestCase):
             with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]):
                 QUEUE.approve_and_queue(db, request_id, request["commit"], "repeat approval", now=201)
         db.close()
+
+    def test_root_can_retire_only_failed_dispatch_without_queueing_any_worker(self) -> None:
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        request = self._request()
+        db = self._database_with_request(request, status="approved", version=2, request_id=request_id)
+        db.execute("UPDATE platform_deploy_requests SET dispatch_state='failed', dispatch_detail='helper unavailable' WHERE id=?", (request_id,))
+
+        changed = QUEUE.retire_failed_dispatch(
+            db, request_id, 2, "close failed historical dispatch", now=200
+        )
+
+        self.assertTrue(changed)
+        row = db.execute(
+            "SELECT status,version,decided_by_profile_id,decision_reason,result_detail "
+            "FROM platform_deploy_requests WHERE id=?", (request_id,)
+        ).fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["version"], 3)
+        self.assertIsNone(row["decided_by_profile_id"])
+        self.assertEqual(
+            row["decision_reason"],
+            "Closed after failed dispatch: close failed historical dispatch",
+        )
+        self.assertIn("No deployment worker was queued", row["result_detail"])
+        db.close()
+
+    def test_root_retirement_refuses_uncertain_dispatch_and_stale_version(self) -> None:
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        for dispatch_state, version in (("unknown", 2), ("failed", 1)):
+            db = self._database_with_request(self._request(), status="approved", version=2, request_id=request_id)
+            db.execute("UPDATE platform_deploy_requests SET dispatch_state=? WHERE id=?", (dispatch_state, request_id))
+            self.assertFalse(QUEUE.retire_failed_dispatch(db, request_id, version, "must not close", now=200))
+            row = db.execute("SELECT status,version,dispatch_state FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()
+            self.assertEqual(tuple(row), ("approved", 2, dispatch_state))
+            db.close()
+
+    def test_root_can_reject_only_a_pending_superseded_main_request(self) -> None:
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        request = self._request()
+        db = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+
+        with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value="f" * 40):
+            changed = QUEUE.reject_superseded_pending(
+                db, request_id, 1, "superseded by current main", now=200
+            )
+
+        self.assertTrue(changed)
+        row = db.execute(
+            "SELECT status,version,decided_by_profile_id,decision_reason FROM platform_deploy_requests WHERE id=?",
+            (request_id,),
+        ).fetchone()
+        self.assertEqual(row["status"], "rejected")
+        self.assertEqual(row["version"], 2)
+        self.assertIsNone(row["decided_by_profile_id"])
+        self.assertIn("Local root operator rejection", row["decision_reason"])
+        db.close()
+
+    def test_root_pending_rejection_refuses_current_revision_and_non_pending_requests(self) -> None:
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        for status in ("pending", "approved"):
+            db = self._database_with_request(self._request(), status=status, version=1 if status == "pending" else 2, request_id=request_id)
+            with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value="0" * 40):
+                changed = QUEUE.reject_superseded_pending(db, request_id, 1 if status == "pending" else 2, "stale", now=200)
+            self.assertFalse(changed)
+            self.assertEqual(db.execute("SELECT status FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()[0], status)
+            db.close()
+
+    def test_root_pending_rejection_compares_commit_hashes_case_insensitively(self) -> None:
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        request = self._request()
+        request["commit"] = "a" * 40
+        db = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+        uppercase = "A" * 40
+        raw = json.dumps(dict(request, commit=uppercase), separators=(",", ":"))
+        db.execute(
+            "UPDATE platform_deploy_requests SET commit_hash=?,request_json=?,body_hash=? WHERE id=?",
+            (uppercase, raw, hashlib.sha256(raw.encode()).hexdigest(), request_id),
+        )
+
+        with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value="a" * 40):
+            changed = QUEUE.reject_superseded_pending(db, request_id, 1, "must remain current", now=200)
+
+        self.assertFalse(changed)
+        self.assertEqual(tuple(db.execute("SELECT status,version FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()), ("pending", 1))
+        db.close()
+
+    def test_root_pending_rejection_refuses_any_started_or_uncertain_dispatch(self) -> None:
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        for dispatch_state in ("queued", "dispatching", "unknown"):
+            db = self._database_with_request(self._request(), status="pending", version=1, request_id=request_id)
+            db.execute("UPDATE platform_deploy_requests SET dispatch_state=? WHERE id=?", (dispatch_state, request_id))
+            with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value="f" * 40):
+                changed = QUEUE.reject_superseded_pending(db, request_id, 1, "must not close uncertain state", now=200)
+            self.assertFalse(changed)
+            row = db.execute("SELECT status,version,dispatch_state FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()
+            self.assertEqual(tuple(row), ("pending", 1, dispatch_state))
+            db.close()
 
     def test_root_approval_rejects_wrong_commit_without_mutation(self) -> None:
         request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
