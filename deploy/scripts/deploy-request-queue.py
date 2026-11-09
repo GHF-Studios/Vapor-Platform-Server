@@ -11,6 +11,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 SERVICE_TARGETS = {
@@ -25,6 +27,37 @@ SERVICE_TARGETS = {
     "platform",
 }
 DISPATCH_STALE_SECONDS = 30
+MAIN_REF_URL = "https://api.github.com/repos/GHF-Studios/Vapor-Platform-Server/git/ref/heads/main"
+
+
+def fetch_current_main_commit():
+    request = urllib.request.Request(
+        MAIN_REF_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Vapor-Platform-Server",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = response.read(8193)
+    except (OSError, urllib.error.URLError, TimeoutError):
+        raise ValueError("could not verify current GitHub main revision") from None
+    if len(body) > 8192:
+        raise ValueError("GitHub main revision response exceeded its size limit")
+    try:
+        payload = json.loads(body)
+        sha = payload["object"]["sha"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        raise ValueError("GitHub returned an invalid main revision response") from None
+    if (
+        payload.get("ref") != "refs/heads/main"
+        or payload.get("object", {}).get("type") != "commit"
+        or not isinstance(sha, str)
+        or not re.fullmatch(r"[0-9a-fA-F]{40}", sha)
+    ):
+        raise ValueError("GitHub returned an invalid main revision")
+    return sha.lower()
 
 
 def validate_selection(request):
@@ -94,7 +127,9 @@ def claim(db, request_id):
             "WHERE (older.created_at_unix < platform_deploy_requests.created_at_unix "
             "OR (older.created_at_unix = platform_deploy_requests.created_at_unix "
             "AND older.id < platform_deploy_requests.id)) "
-            "AND older.expires_at_unix > ? AND (older.status IN ('pending','executing') "
+            "AND older.expires_at_unix > ? "
+            "AND (older.status <> 'pending' OR older.commit_hash = platform_deploy_requests.commit_hash) "
+            "AND (older.status IN ('pending','executing') "
             "OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown'))))",
             (request_id, now, now - DISPATCH_STALE_SECONDS, now),
         ).fetchone()
@@ -165,6 +200,8 @@ def approve_and_queue(db, request_id, expected_commit, reason, now=None):
         raise ValueError("approval reason must contain 4 to 200 characters")
     if any(ord(character) < 32 or ord(character) == 127 for character in reason):
         raise ValueError("approval reason cannot contain control characters")
+    if fetch_current_main_commit() != expected_commit.lower():
+        raise ValueError("request commit is not the current main revision on GitHub")
 
     now = int(time.time()) if now is None else int(now)
     decision_reason = f"Local root operator approval: {reason.strip()}"
@@ -182,10 +219,12 @@ def approve_and_queue(db, request_id, expected_commit, reason, now=None):
         earlier_open_request = db.execute(
             "SELECT id FROM platform_deploy_requests older "
             "WHERE (older.created_at_unix < ? OR (older.created_at_unix = ? AND older.id < ?)) "
-            "AND older.expires_at_unix > ? AND (older.status IN ('pending','executing') "
+            "AND older.expires_at_unix > ? "
+            "AND (older.status <> 'pending' OR older.commit_hash = ?) "
+            "AND (older.status IN ('pending','executing') "
             "OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown'))) "
             "LIMIT 1",
-            (row["created_at_unix"], row["created_at_unix"], canonical_id, now),
+            (row["created_at_unix"], row["created_at_unix"], canonical_id, now, row["commit_hash"]),
         ).fetchone()
         if earlier_open_request is not None:
             raise ValueError("an older deployment request must be decided or completed first")
@@ -266,11 +305,19 @@ def next_ready(db):
             (now, now),
         )
         row = db.execute(
-            "SELECT id,status,dispatch_state FROM platform_deploy_requests "
-            "WHERE expires_at_unix > ? AND (status IN ('pending','executing') "
-            "OR (status='approved' AND dispatch_state IN ('queued','dispatching','unknown'))) "
-            "ORDER BY created_at_unix,id LIMIT 1",
-            (now,),
+            "SELECT candidate.id,candidate.status,candidate.dispatch_state "
+            "FROM platform_deploy_requests candidate "
+            "WHERE candidate.expires_at_unix > ? "
+            "AND candidate.status='approved' AND candidate.dispatch_state='queued' "
+            "AND NOT EXISTS (SELECT 1 FROM platform_deploy_requests older "
+            "WHERE (older.created_at_unix < candidate.created_at_unix "
+            "OR (older.created_at_unix = candidate.created_at_unix AND older.id < candidate.id)) "
+            "AND older.expires_at_unix > ? "
+            "AND (older.status <> 'pending' OR older.commit_hash = candidate.commit_hash) "
+            "AND (older.status IN ('pending','executing') "
+            "OR (older.status='approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))) "
+            "ORDER BY candidate.created_at_unix,candidate.id LIMIT 1",
+            (now, now),
         ).fetchone()
         db.execute("COMMIT")
         if row is None or row["status"] != "approved" or row["dispatch_state"] != "queued":

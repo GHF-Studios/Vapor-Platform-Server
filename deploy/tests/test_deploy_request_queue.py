@@ -69,6 +69,21 @@ class DeployRequestQueueTests(unittest.TestCase):
         }
         return request
 
+    def _insert_older_pending(self, db, request, request_id, commit):
+        stale = dict(request, commit=commit)
+        raw = json.dumps(stale, separators=(",", ":"))
+        db.execute(
+            "INSERT INTO platform_deploy_requests "
+            "(id,status,version,created_at_unix,expires_at_unix,dispatch_state,dispatch_attempts,"
+            "dispatch_attempted_at_unix,body_hash,request_json,repository,branch,commit_hash,tree_hash,"
+            "workflow_url,summary,submodules_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                request_id, "pending", 1, 99, 9999999999, "not_attempted", 0, None,
+                hashlib.sha256(raw.encode()).hexdigest(), raw, stale["repository"], stale["branch"],
+                commit, stale["tree"], stale["workflow_url"], stale["summary"], "[]",
+            ),
+        )
+
     def test_claim_preserves_explicit_deployment_target(self) -> None:
         db = self._database_with_request(self._request())
         output = io.StringIO()
@@ -104,7 +119,7 @@ class DeployRequestQueueTests(unittest.TestCase):
 
         with mock.patch.object(QUEUE.time, "time", return_value=200), mock.patch.object(
             QUEUE.subprocess, "run", run
-        ):
+        ), mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]):
             result = QUEUE.approve_and_queue(
                 db, request_id, request["commit"], "owner-authorized pre-alpha deploy", now=200
             )
@@ -133,13 +148,14 @@ class DeployRequestQueueTests(unittest.TestCase):
         self.assertEqual(row["dispatch_attempts"], 1)
         self.assertEqual(row["dispatch_attempted_at_unix"], 200)
         with self.assertRaisesRegex(ValueError, "only a pending"):
-            QUEUE.approve_and_queue(db, request_id, request["commit"], "repeat approval", now=201)
+            with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]):
+                QUEUE.approve_and_queue(db, request_id, request["commit"], "repeat approval", now=201)
         db.close()
 
     def test_root_approval_rejects_wrong_commit_without_mutation(self) -> None:
         request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
         db = self._database_with_request(self._request(), status="pending", version=1, request_id=request_id)
-        with self.assertRaisesRegex(ValueError, "commit"):
+        with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value="0" * 40), self.assertRaisesRegex(ValueError, "commit"):
             QUEUE.approve_and_queue(db, request_id, "f" * 40, "approved by owner")
         row = db.execute(
             "SELECT status,version,decision_reason FROM platform_deploy_requests WHERE id=?", (request_id,)
@@ -147,12 +163,28 @@ class DeployRequestQueueTests(unittest.TestCase):
         self.assertEqual(tuple(row), ("pending", 1, None))
         db.close()
 
+    def test_root_approval_rejects_commit_that_is_no_longer_main(self) -> None:
+        request = self._request()
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        db = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+        run = mock.Mock()
+        with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value="f" * 40), mock.patch.object(
+            QUEUE.subprocess, "run", run
+        ), self.assertRaisesRegex(ValueError, "current main"):
+            QUEUE.approve_and_queue(db, request_id, request["commit"], "stale deployment", now=200)
+        run.assert_not_called()
+        self.assertEqual(
+            tuple(db.execute("SELECT status,version,decision_reason FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()),
+            ("pending", 1, None),
+        )
+        db.close()
+
     def test_root_approval_rejects_non_official_request_without_mutation(self) -> None:
         request = self._request()
         request["branch"] = "codex/unreviewed"
         request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
         db = self._database_with_request(request, status="pending", version=1, request_id=request_id)
-        with self.assertRaisesRegex(ValueError, "main branch"):
+        with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]), self.assertRaisesRegex(ValueError, "main branch"):
             QUEUE.approve_and_queue(db, request_id, request["commit"], "approved by owner")
         row = db.execute(
             "SELECT status,version FROM platform_deploy_requests WHERE id=?", (request_id,)
@@ -165,7 +197,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         request = self._request()
         expired = self._database_with_request(request, status="pending", version=1, request_id=request_id)
         expired.execute("UPDATE platform_deploy_requests SET expires_at_unix=199 WHERE id=?", (request_id,))
-        with self.assertRaisesRegex(ValueError, "expired"):
+        with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]), self.assertRaisesRegex(ValueError, "expired"):
             QUEUE.approve_and_queue(expired, request_id, request["commit"], "approved deploy", now=200)
         self.assertEqual(
             tuple(expired.execute("SELECT status,version FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()),
@@ -177,7 +209,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         tampered.execute(
             "UPDATE platform_deploy_requests SET request_json=request_json || ' ' WHERE id=?", (request_id,)
         )
-        with self.assertRaisesRegex(ValueError, "digest"):
+        with mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]), self.assertRaisesRegex(ValueError, "digest"):
             QUEUE.approve_and_queue(tampered, request_id, request["commit"], "approved deploy", now=200)
         self.assertEqual(
             tuple(tampered.execute("SELECT status,version FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()),
@@ -192,7 +224,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         run = mock.Mock(return_value=subprocess.CompletedProcess([], 1))
         with mock.patch.object(QUEUE.time, "time", return_value=200), mock.patch.object(
             QUEUE.subprocess, "run", run
-        ), self.assertRaisesRegex(RuntimeError, "approval was recorded"):
+        ), mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]), self.assertRaisesRegex(RuntimeError, "approval was recorded"):
             QUEUE.approve_and_queue(
                 db, request_id, request["commit"], "owner-authorized pre-alpha deploy", now=200
             )
@@ -309,7 +341,7 @@ class DeployRequestQueueTests(unittest.TestCase):
                 request["commit"], request["tree"], request["workflow_url"], request["summary"], "[]",
             ),
         )
-        with mock.patch.object(QUEUE.subprocess, "run") as run:
+        with mock.patch.object(QUEUE.subprocess, "run") as run, mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]):
             with self.assertRaisesRegex(ValueError, "older deployment request"):
                 QUEUE.approve_and_queue(db, newer_id, request["commit"], "newer revision", now=200)
         run.assert_not_called()
@@ -317,6 +349,48 @@ class DeployRequestQueueTests(unittest.TestCase):
             tuple(db.execute("SELECT status,version FROM platform_deploy_requests WHERE id=?", (newer_id,)).fetchone()),
             ("pending", 1),
         )
+        db.close()
+
+    def test_stale_older_pending_different_revision_does_not_block_approval(self) -> None:
+        request = self._request()
+        request_id = "596b4b19-f232-4528-bec8-cbc70c7398b9"
+        db = self._database_with_request(request, status="pending", version=1, request_id=request_id)
+        db.execute("UPDATE platform_deploy_requests SET created_at_unix=200 WHERE id=?", (request_id,))
+        self._insert_older_pending(db, request, "old-revision", "f" * 40)
+        with mock.patch.object(QUEUE.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), mock.patch.object(QUEUE, "fetch_current_main_commit", return_value=request["commit"]):
+            result = QUEUE.approve_and_queue(db, request_id, request["commit"], "current main revision", now=200)
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            tuple(db.execute("SELECT status,dispatch_state FROM platform_deploy_requests WHERE id=?", (request_id,)).fetchone()),
+            ("approved", "dispatching"),
+        )
+        db.close()
+
+    def test_stale_older_pending_different_revision_does_not_block_claim(self) -> None:
+        request = self._request()
+        db = self._database_with_request(request)
+        self._insert_older_pending(db, request, "old-revision", "f" * 40)
+        output = io.StringIO()
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
+            result = QUEUE.claim(db, "req")
+        self.assertEqual(result, 0)
+        self.assertNotEqual(output.getvalue().strip(), "null")
+        self.assertEqual(
+            tuple(db.execute("SELECT status,dispatch_state FROM platform_deploy_requests WHERE id='req'").fetchone()),
+            ("executing", "claimed"),
+        )
+        db.close()
+
+    def test_next_ready_skips_stale_older_pending_different_revision(self) -> None:
+        request = self._request()
+        db = self._database_with_request(request)
+        db.execute("UPDATE platform_deploy_requests SET dispatch_state='queued' WHERE id='req'")
+        self._insert_older_pending(db, request, "old-revision", "f" * 40)
+        output = io.StringIO()
+        with mock.patch.object(QUEUE.time, "time", return_value=100), contextlib.redirect_stdout(output):
+            result = QUEUE.next_ready(db)
+        self.assertEqual(result, 0)
+        self.assertEqual(output.getvalue().strip(), "req")
         db.close()
 
     def test_next_ready_waits_for_oldest_open_request_then_returns_queued_successor(self) -> None:
@@ -442,7 +516,7 @@ class DeployRequestQueueTests(unittest.TestCase):
         db.execute(
             "CREATE TABLE platform_deploy_requests ("
             "id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, created_at_unix INTEGER NOT NULL DEFAULT 100, "
-            "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, "
+            "expires_at_unix INTEGER NOT NULL, decided_at_unix INTEGER, commit_hash TEXT, "
             "dispatch_state TEXT NOT NULL, dispatch_attempted_at_unix INTEGER, dispatch_detail TEXT)"
         )
         db.execute(

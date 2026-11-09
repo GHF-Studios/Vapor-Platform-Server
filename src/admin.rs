@@ -534,7 +534,7 @@ const JS: &str = r#"
   if (requestQueue) {
     const refreshQueueButton = document.querySelector('#operator-queue-refresh');
     const sources = [
-      { name: 'Deployments', url: '/api/admin/deploy-requests?limit=200', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'approved' && ['failed', 'unknown', 'dispatching'].includes(item.dispatch_state)).length, secondaryLabel: 'Dispatch needs attention' }) },
+      { name: 'Deployments', url: '/api/admin/deploy-requests?limit=200', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending' && typeof item.current_main_commit === 'string' && String(item.commit || '').toLowerCase() === String(item.current_main_commit).toLowerCase()).length, label: 'Awaiting approval', secondary: items.filter(item => item.status === 'approved' && ['failed', 'unknown', 'dispatching'].includes(item.dispatch_state)).length, secondaryLabel: 'Execution follow-up' }) },
       { name: 'Temporary access', url: '/api/admin/ssh-access/requests?limit=200', href: '/admin/approvals', summarize: items => ({ primary: items.filter(item => item.status === 'pending').length, label: 'Awaiting review', secondary: items.filter(item => item.status === 'active').length, secondaryLabel: 'Active grants' }) },
       { name: 'Identity permissions', url: '/api/identity/v1/admin/permission-requests/page?limit=200', href: '/admin/approvals', summarize: items => { const pending = items.filter(item => item.status === 'pending'); const overdue = pending.filter(item => Number(item.expires_at_unix) > 0 && Number(item.expires_at_unix) <= Math.floor(Date.now() / 1000)).length; return { primary: pending.length - overdue, label: 'Awaiting review', secondary: overdue, secondaryLabel: 'Expired by time; owner transition pending' }; } }
     ];
@@ -543,7 +543,7 @@ const JS: &str = r#"
       if (refreshQueueButton) { refreshQueueButton.disabled = true; refreshQueueButton.textContent = 'Refreshing…'; }
       requestQueue.replaceChildren();
       const table = document.createElement('table'); table.className = 'request-queue-table';
-      table.innerHTML = '<thead><tr><th scope="col">Workflow</th><th scope="col">Waiting</th><th scope="col">Additional</th><th scope="col">Open</th></tr></thead>';
+      table.innerHTML = '<thead><tr><th scope="col">Workflow</th><th scope="col">Awaiting decision</th><th scope="col">Execution follow-up</th><th scope="col">Open</th></tr></thead>';
       const body = document.createElement('tbody');
       const outcomes = await Promise.all(sources.map(async source => {
         try {
@@ -697,6 +697,10 @@ const JS: &str = r#"
       return Number.isFinite(seconds) && seconds > 0 && seconds <= 8640000000000
         ? new Date(seconds * 1000).toLocaleString() : 'not recorded';
     };
+    const deployIsSuperseded = item => {
+      const current = typeof item?.current_main_commit === 'string' ? item.current_main_commit.toLowerCase() : null;
+      return current !== null && String(item?.commit || '').toLowerCase() !== current;
+    };
     const serviceDeployTargets = new Set((document.querySelector('[data-deployment-targets]')?.dataset.deploymentTargets || '').split(',').filter(Boolean));
     const validDeploymentSelection = item => {
       if (!['monolith', 'services'].includes(item.server_mode)) return false;
@@ -783,9 +787,10 @@ const JS: &str = r#"
       const currentMain = typeof item.current_main_commit === 'string' ? item.current_main_commit.toLowerCase() : null;
       const revisionCurrent = currentMain !== null && String(item.commit || '').toLowerCase() === currentMain;
       if (!currentMain) appendText(card, 'p', 'Could not verify GitHub main. Approval is disabled until the current revision can be checked.', 'approval-state-warning');
-      else if (!revisionCurrent) appendText(card, 'p', `Superseded by current main ${currentMain.slice(0, 12)}. Reject this stale request and review the current one.`, 'approval-state-warning');
-      else if (orderReady) appendText(card, 'p', 'Current main · next in deploy order.', 'muted');
+      else if (deployIsSuperseded(item)) appendText(card, 'p', `This request is for an older main revision (${currentMain.slice(0, 12)} is current). No decision is needed.`, 'approval-state-warning');
+      else if (orderReady) appendText(card, 'p', 'Current main · ready for review.', 'muted');
       else appendText(card, 'p', 'Waiting for an earlier deploy request to be decided or completed.', 'muted');
+      if (deployIsSuperseded(item)) return;
       const approveForm = confirmationForm(item, 'I reviewed this exact revision and target', 'Approve and queue', button => submitDecision(button, 'deploy', item, 'approve', { expected_version: item.version, confirmed: true, reason: 'approved in Platform Approvals' }));
       if (!orderReady || !selectionValid || !revisionCurrent) approveForm.querySelector('button').disabled = true;
       card.append(approveForm);
@@ -880,17 +885,20 @@ const JS: &str = r#"
       const state = sourceState[source.key];
       const records = state.records;
       const pending = records.filter(item => item && item.status === 'pending');
-      if (countBadges[source.key]) countBadges[source.key].textContent = state.cursor
-        ? `${pending.length} pending · more available`
-        : `${pending.length} pending`;
+      const supersededDeployments = source.key === 'deploy' ? pending.filter(deployIsSuperseded) : [];
+      const reviewablePending = source.key === 'deploy' ? pending.filter(item => !deployIsSuperseded(item)) : pending;
+      if (countBadges[source.key]) countBadges[source.key].textContent = source.key === 'deploy'
+        ? `${reviewablePending.length} to review${supersededDeployments.length ? ` · ${supersededDeployments.length} superseded` : ''}${state.cursor ? ' · more available' : ''}`
+        : state.cursor ? `${pending.length} pending · more available` : `${pending.length} pending`;
       const expiredIdentity = source.key === 'identity' ? pending.filter(isExpiredByTime) : [];
       const actionable = source.key === 'identity'
-        ? pending.filter(item => !isExpiredByTime(item))
+        ? reviewablePending.filter(item => !isExpiredByTime(item))
         : source.key === 'deploy'
-          ? pending.slice().sort((a, b) => Number(a.created_at_unix || 0) - Number(b.created_at_unix || 0) || String(a.id).localeCompare(String(b.id)))
-          : pending;
+          ? reviewablePending.slice().sort((a, b) => Number(a.created_at_unix || 0) - Number(b.created_at_unix || 0) || String(a.id).localeCompare(String(b.id)))
+          : reviewablePending;
       container.replaceChildren();
-      if (!pending.length) appendText(container, 'p', 'No pending requests in the loaded records.', 'muted');
+      if (!actionable.length && !supersededDeployments.length) appendText(container, 'p', 'No requests need a decision in the loaded records.', 'muted');
+      else if (!actionable.length && source.key === 'deploy') appendText(container, 'p', 'No deployment approvals need a decision.', 'muted');
       for (const item of actionable) {
         const card = document.createElement('article'); card.className = 'card';
         if (source.key === 'deploy') renderDeploy(item, card);
@@ -902,6 +910,19 @@ const JS: &str = r#"
         const card = document.createElement('article'); card.className = 'card';
         renderExpiredIdentity(item, card);
         container.append(card);
+      }
+      if (supersededDeployments.length) {
+        const stale = document.createElement('details');
+        const staleSummary = document.createElement('summary');
+        staleSummary.textContent = `${supersededDeployments.length} superseded deployment request${supersededDeployments.length === 1 ? '' : 's'}`;
+        stale.append(staleSummary);
+        appendText(stale, 'p', 'These requests target an older main revision. They cannot be approved and do not block the current request.', 'muted');
+        for (const item of supersededDeployments) {
+          const card = document.createElement('article'); card.className = 'card';
+          renderDeploy(item, card);
+          stale.append(card);
+        }
+        container.append(stale);
       }
       if (pageButtons[source.key]) {
         pageButtons[source.key].hidden = !state.cursor;
@@ -1255,7 +1276,10 @@ const JS: &str = r#"
 
   const deployRequests = document.querySelector('#deploy-requests');
   if (deployRequests) {
-    const isCurrentDeployment = item => ['approved', 'executing'].includes(item.status);
+    const isQueuedOrRunning = item => item.status === 'executing' ||
+      (item.status === 'approved' && ['queued', 'dispatching'].includes(item.dispatch_state));
+    const isDispatchUncertain = item => ['approved', 'failed'].includes(item.status) && item.dispatch_state === 'unknown';
+    const isFailedDispatch = item => item.status === 'approved' && item.dispatch_state === 'failed';
     const actionFeedback = new Map();
     const refreshButton = document.querySelector('#deployment-refresh');
     const moreButton = document.querySelector('#deployments-more');
@@ -1297,14 +1321,14 @@ const JS: &str = r#"
         moreButton.disabled = false;
         moreButton.textContent = 'Load older records';
       }
-      const items = deploymentItems.filter(item => item && isCurrentDeployment(item));
+      const items = deploymentItems.filter(item => item && (isQueuedOrRunning(item) || isDispatchUncertain(item) || isFailedDispatch(item)));
       if (!items.length) {
         const approvalsLink = document.createElement('a'); approvalsLink.href = '/admin/approvals#pending-deploy-approvals';
         approvalsLink.textContent = 'Approvals';
         const historyLink = document.createElement('a'); historyLink.href = '/admin/history';
         historyLink.textContent = 'History';
         deployRequests.replaceChildren(
-          document.createTextNode(deploymentCursor ? 'No active deployments in the loaded records; older requests may still be active. Pending approvals are in ' : 'No active deployments. Pending approvals are in '),
+          document.createTextNode(deploymentCursor ? 'No queued, running, uncertain, or failed-dispatch records in the loaded page. Older records may remain. Pending approvals are in ' : 'No queued, running, uncertain, or failed-dispatch records. Pending approvals are in '),
           approvalsLink,
           document.createTextNode('; completed and closed runs are in '),
           historyLink,
@@ -1312,7 +1336,18 @@ const JS: &str = r#"
         );
         return;
       }
-      for (const item of items) {
+      const queuedOrRunningItems = items.filter(isQueuedOrRunning);
+      const uncertainItems = items.filter(isDispatchUncertain);
+      const failedItems = items.filter(isFailedDispatch);
+      const groups = [
+        ['Queued or running', queuedOrRunningItems],
+        ['Dispatch outcome uncertain', uncertainItems],
+        ['Dispatch failed before the worker started', failedItems]
+      ];
+      for (const [groupTitle, groupItems] of groups) {
+        if (!groupItems.length) continue;
+        appendText(deployRequests, 'h3', `${groupTitle} · ${groupItems.length}`);
+        for (const item of groupItems) {
         const card = document.createElement('article');
         card.className = 'card deployment-card';
         const header = document.createElement('header');
@@ -1330,6 +1365,8 @@ const JS: &str = r#"
         target.className = validDeploymentSelection(item) ? 'muted' : 'error';
         target.textContent = `Target: ${deploymentSelectionLabel(item)}`;
         const retiredDispatch = item.status === 'failed' && item.dispatch_state === 'failed' && String(item.decision_reason || '').startsWith('Closed after failed dispatch:');
+        const currentMain = typeof item.current_main_commit === 'string' ? item.current_main_commit.toLowerCase() : null;
+        const supersededBy = currentMain && String(item.commit || '').toLowerCase() !== currentMain ? currentMain : null;
         const dispatchLabels = {
           not_attempted: 'Not dispatched', dispatching: 'Dispatch in progress',
           queued: 'Queued for worker', claimed: 'Worker claimed deployment',
@@ -1341,11 +1378,12 @@ const JS: &str = r#"
           item.status === 'succeeded' ? 'Deployment succeeded' :
           item.status === 'failed' && item.dispatch_state === 'unknown' ? 'Worker stopped; outcome unknown' :
           retiredDispatch ? 'Closed before deployment' :
+          supersededBy && item.status === 'approved' && item.dispatch_state === 'failed' ? 'Superseded · dispatch failed before worker started' :
           item.status === 'failed' && item.dispatch_state === 'failed' ? 'Dispatch failed before worker claim' :
           item.status === 'failed' ? 'Deployment failed' :
           item.status === 'expired' ? 'Expired before worker claim' : null;
         const stage = document.createElement('p');
-        stage.className = 'muted';
+        stage.className = supersededBy ? 'approval-state-warning' : 'muted';
         const canRetry = validDeploymentSelection(item) && item.status === 'approved'
           && item.retry_eligible && ['failed', 'unknown'].includes(item.dispatch_state);
         stage.textContent = `${lifecycleLabel || dispatchLabels[item.dispatch_state] || 'Stage not reported'}${canRetry ? ' · retry available' : ''}`;
@@ -1383,6 +1421,11 @@ const JS: &str = r#"
           list.append(line);
         }
         details.append(summaryLabel, requester, revision, pins);
+        if (supersededBy) {
+          const stale = document.createElement('p'); stale.className = 'approval-state-warning';
+          stale.textContent = `Superseded by main ${supersededBy.slice(0, 12)} · this dispatch cannot be retried.`;
+          details.append(stale);
+        }
         try {
           const ciUrl = new URL(item.workflow_url);
           if (ciUrl.protocol === 'https:' && ciUrl.hostname === 'github.com' && ciUrl.pathname.startsWith('/GHF-Studios/')) {
@@ -1468,6 +1511,7 @@ const JS: &str = r#"
           card.append(form);
         }
         deployRequests.append(card);
+        }
       }
       if (moreButton) {
         moreButton.hidden = !deploymentCursor;
@@ -2155,7 +2199,7 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><p class=\"page-intro\">Service health and work that needs an operator decision. Sign in with an authorized Steam-linked Vapor account to load protected information.</p><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Service health</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Needs review</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts describe loaded records; “shown” means older pages remain. Requests awaiting a decision appear here. Active SSH grants, deployment runs, and past decisions have their own work areas.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section>";
+    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><p class=\"page-intro\">Service health and work that needs an operator decision. Sign in with an authorized Steam-linked Vapor account to load protected information.</p><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Service health</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Approvals and execution follow-up</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts describe loaded records; “shown” means older pages remain. Awaiting approval means a decision is still needed. Execution follow-up means approval is already saved, but deployment dispatch needs attention. Active SSH grants, running deployments, and past decisions have their own work areas.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section>";
     admin_page_response(StatusCode::OK, fragment)
 }
 
@@ -2299,7 +2343,7 @@ fn operations_page(view: OperationsView) -> String {
     let content = match view {
         OperationsView::Approvals => approvals_page_content().to_owned(),
         OperationsView::Deployments => concat!(
-            "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Execution queue</h2><p class=\"muted\">This is the lifecycle after approval: pinned revisions, dispatch, worker progress, outcome, and eligible recovery actions. New decisions are made in <a href=\"/admin/approvals\">Approvals</a>.</p></div><button id=\"deployment-refresh\" type=\"button\">Refresh</button></div><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment execution…</p></div><button id=\"deployments-more\" type=\"button\" hidden>Load older records</button></section>",
+            "<section class=\"card\"><div class=\"request-queue-header\"><div><h2>Deployment queue</h2><p class=\"muted\">Queued or running work is shown separately from dispatch failures where no worker started. Superseded revisions cannot be retried. New decisions are made in <a href=\"/admin/approvals\">Approvals</a>; closed and completed records are in <a href=\"/admin/history\">History</a>.</p></div><button id=\"deployment-refresh\" type=\"button\">Refresh</button></div><div id=\"deploy-requests\" aria-live=\"polite\"><p class=\"muted\">Loading deployment queue…</p></div><button id=\"deployments-more\" type=\"button\" hidden>Load older records</button></section>",
             "<section class=\"card\"><h2>Latest deploy or restore result</h2><p class=\"muted\">This is the current Platform status pointer. Historical requests are listed separately under History.</p><div id=\"latest-operation-status\" aria-live=\"polite\"><p class=\"muted\">Loading latest operation result…</p></div><a href=\"/docs\">Open server runbooks</a></section>"
         )
         .to_owned(),
@@ -3582,6 +3626,7 @@ mod tests {
         assert!(script.contains("'/api/admin/deploy-requests'"));
         assert!(script.contains("'/api/admin/ssh-access/requests'"));
         assert!(script.contains("/api/identity/v1/admin/permission-requests/page?limit=200"));
+        assert!(script.contains("item.status === 'pending' && typeof item.current_main_commit === 'string'"));
         assert!(
             script.contains("/api/identity/v1/admin/permission-requests/${encodedId}/${action}")
         );
@@ -3594,7 +3639,7 @@ mod tests {
         assert!(script.contains("card.append(requestMetadata(metadata))"));
         assert!(script.contains("const isExpiredByTime = item => Number(item.expires_at_unix) > 0"));
         assert!(script.contains("pending.filter(isExpiredByTime)"));
-        assert!(script.contains("pending.filter(item => !isExpiredByTime(item))"));
+        assert!(script.contains("reviewablePending.filter(item => !isExpiredByTime(item))"));
         assert!(script.contains("Expired at ${humanTime(item.expires_at_unix)} · Identity has not yet recorded the transition"));
         assert!(script.contains("renderExpiredIdentity(item, card)"));
         assert!(script.contains("reason: reason.value.trim()"));
@@ -3862,7 +3907,7 @@ mod tests {
         assert!(script.contains("claimed: 'Worker claimed deployment'"));
         assert!(script.contains("completed: 'Worker finished deployment'"));
         assert!(script.contains("Worker stopped; outcome unknown"));
-        assert!(script.contains("secondaryLabel: 'Dispatch needs attention'"));
+        assert!(script.contains("secondaryLabel: 'Execution follow-up'"));
         assert!(script.contains("Approval saved; deployment is queued for the worker."));
         assert!(
             script.contains("Approval saved; the worker claimed the deployment and it is running.")
@@ -3884,11 +3929,13 @@ mod tests {
             "const link = document.createElement('a'); link.href = '/admin/deployments';"
         ));
         assert!(script.contains("const validDeploymentSelection = item =>"));
-        assert!(script.contains(
-            "const isCurrentDeployment = item => ['approved', 'executing'].includes(item.status);"
-        ));
-        assert!(script.contains(".filter(item => item && isCurrentDeployment(item))"));
-        assert!(script.contains("No active deployments."));
+        assert!(script.contains("const isQueuedOrRunning = item =>"));
+        assert!(script.contains("const isDispatchUncertain = item =>"));
+        assert!(script.contains("const isFailedDispatch = item =>"));
+        assert!(script.contains("['Queued or running', queuedOrRunningItems]"));
+        assert!(script.contains("['Dispatch outcome uncertain', uncertainItems]"));
+        assert!(script.contains("['Dispatch failed before the worker started', failedItems]"));
+        assert!(script.contains("No queued, running, uncertain, or failed-dispatch records."));
         assert!(script.contains("serviceDeployTargets.has(item.service_target)"));
         assert!(script.contains("document.querySelector('[data-deployment-targets]')"));
         assert!(script.contains("Target: ${deploymentSelectionLabel(item)}"));
@@ -3932,7 +3979,7 @@ mod tests {
             .split("const sshAccessList =")
             .next()
             .unwrap();
-        assert!(deployments.contains(".filter(item => item && isCurrentDeployment(item))"));
+        assert!(deployments.contains(".filter(item => item && (isQueuedOrRunning(item) || isDispatchUncertain(item) || isFailedDispatch(item)))"));
         assert!(deployments.contains("/admin/approvals#pending-deploy-approvals"));
         assert!(!deployments.contains("Approve deploy"));
         assert!(!deployments.contains("Reject"));

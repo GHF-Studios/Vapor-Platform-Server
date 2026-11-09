@@ -542,7 +542,11 @@ async fn list_requests(
                     row.get("dispatch_state"),
                     row.get("dispatch_attempted_at_unix"),
                     unix_now(),
-                ),
+                ) && current_main_commit
+                        .as_deref()
+                        .is_some_and(|main| {
+                            is_current_main_revision(&row.get::<String, _>("commit_hash"), main)
+                        }),
                 approval_order_ready: row.get("approval_order_ready"),
                 current_main_commit: current_main_commit.clone(),
             })
@@ -568,6 +572,7 @@ async fn fetch_request_rows(
                           WHERE (older.created_at_unix < platform_deploy_requests.created_at_unix
                             OR (older.created_at_unix = platform_deploy_requests.created_at_unix AND older.id < platform_deploy_requests.id))
                             AND older.expires_at_unix > strftime('%s','now')
+                            AND (older.status <> 'pending' OR older.commit_hash = platform_deploy_requests.commit_hash)
                             AND (older.status IN ('pending','executing')
                               OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))
                         ) AS approval_order_ready
@@ -753,7 +758,9 @@ async fn decide_request(
              SELECT 1 FROM platform_deploy_requests older
              WHERE (older.created_at_unix < (SELECT current.created_at_unix FROM platform_deploy_requests current WHERE current.id = ?)
                OR (older.created_at_unix = (SELECT current.created_at_unix FROM platform_deploy_requests current WHERE current.id = ?) AND older.id < ?))
-               AND older.expires_at_unix > ? AND (older.status IN ('pending','executing')
+               AND older.expires_at_unix > ?
+               AND (older.status <> 'pending' OR older.commit_hash = (SELECT current.commit_hash FROM platform_deploy_requests current WHERE current.id = ?))
+               AND (older.status IN ('pending','executing')
                  OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))
            ))",
     )
@@ -769,6 +776,7 @@ async fn decide_request(
     .bind(&id)
     .bind(&id)
     .bind(now)
+    .bind(&id)
     .execute(&state.pool)
     .await;
     match result {
@@ -907,7 +915,9 @@ async fn has_earlier_open_request(
            SELECT 1 FROM platform_deploy_requests older
            WHERE (older.created_at_unix < (SELECT current.created_at_unix FROM platform_deploy_requests current WHERE current.id = ?)
              OR (older.created_at_unix = (SELECT current.created_at_unix FROM platform_deploy_requests current WHERE current.id = ?) AND older.id < ?))
-             AND older.expires_at_unix > ? AND (older.status IN ('pending','executing')
+             AND older.expires_at_unix > ?
+             AND (older.status <> 'pending' OR older.commit_hash = (SELECT current.commit_hash FROM platform_deploy_requests current WHERE current.id = ?))
+             AND (older.status IN ('pending','executing')
                OR (older.status = 'approved' AND older.dispatch_state IN ('queued','dispatching','unknown')))
          )",
     )
@@ -915,6 +925,7 @@ async fn has_earlier_open_request(
     .bind(id)
     .bind(id)
     .bind(now)
+    .bind(id)
     .fetch_one(pool)
     .await
 }
@@ -1096,8 +1107,8 @@ async fn dispatch_approved_authorized(
     if !valid_uuid(id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let stored_json = match sqlx::query_scalar::<_, String>(
-        "SELECT request_json FROM platform_deploy_requests WHERE id = ? AND status = 'approved' AND version = ?",
+    let stored_request = match sqlx::query_as::<_, (String, String)>(
+        "SELECT commit_hash, request_json FROM platform_deploy_requests WHERE id = ? AND status = 'approved' AND version = ?",
     )
     .bind(id)
     .bind(version)
@@ -1108,13 +1119,36 @@ async fn dispatch_approved_authorized(
         Ok(None) => return StatusCode::CONFLICT.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    if request_server_mode(&stored_json).is_none() {
+    if request_server_mode(&stored_request.1).is_none() {
         return stage_error(
             StatusCode::CONFLICT,
             "dispatch_not_started",
             "dispatch",
             "This legacy request has no valid deployment target. Submit a fresh CI request; no deployment was queued.",
             true,
+            false,
+        );
+    }
+    let current_main_commit = match fetch_main_commit_at(&state.client, &state.main_commit_url).await {
+        Ok(commit) => commit,
+        Err(_) => {
+            return stage_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "dispatch_not_started",
+                "main_revision_check",
+                "The current main revision could not be verified. Retry after GitHub is available.",
+                true,
+                false,
+            );
+        }
+    };
+    if !is_current_main_revision(&stored_request.0, &current_main_commit) {
+        return stage_error(
+            StatusCode::CONFLICT,
+            "dispatch_not_started",
+            "stale_revision",
+            "This approved revision is no longer current main and cannot be retried.",
+            false,
             false,
         );
     }
@@ -1827,19 +1861,29 @@ mod dispatch_tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE platform_deploy_requests (id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, created_at_unix INTEGER NOT NULL, expires_at_unix INTEGER NOT NULL, dispatch_state TEXT NOT NULL)")
+        sqlx::query("CREATE TABLE platform_deploy_requests (id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, commit_hash TEXT NOT NULL, created_at_unix INTEGER NOT NULL, expires_at_unix INTEGER NOT NULL, dispatch_state TEXT NOT NULL)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO platform_deploy_requests (id,status,version,created_at_unix,expires_at_unix,dispatch_state) VALUES ('older','pending',1,10,200,'not_attempted'), ('newer','pending',1,20,200,'not_attempted')")
+        sqlx::query("INSERT INTO platform_deploy_requests (id,status,version,commit_hash,created_at_unix,expires_at_unix,dispatch_state) VALUES ('older-stale','pending',2,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',10,200,'not_attempted'), ('worker','approved',2,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',15,200,'queued'), ('same-revision-older','pending',1,'cccccccccccccccccccccccccccccccccccccccc',18,200,'not_attempted'), ('newer','pending',1,'cccccccccccccccccccccccccccccccccccccccc',20,200,'not_attempted')")
             .execute(&pool).await.unwrap();
 
         assert!(has_earlier_open_request(&pool, "newer", 100).await.unwrap());
-        assert!(!has_earlier_open_request(&pool, "older", 100).await.unwrap());
-        sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='older'")
+        assert!(!has_earlier_open_request(&pool, "older-stale", 100).await.unwrap());
+        sqlx::query("UPDATE platform_deploy_requests SET status='succeeded', dispatch_state='completed' WHERE id='worker'")
             .execute(&pool)
             .await
             .unwrap();
+        assert!(has_earlier_open_request(&pool, "newer", 100).await.unwrap());
+        sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='same-revision-older'")
+            .execute(&pool).await.unwrap();
+        assert!(!has_earlier_open_request(&pool, "newer", 100).await.unwrap());
+        sqlx::query("UPDATE platform_deploy_requests SET commit_hash='cccccccccccccccccccccccccccccccccccccccc' WHERE id='older-stale'")
+            .execute(&pool).await.unwrap();
+        assert!(has_earlier_open_request(&pool, "newer", 100).await.unwrap());
+        sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='older-stale'")
+            .execute(&pool).await.unwrap();
         assert!(!has_earlier_open_request(&pool, "newer", 100).await.unwrap());
     }
+
 }
 
 async fn invoke_platform_ops(
