@@ -1994,7 +1994,7 @@ const JS: &str = r#"
         freshness.textContent = node.state === 'never-reported' ? 'No telemetry received yet.' : `Received ${age < 5 ? 'just now' : `${age}s ago`} · metrics ${node.metrics_state || 'unknown'}`;
         card.append(freshness); fleetList.append(card);
       }
-      if (data.nodes.length === 0) fleetList.append(appendText(document.createElement('div'), 'p', 'No servers are enrolled yet.', 'muted'));
+      if (data.nodes.length === 0) fleetList.append(appendText(document.createElement('div'), 'p', 'No servers have been added yet.', 'muted'));
     };
     const refreshFleet = async () => {
       if (fleetRefresh) fleetRefresh.disabled = true;
@@ -2018,11 +2018,11 @@ const JS: &str = r#"
     };
     const refreshNodeManagement = async () => {
       if (!nodeStatus || !nodeManagement) return;
-      nodeStatus.textContent = 'Refreshing enrollment records…';
+      nodeStatus.textContent = 'Refreshing server records…';
       try {
         const response = await fetch('/api/admin/server-nodes', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(6000) });
         const data = await response.json().catch(() => null);
-        if (!response.ok || data?.schema_version !== 1 || !Array.isArray(data.nodes) || !Array.isArray(data.events)) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Enrollment records are unavailable (HTTP ${response.status}).`);
+        if (!response.ok || data?.schema_version !== 1 || !Array.isArray(data.nodes) || !Array.isArray(data.events)) throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : `Server records are unavailable (HTTP ${response.status}).`);
         nodeManagement.replaceChildren();
         for (const node of data.nodes) {
           const row = document.createElement('article'); row.className = 'server-node-management-row';
@@ -2045,28 +2045,28 @@ const JS: &str = r#"
         const recentEvents = data.events.slice(0, 8);
         if (recentEvents.length) {
           const disclosure = document.createElement('details'); disclosure.className = 'server-node-events';
-          const summary = document.createElement('summary'); summary.textContent = `Recent enrollment changes · ${recentEvents.length}`;
+          const summary = document.createElement('summary'); summary.textContent = `Recent server changes · ${recentEvents.length}`;
           const list = document.createElement('ul');
           for (const event of recentEvents) {
             const item = document.createElement('li'); item.textContent = `${event.event} · ${event.label} (${event.role}) · ${new Date(event.at_unix * 1000).toLocaleString()} · operator ${event.actor_profile_id}`; list.append(item);
           }
           disclosure.append(summary, list); nodeManagement.append(disclosure);
         }
-        nodeStatus.textContent = `${data.nodes.length} enrolled ${data.nodes.length === 1 ? 'server' : 'servers'}. Reporter credentials are never shown here.`;
-      } catch (error) { nodeManagement.replaceChildren(); nodeStatus.textContent = error.message || 'Enrollment records are unavailable.'; }
+        nodeStatus.textContent = `${data.nodes.length} registered ${data.nodes.length === 1 ? 'server' : 'servers'}. Reporter credentials are never shown here.`;
+      } catch (error) { nodeManagement.replaceChildren(); nodeStatus.textContent = error.message || 'Server records are unavailable.'; }
     };
     nodeForm?.addEventListener('submit', async event => {
       event.preventDefault();
       if (!window.confirm('Create a telemetry-only credential for this server? The secret will be shown once.')) return;
-      const submit = nodeForm.querySelector('button[type="submit"]'); submit.disabled = true; nodeStatus.textContent = 'Creating server enrollment…';
+      const submit = nodeForm.querySelector('button[type="submit"]'); submit.disabled = true; nodeStatus.textContent = 'Adding server…';
       try {
         const created = await postNodeApi('/api/admin/server-nodes', { label: nodeLabel.value, role: nodeRole.value });
         nodeSecretValue.textContent = created.reporter_credential;
         createdNodeConfig = { id: created.id, credential: created.reporter_credential };
         nodeSecretPanel.hidden = false;
-        nodeStatus.textContent = `Enrollment created for ${created.label}. Download its config or copy the credential now; the secret will not be shown again.`;
+        nodeStatus.textContent = `${created.label} added. Download its config or copy the credential now; the secret will not be shown again.`;
         nodeForm.reset(); await refreshNodeManagement(); await refreshFleet();
-      } catch (error) { nodeStatus.textContent = error.message || 'Could not create server enrollment.'; }
+      } catch (error) { nodeStatus.textContent = error.message || 'Could not add server.'; }
       finally { submit.disabled = false; }
     });
     nodeSecretCopy?.addEventListener('click', async () => {
@@ -2079,7 +2079,7 @@ const JS: &str = r#"
       const credentialParts = String(current?.credential || '').split('.');
       const validId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(current?.id || '');
       if (!current || origin.protocol !== 'https:' || !validId || credentialParts.length !== 4 || credentialParts[0] !== 'v1' || credentialParts[1] !== current.id || !/^[0-9a-f]{32}$/i.test(credentialParts[2]) || !/^[0-9a-f]{32}$/i.test(credentialParts[3])) {
-        nodeStatus.textContent = 'The one-time enrollment data is unavailable or invalid. Create a new enrollment.';
+        nodeStatus.textContent = 'The one-time server setup data is unavailable or invalid. Add the server again.';
         return;
       }
       const quote = value => JSON.stringify(value);
@@ -2462,8 +2462,8 @@ fn server_fleet_page_content() -> &'static str {
     concat!(
         "<p class=\"eyebrow\">Infrastructure · Private fleet</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Physical machines that run Vapor. This is separate from service health in <a href=\"/admin/hosting\">Hosting</a>; deployments remain in <a href=\"/admin/deployments\">Deployments</a>.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\"><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<section class=\"card\"><h2>Enroll a server</h2><p class=\"muted\">Enrollment lets a host report CPU, memory, load, and uptime only. It grants no shell access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Create enrollment</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading enrolled servers…</p><div id=\"server-node-management\"></div></section>",
-        "<p class=\"muted\">Remote enrollment is separate from SSH access and never enables arbitrary commands.</p>"
+        "<section class=\"card\"><h2>Add server</h2><p class=\"muted\">This adds a server to the fleet so its agent can report CPU, memory, load, and uptime. It grants no SSH access or service control.</p><form id=\"server-node-enroll\" class=\"server-node-enroll\"><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Purpose<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button type=\"submit\">Add server</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><p><strong>This file contains the one-time telemetry credential.</strong> Keep it private; it will not be available after you close this panel.</p><pre id=\"server-node-secret-value\"></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-copy\" type=\"button\">Copy credential</button><button id=\"server-node-secret-download\" type=\"button\">Download config file</button><button id=\"server-node-secret-close\" type=\"button\">Close and clear</button></div></div><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></section>",
+        "<p class=\"muted\">The telemetry credential cannot be used for SSH, shell access, or arbitrary commands.</p>"
     )
 }
 
@@ -4158,11 +4158,11 @@ mod tests {
         assert!(nav.contains("Infrastructure"));
         assert!(page.contains("id=\"server-fleet-list\""));
         assert!(page.contains("id=\"server-fleet-refresh\""));
-        assert!(page.contains("Enroll a server"));
-        assert!(page.contains("Create enrollment"));
-        assert!(page.contains("This file contains the one-time credential."));
+        assert!(page.contains("Add server"));
+        assert!(!page.contains("Enroll a server"));
+        assert!(page.contains("This file contains the one-time telemetry credential."));
         assert!(page.contains("id=\"server-node-secret-download\""));
-        assert!(page.contains("no shell access or service control"));
+        assert!(page.contains("no SSH access or service control"));
     }
 
     #[test]
