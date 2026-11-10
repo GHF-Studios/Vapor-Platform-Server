@@ -398,9 +398,7 @@ def validate_bundle(path: pathlib.Path) -> None:
                     raise ValidationError("bundle contains incomplete or mismatched submodule pins")
             if not saw_caddyfile or not service_units:
                 raise ValidationError("bundle is missing host routing or service definitions")
-            if runtime_mode == "monolith":
-                expected_units = {"vapor-platform-server.service"}
-            elif runtime_mode == "services":
+            if runtime_mode == "services":
                 expected_units = {
                     "vapor-homepage.service",
                     "vapor-docs.service",

@@ -179,7 +179,7 @@ with tarfile.open(sys.argv[1], "r:gz") as archive:
         raise SystemExit("recovery manifest unavailable")
     manifest = tomllib.loads(stream.read().decode("utf-8"))
 mode = manifest.get("runtime_mode")
-if mode not in {"monolith", "services"}:
+if mode != "services":
     raise SystemExit("unsupported runtime mode")
 print(mode)
 PY
@@ -187,25 +187,16 @@ PY
 VAPOR_SERVER_MODE="${MODE}"
 export VAPOR_SERVER_MODE
 
-case "${MODE}" in
-  monolith)
-    TARGET_SERVICES=(vapor-platform-server.service)
-    REQUIRED_BINARIES=(vapor_platform_server)
-    ;;
-  services)
-    TARGET_SERVICES=(
-      vapor-homepage.service vapor-docs.service vapor-identity.service
-      vapor-diagnostics.service vapor-registry.service vapor-artifact.service
-      vapor-build-cache.service vapor-platform-server.service
-    )
-    REQUIRED_BINARIES=(
-      vapor_homepage_server vapor_docs_server vapor_identity_server
-      vapor_diagnostics_server vapor_registry_server vapor_artifact_server
-      vapor_build_cache_server vapor_platform_server
-    )
-    ;;
-  *) echo "error: unsupported recovery runtime mode" >&2; exit 1 ;;
-esac
+TARGET_SERVICES=(
+  vapor-homepage.service vapor-docs.service vapor-identity.service
+  vapor-diagnostics.service vapor-registry.service vapor-artifact.service
+  vapor-build-cache.service vapor-platform-server.service
+)
+REQUIRED_BINARIES=(
+  vapor_homepage_server vapor_docs_server vapor_identity_server
+  vapor_diagnostics_server vapor_registry_server vapor_artifact_server
+  vapor_build_cache_server vapor_platform_server
+)
 
 LOCK_FILE=/run/vapor-server-deploy.lock
 exec 9>"${LOCK_FILE}"

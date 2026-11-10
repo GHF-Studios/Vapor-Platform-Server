@@ -65,7 +65,9 @@ pub async fn proxy_owner_admin(request: Request) -> Response {
             .build()
     }) {
         Ok(client) => client,
-        Err(_) => return gateway_error(StatusCode::BAD_GATEWAY, "Admin gateway client unavailable."),
+        Err(_) => {
+            return gateway_error(StatusCode::BAD_GATEWAY, "Admin gateway client unavailable.")
+        }
     };
     let mut outbound = client
         .request(parts.method.clone(), url)
@@ -99,7 +101,9 @@ pub async fn proxy_owner_admin(request: Request) -> Response {
         let chunk = match upstream.chunk().await {
             Ok(Some(chunk)) => chunk,
             Ok(None) => break,
-            Err(_) => return gateway_error(StatusCode::BAD_GATEWAY, "Admin service response failed."),
+            Err(_) => {
+                return gateway_error(StatusCode::BAD_GATEWAY, "Admin service response failed.")
+            }
         };
         if bytes.len().saturating_add(chunk.len()) > MAX_ADMIN_RESPONSE_BYTES {
             return gateway_error(
@@ -121,7 +125,10 @@ pub async fn proxy_owner_admin(request: Request) -> Response {
 }
 
 fn path_is_in_section(path: &str, prefix: &str) -> bool {
-    path == prefix || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn owner_route_for_path(path: &str) -> Option<&'static OwnerRoute> {
@@ -154,7 +161,14 @@ pub async fn health() -> impl IntoResponse {
 }
 
 fn gateway_error(status: StatusCode, message: &'static str) -> Response {
-    (status, [(axum::http::header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))], message)
+    (
+        status,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        )],
+        message,
+    )
         .into_response()
 }
 
@@ -173,7 +187,10 @@ mod tests {
         ];
 
         for (path, expected_origin) in cases {
-            assert_eq!(owner_route_for_path(path).map(|route| route.origin), Some(expected_origin));
+            assert_eq!(
+                owner_route_for_path(path).map(|route| route.origin),
+                Some(expected_origin)
+            );
         }
     }
 
@@ -188,7 +205,11 @@ mod tests {
             "/admin/artifacts-v2",
             "/admin/build-cache-v2",
         ] {
-            assert_eq!(owner_route_for_path(path).map(|route| route.origin), None, "{path}");
+            assert_eq!(
+                owner_route_for_path(path).map(|route| route.origin),
+                None,
+                "{path}"
+            );
         }
     }
 }

@@ -41,7 +41,7 @@ class OperationHistoryTests(unittest.TestCase):
             )
             later = HISTORY.record_operation(
                 database, "restore", "failed", "2026-11-02T10:00:00Z",
-                "2026-11-02T10:03:00Z", "b" * 40, "monolith",
+                "2026-11-02T10:03:00Z", "b" * 40, "services",
             )
 
             self.assertNotEqual(earlier, later)

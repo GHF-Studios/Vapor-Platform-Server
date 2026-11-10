@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS platform_operation_history (
     started_at_utc TEXT NOT NULL,
     finished_at_utc TEXT NOT NULL,
     revision TEXT NOT NULL,
-    server_mode TEXT NOT NULL CHECK(server_mode IN ('monolith','services'))
+    server_mode TEXT NOT NULL CHECK(server_mode = 'services')
 )
 """
 
@@ -54,7 +54,7 @@ def record_operation(
         raise PermissionError("operation history must be written as the Platform service account")
     if operation not in {"deploy", "restore"} or result not in {"success", "failed"}:
         raise ValueError("operation and result must use the Platform allowlist")
-    if server_mode not in {"monolith", "services"}:
+    if server_mode != "services":
         raise ValueError("server mode must use the Platform allowlist")
     if revision != "unknown" and not REVISION.fullmatch(revision):
         raise ValueError("revision is invalid")
@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("started_at_utc")
     parser.add_argument("finished_at_utc")
     parser.add_argument("revision")
-    parser.add_argument("server_mode", choices=("monolith", "services"))
+    parser.add_argument("server_mode", choices=("services",))
     args = parser.parse_args(argv)
     try:
         record_operation(

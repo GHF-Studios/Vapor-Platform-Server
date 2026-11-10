@@ -207,12 +207,20 @@ async fn claim_remote_operation(
     Path(node_id): Path<String>,
 ) -> Response {
     let Some(executor_hash) = authorize_executor(&state.pool, &headers, &node_id).await else {
-        return error(StatusCode::UNAUTHORIZED, "node_executor_credential_required");
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "node_executor_credential_required",
+        );
     };
     let now = unix_now();
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
-        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_operation_state_unavailable",
+            )
+        }
     };
     let still_authorized = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM platform_server_nodes
@@ -223,7 +231,10 @@ async fn claim_remote_operation(
     .fetch_one(&mut *transaction)
     .await;
     if !matches!(still_authorized, Ok(count) if count == 1) {
-        return error(StatusCode::UNAUTHORIZED, "node_executor_credential_required");
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "node_executor_credential_required",
+        );
     }
     // Expire one stale queued operation per poll. This prevents a host that
     // comes back much later from unexpectedly applying old maintenance intent.
@@ -273,11 +284,19 @@ async fn claim_remote_operation(
     .await;
     let row = match row {
         Ok(row) => row,
-        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_operation_state_unavailable",
+            )
+        }
     };
     let Some(row) = row else {
         if transaction.commit().await.is_err() {
-            return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable");
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_operation_state_unavailable",
+            );
         }
         return private_json(StatusCode::OK, RemoteClaim { operation: None });
     };
@@ -286,7 +305,12 @@ async fn claim_remote_operation(
     let action_json: String = row.get("action_json");
     let action: serde_json::Value = match serde_json::from_str(&action_json) {
         Ok(action) => action,
-        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "stored_server_action_invalid"),
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stored_server_action_invalid",
+            )
+        }
     };
     let changed = sqlx::query(
         "UPDATE platform_server_operations SET state='running',version=version+1,started_at_unix=?
@@ -308,7 +332,12 @@ async fn claim_remote_operation(
     .await
     {
         Ok(actor) => actor,
-        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_operation_state_unavailable",
+            )
+        }
     };
     if insert_event(
         &mut transaction,
@@ -317,13 +346,16 @@ async fn claim_remote_operation(
         "running",
         &actor,
         now,
-        Some("claimed by enrolled node executor"),
+        Some("claimed by connected server executor"),
     )
     .await
     .is_err()
         || transaction.commit().await.is_err()
     {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable");
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_operation_state_unavailable",
+        );
     }
     private_json(
         StatusCode::OK,
@@ -346,7 +378,10 @@ async fn report_remote_result(
     Json(result): Json<RemoteOperationResult>,
 ) -> Response {
     let Some(executor_hash) = authorize_executor(&state.pool, &headers, &node_id).await else {
-        return error(StatusCode::UNAUTHORIZED, "node_executor_credential_required");
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "node_executor_credential_required",
+        );
     };
     if uuid::Uuid::parse_str(&operation_id).is_err() || !bounded_detail(&result.detail) {
         return error(StatusCode::BAD_REQUEST, "invalid_remote_operation_result");
@@ -359,7 +394,12 @@ async fn report_remote_result(
     };
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
-        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_operation_state_unavailable",
+            )
+        }
     };
     let row = match sqlx::query(
         "SELECT actor_profile_id FROM platform_server_operations
@@ -375,8 +415,18 @@ async fn report_remote_result(
     .await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return error(StatusCode::CONFLICT, "remote_operation_not_running_for_node"),
-        Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+        Ok(None) => {
+            return error(
+                StatusCode::CONFLICT,
+                "remote_operation_not_running_for_node",
+            )
+        }
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_operation_state_unavailable",
+            )
+        }
     };
     let actor: String = row.get("actor_profile_id");
     let now = unix_now();
@@ -411,16 +461,26 @@ async fn report_remote_result(
             .is_err()
                 || transaction.commit().await.is_err()
             {
-                return error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable");
+                return error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "server_operation_state_unavailable",
+                );
             }
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(_) => error(StatusCode::CONFLICT, "remote_operation_result_conflict"),
-        Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "server_operation_state_unavailable"),
+        Err(_) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_operation_state_unavailable",
+        ),
     }
 }
 
-async fn authorize_executor(pool: &SqlitePool, headers: &HeaderMap, node_id: &str) -> Option<String> {
+async fn authorize_executor(
+    pool: &SqlitePool,
+    headers: &HeaderMap,
+    node_id: &str,
+) -> Option<String> {
     let Some(credential) = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -436,9 +496,10 @@ async fn authorize_executor(pool: &SqlitePool, headers: &HeaderMap, node_id: &st
     let (Some(first), Some(second), None) = (parts.next(), parts.next(), parts.next()) else {
         return None;
     };
-    if [first, second].iter().any(|part| {
-        part.len() != 32 || !part.bytes().all(|byte| byte.is_ascii_hexdigit())
-    }) {
+    if [first, second]
+        .iter()
+        .any(|part| part.len() != 32 || !part.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
         return None;
     }
     let candidate = sha256_hex(credential.as_bytes());
@@ -448,7 +509,8 @@ async fn authorize_executor(pool: &SqlitePool, headers: &HeaderMap, node_id: &st
     .bind(node_id)
     .fetch_optional(pool)
     .await;
-    if !matches!(stored, Ok(Some(Some(expected))) if constant_time_eq(candidate.as_bytes(), expected.as_bytes())) {
+    if !matches!(stored, Ok(Some(Some(expected))) if constant_time_eq(candidate.as_bytes(), expected.as_bytes()))
+    {
         return None;
     }
     sqlx::query(
@@ -733,10 +795,7 @@ async fn create_operation(
         .fetch_one(&state.pool)
         .await;
         if !matches!(executor_online, Ok(count) if count == 1) {
-            return error(
-                StatusCode::CONFLICT,
-                "typed_executor_not_online_for_server",
-            );
+            return error(StatusCode::CONFLICT, "typed_executor_not_online_for_server");
         }
     }
     let action = match ServerAction::parse_json(&request.action) {
@@ -1336,10 +1395,14 @@ mod tests {
             ServiceId::Artifact,
             ServiceId::BuildCache,
         ] {
-            assert!(super::remote_action_allowed(&ServerAction::RestartService { service }));
+            assert!(super::remote_action_allowed(
+                &ServerAction::RestartService { service }
+            ));
         }
         for service in [ServiceId::Platform, ServiceId::Caddy] {
-            assert!(!super::remote_action_allowed(&ServerAction::RestartService { service }));
+            assert!(!super::remote_action_allowed(
+                &ServerAction::RestartService { service }
+            ));
         }
         assert!(!super::remote_action_allowed(&ServerAction::RebootHost {
             confirmation: "REBOOT node".to_owned()
@@ -1498,8 +1561,12 @@ mod tests {
         .unwrap();
         let node_id = "11111111-1111-4111-8111-111111111111";
         let operation_id = "22222222-2222-4222-8222-222222222222";
-        let reporter = format!("v1.{node_id}.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        let executor = format!("v1.{node_id}.cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd");
+        let reporter = format!(
+            "v1.{node_id}.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        let executor = format!(
+            "v1.{node_id}.cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd"
+        );
         let hash = |value: &str| {
             use sha2::{Digest, Sha256};
             Sha256::digest(value.as_bytes())
@@ -1550,7 +1617,9 @@ mod tests {
         let wrong_node_id = "99999999-9999-4999-8999-999999999999";
         let wrong_node = Request::builder()
             .method("GET")
-            .uri(format!("/api/fleet/v1/nodes/{wrong_node_id}/operations/claim"))
+            .uri(format!(
+                "/api/fleet/v1/nodes/{wrong_node_id}/operations/claim"
+            ))
             .header("authorization", format!("Bearer {executor}"))
             .body(Body::empty())
             .unwrap();
@@ -1561,27 +1630,23 @@ mod tests {
 
         let first = app.clone().oneshot(claim(&executor)).await.unwrap();
         assert_eq!(first.status(), StatusCode::OK);
-        let first_json: serde_json::Value = serde_json::from_slice(
-            &first.into_body().collect().await.unwrap().to_bytes(),
-        )
-        .unwrap();
+        let first_json: serde_json::Value =
+            serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(first_json["operation"]["id"], operation_id);
         assert_eq!(first_json["operation"]["schema_version"], 1);
-        let state: String = sqlx::query_scalar(
-            "SELECT state FROM platform_server_operations WHERE id=?",
-        )
-        .bind(operation_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM platform_server_operations WHERE id=?")
+                .bind(operation_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(state, "running");
 
         let second = app.clone().oneshot(claim(&executor)).await.unwrap();
         assert_eq!(second.status(), StatusCode::OK);
-        let second_json: serde_json::Value = serde_json::from_slice(
-            &second.into_body().collect().await.unwrap().to_bytes(),
-        )
-        .unwrap();
+        let second_json: serde_json::Value =
+            serde_json::from_slice(&second.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
         assert!(second_json["operation"].is_null());
         let event_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM platform_server_operation_events WHERE operation_id=? AND event='started'",
@@ -1595,29 +1660,21 @@ mod tests {
         let report_result = |credential: &str| {
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/fleet/v1/nodes/{node_id}/operations/{operation_id}/result"))
+                .uri(format!(
+                    "/api/fleet/v1/nodes/{node_id}/operations/{operation_id}/result"
+                ))
                 .header("authorization", format!("Bearer {credential}"))
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"state":"succeeded","detail":"service restarted"}"#))
+                .body(Body::from(
+                    r#"{"state":"succeeded","detail":"service restarted"}"#,
+                ))
                 .unwrap()
         };
-        let reporter_result = app
-            .clone()
-            .oneshot(report_result(&reporter))
-            .await
-            .unwrap();
+        let reporter_result = app.clone().oneshot(report_result(&reporter)).await.unwrap();
         assert_eq!(reporter_result.status(), StatusCode::UNAUTHORIZED);
-        let executor_result = app
-            .clone()
-            .oneshot(report_result(&executor))
-            .await
-            .unwrap();
+        let executor_result = app.clone().oneshot(report_result(&executor)).await.unwrap();
         assert_eq!(executor_result.status(), StatusCode::NO_CONTENT);
-        let duplicate_result = app
-            .clone()
-            .oneshot(report_result(&executor))
-            .await
-            .unwrap();
+        let duplicate_result = app.clone().oneshot(report_result(&executor)).await.unwrap();
         assert_eq!(duplicate_result.status(), StatusCode::CONFLICT);
         sqlx::query("UPDATE platform_server_nodes SET status='revoked' WHERE id=?")
             .bind(node_id)

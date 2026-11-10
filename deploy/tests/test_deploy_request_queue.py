@@ -519,6 +519,7 @@ class DeployRequestQueueTests(unittest.TestCase):
 
     def test_claim_fails_closed_for_invalid_scope_target_combinations(self) -> None:
         invalid_requests = [
+            self._request("monolith", deployment_scope="full", service_target=None),
             self._request(deployment_scope="service", service_target=None),
             self._request(deployment_scope="full", service_target="identity"),
             self._request(deployment_scope="service", service_target="unknown"),

@@ -102,8 +102,7 @@ class RecoveryActivationOrderTests(unittest.TestCase):
         self.assertIn("systemctl disable --now caddy.service", bootstrap)
 
         for relative, activation in [
-            ("deploy/scripts/install-systemd.sh", "systemctl enable vapor-platform-server.service"),
-            ("deploy/scripts/install-services-systemd.sh", 'systemctl enable "vapor-${service}.service"'),
+            ("deploy/scripts/install-systemd.sh", 'systemctl enable "vapor-${service}.service"'),
             ("deploy/scripts/install-caddy.sh", "systemctl enable caddy.service"),
             ("deploy/scripts/install-state-backup.sh", "systemctl enable --now vapor-state-only-export.timer"),
         ]:

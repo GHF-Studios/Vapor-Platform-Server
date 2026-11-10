@@ -99,22 +99,7 @@ check_public_admin_isolation() {
   done
 }
 
-if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
-  wait_for_http "Vapor Platform Server" vapor-platform-server.service http://127.0.0.1:7110/healthz
-  curl --fail --silent --show-error http://127.0.0.1:7110/docs/status >/dev/null
-  curl --fail --silent --show-error http://127.0.0.1:7110/api/identity/v1/auth/status >/dev/null
-  curl --fail --silent --show-error http://127.0.0.1:7110/api/diagnostics/status >/dev/null
-  curl --fail --silent --show-error \
-    http://127.0.0.1:7110/api/registry/v1/ecosystems/ghf-studios/vapor \
-    >/dev/null
-  curl --fail --silent --show-error http://127.0.0.1:7110/api/build-cache/v1/status >/dev/null
-
-  check_unauthenticated_http_contracts \
-    --homepage-base http://127.0.0.1:7110 \
-    --docs-base http://127.0.0.1:7110/docs \
-    --identity-base http://127.0.0.1:7110/api/identity \
-    --diagnostics-base http://127.0.0.1:7110/api/diagnostics
-else
+if [ "${VAPOR_SERVER_MODE}" = "services" ]; then
   wait_for_http "Vapor Platform Admin Gateway" vapor-platform-server.service http://127.0.0.1:7110/healthz
   wait_for_http "Vapor Homepage" vapor-homepage.service http://127.0.0.1:7111/healthz
 
@@ -158,6 +143,9 @@ else
     --docs-base http://127.0.0.1:7112 \
     --identity-base http://127.0.0.1:7113 \
     --diagnostics-base http://127.0.0.1:7114
+else
+  echo "error: VAPOR_SERVER_MODE must be 'services'" >&2
+  exit 1
 fi
 
 # Verify the static Atlas site through the same local Caddy route clients use.

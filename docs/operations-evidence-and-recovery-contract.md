@@ -134,7 +134,7 @@ cross-service request ledger.
 
 Schema version 1 contains only the operation (`deploy` or `restore`), result
 (`success` or `failed`), start and finish UTC timestamps, checked-out server
-revision (or `unknown`), and runtime mode (`monolith` or `services`). The
+revision (or `unknown`), and the fixed runtime topology (`services`). The
 reader bounds the file to 4 KiB, rejects unknown fields and invalid values, and
 returns no raw file content or filesystem location. Both endpoints require a
 root Identity session and are private/no-store. The latest record remains a

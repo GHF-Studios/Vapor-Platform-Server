@@ -62,9 +62,9 @@ def terminal_route() -> str:
 	}'''
 
 
-def public_admin_entries(admin_domain: str | None, services: bool) -> str:
+def public_admin_entries(admin_domain: str | None) -> str:
     platform = "127.0.0.1:7110"
-    identity = "127.0.0.1:7113" if services else platform
+    identity = "127.0.0.1:7113"
     if not admin_domain:
         return f'''\thandle /admin* {{
 	\treverse_proxy {platform}
@@ -143,41 +143,24 @@ def render(template_path: pathlib.Path, public_domain: str, admin_domain: str | 
                 raise ValueError("HTTP fallback host must be an IP address or DNS hostname")
 
     text = template_path.read_text(encoding="utf-8")
-    services = "services" in template_path.name
     admin_identity_routes = (
         '''\thandle /api/identity/v1/internal/* {
 \t\trespond "not found" 404
 \t}
 
 \thandle_path /api/identity/* {
-	\treverse_proxy 127.0.0.1:7113
-	}
-
-	handle /operator/* {
-	\treverse_proxy 127.0.0.1:7113
-	}
-
-	handle /cli/ssh/* {
-	\treverse_proxy 127.0.0.1:7113
-	}'''
-        if services
-        else '''\thandle /api/identity/v1/internal/* {
-\t\trespond "not found" 404
+\t\treverse_proxy 127.0.0.1:7113
 \t}
 
-\thandle /api/identity/* {
-	\treverse_proxy 127.0.0.1:7110
-	}
+\thandle /operator/* {
+\t\treverse_proxy 127.0.0.1:7113
+\t}
 
-	handle /operator/* {
-	\treverse_proxy 127.0.0.1:7110
-	}
-
-	handle /cli/ssh/* {
-	\treverse_proxy 127.0.0.1:7110
-	}'''
+\thandle /cli/ssh/* {
+\t\treverse_proxy 127.0.0.1:7113
+\t}'''
     )
-    public_admin = public_admin_entries(admin_domain, services)
+    public_admin = public_admin_entries(admin_domain)
     admin_block = ""
     if admin_domain:
         admin_block = f'''\n{admin_domain} {{

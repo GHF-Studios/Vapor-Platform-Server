@@ -202,8 +202,8 @@ fn cpu_millicores(previous_usec: u64, current_usec: u64, elapsed: Duration) -> O
 #[cfg(test)]
 mod tests {
     use super::{
-        ServiceMetrics, cpu_millicores, parse_io_stat, parse_memory_current, parse_usage_usec,
-        read_service_snapshot, valid_service_snapshot,
+        cpu_millicores, parse_io_stat, parse_memory_current, parse_usage_usec,
+        read_service_snapshot, valid_service_snapshot, ServiceMetrics,
     };
     use std::fs;
     use std::time::Duration;

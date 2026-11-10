@@ -51,10 +51,10 @@ if [ "${VAPOR_DEPLOY_BOOTSTRAP:-}" != "1" ]; then
     echo "error: full-stack deployment requires a full-scope approved request" >&2
     exit 2
   fi
-  case "${VAPOR_SERVER_MODE}" in
-    monolith|services) ;;
-    *) echo "error: approved deployment target is missing or invalid" >&2; exit 2 ;;
-  esac
+  if [ "${VAPOR_SERVER_MODE}" != services ]; then
+    echo "error: only the independent services deployment is supported" >&2
+    exit 2
+  fi
   python3 "${SCRIPT_DIR}/deploy-request-queue.py" --database "${QUEUE_DB}" verify \
     --id "${VAPOR_APPROVED_DEPLOY_ID}" \
     --version "${VAPOR_APPROVED_DEPLOY_VERSION}" \
@@ -65,9 +65,9 @@ if [ "${VAPOR_DEPLOY_BOOTSTRAP:-}" != "1" ]; then
 fi
 
 case "${VAPOR_SERVER_MODE}" in
-  monolith|services) ;;
+  services) ;;
   *)
-    echo "error: VAPOR_SERVER_MODE must be 'monolith' or 'services'" >&2
+    echo "error: VAPOR_SERVER_MODE must be 'services'" >&2
     exit 1
     ;;
 esac
@@ -220,55 +220,43 @@ fi
 
 bash "${VAPOR_DEPLOY_ROOT}/deploy/scripts/configure-authorization.sh"
 
-# The privileged operation helper is built from the Platform package even in
-# services mode, so its lockfile is required for every deployment mode.
+# The privileged operation helper is built from the Platform package.
 if [ ! -f "${VAPOR_DEPLOY_ROOT}/Cargo.lock" ]; then
   echo "error: Platform Cargo.lock is missing; commit it before building the operation helper" >&2
   exit 1
 fi
 
-# Platform's root-only operation helper is installed in both deployment modes.
-# Build it explicitly so a clean services-mode install does not depend on a
-# binary left behind by an earlier monolith build.
+# Build the root-only operation helper independently from the gateway.
 export VAPOR_PLATFORM_REVISION="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD)"
 cargo build --release --locked \
   --manifest-path "${VAPOR_DEPLOY_ROOT}/Cargo.toml" \
   --target-dir "${VAPOR_DEPLOY_ROOT}/target" \
   --bin vapor_platform_ops
 
-if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
+for service in homepage docs identity diagnostics registry artifact build-cache; do
+  case "$service" in
+    build-cache) service_package="Vapor-Build-Cache-Server" ;;
+    *) service_package="Vapor-${service^}-Server" ;;
+  esac
   cargo build --release --locked \
-    --manifest-path "${VAPOR_DEPLOY_ROOT}/Cargo.toml" \
+    --manifest-path "${VAPOR_DEPLOY_ROOT}/${service_package}/Cargo.toml" \
     --target-dir "${VAPOR_DEPLOY_ROOT}/target"
-  ensure_runtime_access "${VAPOR_DEPLOY_ROOT}/target/release/vapor_platform_server"
-  "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-systemd.sh"
-  "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-caddy.sh"
-else
-  for service in homepage docs identity diagnostics registry artifact build-cache; do
-    case "$service" in
-      build-cache) service_package="Vapor-Build-Cache-Server" ;;
-      *) service_package="Vapor-${service^}-Server" ;;
-    esac
-    cargo build --release --locked \
-      --manifest-path "${VAPOR_DEPLOY_ROOT}/${service_package}/Cargo.toml" \
-      --target-dir "${VAPOR_DEPLOY_ROOT}/target"
-  done
-  cargo build --release --locked \
-    --manifest-path "${VAPOR_DEPLOY_ROOT}/Cargo.toml" \
-    --target-dir "${VAPOR_DEPLOY_ROOT}/target" \
-    --bin vapor_platform_server
-  ensure_runtime_access \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_homepage_server" \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_docs_server" \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_identity_server" \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_diagnostics_server" \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_registry_server" \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_artifact_server" \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_build_cache_server" \
-    "${VAPOR_DEPLOY_ROOT}/target/release/vapor_platform_server"
-  "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-services-systemd.sh"
-  "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-services-caddy.sh"
-fi
+done
+cargo build --release --locked \
+  --manifest-path "${VAPOR_DEPLOY_ROOT}/Cargo.toml" \
+  --target-dir "${VAPOR_DEPLOY_ROOT}/target" \
+  --bin vapor_platform_server
+ensure_runtime_access \
+  "${VAPOR_DEPLOY_ROOT}/target/release/vapor_homepage_server" \
+  "${VAPOR_DEPLOY_ROOT}/target/release/vapor_docs_server" \
+  "${VAPOR_DEPLOY_ROOT}/target/release/vapor_identity_server" \
+  "${VAPOR_DEPLOY_ROOT}/target/release/vapor_diagnostics_server" \
+  "${VAPOR_DEPLOY_ROOT}/target/release/vapor_registry_server" \
+  "${VAPOR_DEPLOY_ROOT}/target/release/vapor_artifact_server" \
+  "${VAPOR_DEPLOY_ROOT}/target/release/vapor_build_cache_server" \
+  "${VAPOR_DEPLOY_ROOT}/target/release/vapor_platform_server"
+"${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-systemd.sh"
+"${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-caddy.sh"
 
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-approved-operations.sh"
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/install-platform-ops.sh"
@@ -279,49 +267,18 @@ if [ "${RECOVERY_STAGING}" = "1" ]; then
   exit 0
 fi
 
-if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
-  systemctl restart vapor-platform-server.service
-  wait_for_http \
-    "Vapor Platform Server pre-cutover" \
-    vapor-platform-server.service \
-    http://127.0.0.1:7110/healthz
-else
-  systemctl restart vapor-homepage.service
-  systemctl restart vapor-docs.service
-  systemctl restart vapor-identity.service
-  systemctl restart vapor-diagnostics.service
-  systemctl restart vapor-registry.service
-  systemctl restart vapor-artifact.service
-  systemctl restart vapor-build-cache.service
-  systemctl restart vapor-platform-server.service
-fi
+systemctl restart vapor-homepage.service
+systemctl restart vapor-docs.service
+systemctl restart vapor-identity.service
+systemctl restart vapor-diagnostics.service
+systemctl restart vapor-registry.service
+systemctl restart vapor-artifact.service
+systemctl restart vapor-build-cache.service
+systemctl restart vapor-platform-server.service
 systemctl restart caddy.service
 
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/health-check.sh"
 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/retire-platform-ops-sudoers.sh"
-
-retire_service_unit() {
-  local unit="$1"
-  local load_state
-  load_state="$(systemctl show --property=LoadState --value "${unit}" 2>/dev/null || printf 'unavailable')"
-  case "${load_state}" in
-    loaded)
-      systemctl disable --now "${unit}"
-      ;;
-    not-found)
-      ;;
-    *)
-      echo "error: could not verify optional service unit ${unit} before retiring the previous server mode" >&2
-      return 1
-      ;;
-  esac
-}
-
-if [ "${VAPOR_SERVER_MODE}" = "monolith" ]; then
-  for service in homepage docs identity diagnostics registry artifact build-cache; do
-    retire_service_unit "vapor-${service}.service"
-  done
-fi
 
 python3 "${VAPOR_DEPLOY_ROOT}/deploy/scripts/deployed_source_manifest.py" \
   --file "${VAPOR_STATE_ROOT}/operations/deployed-sources.json" \

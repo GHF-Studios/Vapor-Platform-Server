@@ -175,8 +175,7 @@ else
   DOMAIN="${DOMAIN:-vapor.ghf-studios.site}"
   read -r -p "Admin domain [${DOMAIN}]: " ADMIN_DOMAIN
   ADMIN_DOMAIN="${ADMIN_DOMAIN:-$DOMAIN}"
-  read -r -p 'Runtime mode [services]: ' SERVER_MODE
-  SERVER_MODE="${SERVER_MODE:-services}"
+  SERVER_MODE=services
   read -r -s -p 'Steam Web API key (hidden): ' STEAM_KEY
   printf '\n'
   read -r -p 'GitHub OAuth client ID (blank if not configured): ' GITHUB_CLIENT_ID
@@ -187,7 +186,7 @@ else
   fi
 fi
 
-[ "$SERVER_MODE" = services ] || [ "$SERVER_MODE" = monolith ] || fail "runtime mode must be services or monolith"
+[ "$SERVER_MODE" = services ] || fail "recovery bundle is not services topology; export a fresh snapshot"
 [[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ && "$ADMIN_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] \
   || fail "domains contain unsupported characters"
 [[ "$STEAM_KEY" =~ ^[A-Fa-f0-9]{32}$ ]] || fail "Steam Web API key must be 32 hexadecimal characters"
@@ -227,9 +226,6 @@ if [ "$marker_phase" = awaiting_provider_checks ]; then
   [ -f "$CONFIG_ROOT/platform.env" ] && [ ! -L "$CONFIG_ROOT/platform.env" ] \
     || fail "completed recovery configuration is missing"
   STATUS_URL="http://127.0.0.1:7113/v1/auth/status"
-  if [ "$SERVER_MODE" = monolith ]; then
-    STATUS_URL="http://127.0.0.1:7110/api/identity/v1/auth/status"
-  fi
   STATUS_FILE="$(mktemp /run/vapor-state-recovery-status.XXXXXX)"
   trap 'rm -f -- "$STATUS_FILE"' EXIT
   curl --fail --silent --show-error --connect-timeout 3 --max-time 15 "$STATUS_URL" > "$STATUS_FILE" \
@@ -327,9 +323,6 @@ python3 "$MARKER_TOOL" set-phase --root "$MARKER_ROOT" --bundle-sha256 "$BUNDLE_
 RECOVERY_AWAITING_CONFIRMATION=true
 
 STATUS_URL="http://127.0.0.1:7113/v1/auth/status"
-if [ "$SERVER_MODE" = monolith ]; then
-  STATUS_URL="http://127.0.0.1:7110/api/identity/v1/auth/status"
-fi
 STATUS_FILE="$(mktemp /run/vapor-state-recovery-status.XXXXXX)"
 curl --fail --silent --show-error --connect-timeout 3 --max-time 15 "$STATUS_URL" > "$STATUS_FILE" \
   || fail "Identity status endpoint did not respond after state restore"

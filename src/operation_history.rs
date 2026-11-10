@@ -55,7 +55,7 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
             started_at_utc TEXT NOT NULL,
             finished_at_utc TEXT NOT NULL,
             revision TEXT NOT NULL,
-            server_mode TEXT NOT NULL CHECK(server_mode IN ('monolith','services'))
+            server_mode TEXT NOT NULL CHECK(server_mode = 'services')
         )",
     )
     .execute(&pool)

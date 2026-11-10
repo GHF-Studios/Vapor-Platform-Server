@@ -64,7 +64,7 @@ def validate_selection(request):
     server_mode = request.get("server_mode")
     scope = request.get("deployment_scope")
     target = request.get("service_target")
-    if server_mode not in ("monolith", "services"):
+    if server_mode != "services":
         raise ValueError("request has no valid deployment topology")
     if scope == "full" and target is None:
         return
@@ -420,7 +420,7 @@ def verify_claim(db, request_id, version, commit, server_mode, deployment_scope,
     request = decode_request(row)
     if request["commit"] != commit:
         raise ValueError("executing request revision does not match the deployment argument")
-    if request.get("server_mode") != server_mode or server_mode not in ("monolith", "services"):
+    if request.get("server_mode") != server_mode or server_mode != "services":
         raise ValueError("executing request topology does not match the deployment argument")
     validate_selection(request)
     if request.get("deployment_scope") != deployment_scope:
@@ -453,7 +453,7 @@ def main():
     verify.add_argument("--id", required=True)
     verify.add_argument("--version", required=True, type=int)
     verify.add_argument("--commit", required=True)
-    verify.add_argument("--server-mode", required=True, choices=("monolith", "services"))
+    verify.add_argument("--server-mode", required=True, choices=("services",))
     verify.add_argument("--deployment-scope", required=True, choices=("full", "service"))
     verify.add_argument("--service-target", default="")
     subparsers.add_parser("next")

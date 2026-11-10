@@ -16,7 +16,7 @@ if [[ ! "${BACKUP_RETENTION_COUNT}" =~ ^[0-9]+$ ]] || [ "${BACKUP_RETENTION_COUN
 fi
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DEPLOY_COMMIT="$(git -C "${VAPOR_DEPLOY_ROOT}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
-MODE="${VAPOR_SERVER_MODE:-monolith}"
+MODE="${VAPOR_SERVER_MODE:-services}"
 BUNDLE_NAME="vapor-platform-recovery-${TIMESTAMP}-${DEPLOY_COMMIT:0:12}"
 BUNDLE_PATH="${1:-${BACKUP_ROOT}/${BUNDLE_NAME}.tar.gz}"
 BUNDLE_DIR="$(dirname -- "${BUNDLE_PATH}")"
@@ -65,7 +65,7 @@ if [ "${BACKUP_RETENTION_COUNT}" -lt 1 ]; then
   exit 1
 fi
 case "${MODE}" in
-  monolith|services)
+  services)
     STATEFUL_SERVICES=(
       vapor-homepage.service vapor-docs.service vapor-identity.service
       vapor-diagnostics.service vapor-registry.service vapor-artifact.service

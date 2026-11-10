@@ -2,6 +2,9 @@
 #[path = "../network_telemetry.rs"]
 mod network_telemetry;
 #[cfg(target_os = "linux")]
+#[path = "../process_snapshot.rs"]
+mod process_snapshot;
+#[cfg(target_os = "linux")]
 #[path = "../service_telemetry.rs"]
 mod service_telemetry;
 
@@ -44,6 +47,7 @@ struct TelemetryReport {
     agent_version: String,
     network: Option<network_telemetry::NetworkSnapshot>,
     services: Vec<service_telemetry::ServiceMetrics>,
+    processes: process_snapshot::ProcessSnapshot,
 }
 
 #[cfg(target_os = "linux")]
@@ -446,8 +450,10 @@ fn sample(sampler: &mut Sampler) -> Result<Option<TelemetryReport>, String> {
     );
     sampler.previous_services = services.clone();
     sampler.previous_service_sample = service_sample_at;
+    let processes =
+        process_snapshot::read_snapshot().map_err(|_| "could not sample host processes")?;
     Ok(Some(TelemetryReport {
-        schema_version: 3,
+        schema_version: 4,
         sampled_at_unix,
         cpu_percent,
         logical_cpu_count,
@@ -458,6 +464,7 @@ fn sample(sampler: &mut Sampler) -> Result<Option<TelemetryReport>, String> {
         agent_version: VERSION.to_owned(),
         network: network_telemetry::read_network_snapshot(),
         services,
+        processes,
     }))
 }
 
@@ -576,14 +583,15 @@ fn read_load_average() -> Result<f64, String> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod network_report_tests {
-    use super::TelemetryReport;
     use super::network_telemetry::{InterfaceCounters, NetworkSnapshot, TcpStateCounts};
+    use super::process_snapshot::ProcessSnapshot;
     use super::service_telemetry::ServiceMetrics;
+    use super::TelemetryReport;
 
     #[test]
-    fn schema_three_report_contains_current_telemetry_without_peer_details() {
+    fn schema_four_report_contains_current_telemetry_without_private_details() {
         let report = TelemetryReport {
-            schema_version: 3,
+            schema_version: 4,
             sampled_at_unix: 1_700_000_000,
             cpu_percent: 5.0,
             logical_cpu_count: 2,
@@ -632,13 +640,22 @@ mod network_report_tests {
                 io_write_bytes: None,
             })
             .collect(),
+            processes: ProcessSnapshot {
+                schema_version: 1,
+                source: "procfs".to_owned(),
+                observed_at_unix: 1_700_000_000,
+                total_processes: 0,
+                truncated: false,
+                processes: Vec::new(),
+            },
         };
         let value = serde_json::to_value(report).unwrap();
 
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
         assert_eq!(value["network"]["interfaces"][0]["rx_bytes"], 100);
         assert_eq!(value["network"]["tcp_states"]["established"], 3);
         assert!(value.get("remote_address").is_none());
         assert!(value.get("process_name").is_none());
+        assert_eq!(value["processes"]["source"], "procfs");
     }
 }

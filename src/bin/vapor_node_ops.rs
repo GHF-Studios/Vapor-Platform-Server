@@ -65,13 +65,16 @@ fn run() -> Result<(), &'static str> {
     let config_path = "/etc/vapor/node-agent.toml";
     let metadata = std::fs::symlink_metadata(config_path)
         .map_err(|_| "could not read protected node config")?;
-    if !metadata.file_type().is_file() || metadata.uid() != 0 || metadata.permissions().mode() & 0o022 != 0 {
+    if !metadata.file_type().is_file()
+        || metadata.uid() != 0
+        || metadata.permissions().mode() & 0o022 != 0
+    {
         return Err("node config ownership or permissions are unsafe");
     }
-    let config_text = std::fs::read_to_string(config_path)
-        .map_err(|_| "could not read protected node config")?;
-    let config: AgentConfig = toml::from_str(&config_text)
-        .map_err(|_| "node config has invalid TOML")?;
+    let config_text =
+        std::fs::read_to_string(config_path).map_err(|_| "could not read protected node config")?;
+    let config: AgentConfig =
+        toml::from_str(&config_text).map_err(|_| "node config has invalid TOML")?;
 
     let mut bytes = Vec::new();
     std::io::stdin()
@@ -92,7 +95,10 @@ fn run() -> Result<(), &'static str> {
         .status();
     let (state, detail) = match result {
         Ok(status) if status.success() => ("succeeded", "approved service restart completed"),
-        _ => ("failed", "approved service restart failed; inspect the host"),
+        _ => (
+            "failed",
+            "approved service restart failed; inspect the host",
+        ),
     };
     serde_json::to_writer(
         std::io::stdout().lock(),
@@ -107,9 +113,13 @@ fn run() -> Result<(), &'static str> {
 }
 
 #[cfg(target_os = "linux")]
-fn parse_operation(bytes: &[u8], expected_node_id: &str, now: i64) -> Result<Operation, &'static str> {
-    let operation: Operation = serde_json::from_slice(bytes)
-        .map_err(|_| "operation payload is invalid")?;
+fn parse_operation(
+    bytes: &[u8],
+    expected_node_id: &str,
+    now: i64,
+) -> Result<Operation, &'static str> {
+    let operation: Operation =
+        serde_json::from_slice(bytes).map_err(|_| "operation payload is invalid")?;
     if operation.schema_version != 1
         || uuid::Uuid::parse_str(&operation.operation_id).is_err()
         || operation.target_node_id != expected_node_id
@@ -169,7 +179,10 @@ mod tests {
             r#"{"schema_version":1,"operation_id":"22222222-2222-4222-8222-222222222222","target_node_id":"11111111-1111-4111-8111-111111111111","expires_at_unix":999,"action":{"kind":"restart_service","service":"docs"}}"#,
         ];
         for input in cases {
-            assert!(parse_operation(input.as_bytes(), NODE, 1000).is_err(), "{input}");
+            assert!(
+                parse_operation(input.as_bytes(), NODE, 1000).is_err(),
+                "{input}"
+            );
         }
     }
 }

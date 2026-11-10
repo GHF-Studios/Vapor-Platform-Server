@@ -25,7 +25,7 @@ class ApprovedDeployExecTests(unittest.TestCase):
             self.skipTest("Bash is required to exercise deploy environment loading")
         return bash
 
-    def _load_server_mode(self, host_mode: str, request_mode: str | None, approved: bool) -> subprocess.CompletedProcess[str]:
+    def _load_runtime_setting(self, host_mode: str, request_mode: str | None, approved: bool) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             config = pathlib.Path(directory)
             (config / "platform.env").write_text(f"VAPOR_SERVER_MODE={host_mode}\n", encoding="utf-8")
@@ -44,18 +44,18 @@ class ApprovedDeployExecTests(unittest.TestCase):
                 text=True,
             )
 
-    def test_approved_request_mode_survives_host_environment_loading(self) -> None:
-        result = self._load_server_mode("monolith", "services", approved=True)
+    def test_approved_request_uses_the_only_supported_runtime(self) -> None:
+        result = self._load_runtime_setting("services", "services", approved=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "services")
 
     def test_unapproved_context_uses_host_mode(self) -> None:
-        result = self._load_server_mode("services", "monolith", approved=False)
+        result = self._load_runtime_setting("services", "monolith", approved=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "services")
 
     def test_approved_context_rejects_missing_request_mode(self) -> None:
-        result = self._load_server_mode("services", None, approved=True)
+        result = self._load_runtime_setting("services", None, approved=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("approved deployment request mode is missing or invalid", result.stderr)
 

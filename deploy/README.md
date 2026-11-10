@@ -15,8 +15,7 @@ Current baseline:
 - state under `/var/lib/vapor-server`;
 - service env files under `/etc/vapor-server`;
 - source checkout under `/opt/vapor-platform-server`.
-- composed host process by default, with independent service processes retained
-  through the explicit `VAPOR_SERVER_MODE=services` option.
+- independent service processes behind one shared Platform admin gateway.
 
 No secrets belong in this repository. The bootstrap script creates server-local
 admin tokens in `/etc/vapor-server/*.env` when those files do not already exist.
@@ -72,9 +71,8 @@ console remains separately disabled by default.
   and create server-local env files.
 - `scripts/deploy.sh`: perform the explicit first bootstrap or deploy one exact
   revision after verifying the worker's SQLite claim. It publishes Atlas and
-  builds/restarts either the composed host (default) or independently runnable
-  services (`VAPOR_SERVER_MODE=services`). The composed mode requires the root
-  `Cargo.lock`. It writes a safe latest-result record under
+  builds/restarts each independently runnable service. It writes a safe
+  latest-result record under
   `${VAPOR_STATE_ROOT}/operations/`.
 - `scripts/deploy-service.py`: deploy one approved, allowlisted target in
   services mode. The request pins the complete Platform composition; the
@@ -269,22 +267,21 @@ candidate whose payload digest matches the current VPS index.
 Unknown, stale, or damaged files count against capacity and are left untouched;
 if they prevent safe pruning, the sync stops. The report distinguishes copies
 hashed this run from archive files merely retained on the drive.
-- `scripts/install-systemd.sh`: install/enable the composed host unit.
-- `scripts/install-services-systemd.sh`: install/enable the individual service
-  units and Platform admin gateway for `VAPOR_SERVER_MODE=services`.
+- `scripts/install-systemd.sh`: install/enable the independent app
+  services and Platform admin gateway.
 - Platform's request database lives at
   `${VAPOR_STATE_ROOT}/platform/platform.sqlite3` and is included in recovery
   bundles.
-- In independent-services mode, Platform runs as the shared admin gateway on
+- Platform runs as the shared admin gateway on
   port 7110. It serves its own pages and forwards only fixed service-owned
   admin page prefixes; each owner service still checks the session/capability
-  and owns mutations/audit. The services-mode deployment builds and installs
+  and owns mutations/audit. The deployment builds and installs
   this gateway alongside the independently deployed services. The gateway
   source change is not live until an approved deployment installs it.
 - `systemd/vapor-artifact.service`: independently runnable immutable release
-  delivery service for `VAPOR_SERVER_MODE=services`.
+  delivery service.
 - `systemd/vapor-build-cache.service`: independently runnable target snapshot
-  service for `VAPOR_SERVER_MODE=services`; state lives under
+  service; state lives under
   `/var/lib/vapor-server/build-cache`.
 - `docs/vapor-build-snapshot-contract.md`: contract for one signed rolling
   compiler snapshot per locked target. An optional second VPS may build
@@ -292,8 +289,7 @@ hashed this run from archive files merely retained on the drive.
   server currently composes and administers Build Cache but does not yet create
   snapshots.
 - `scripts/install-caddy.sh`: render/install the Caddy config.
-- `caddy/Caddyfile.services.template`: path routing for the independent
-  service-process mode; the default template routes through the composed host.
+- `caddy/Caddyfile.template`: the supported path-routing topology.
 - `scripts/health-check.sh`: check local service health endpoints.
 - `scripts/public-http-check.sh`: check public HTTP routes before DNS/HTTPS is
   ready.

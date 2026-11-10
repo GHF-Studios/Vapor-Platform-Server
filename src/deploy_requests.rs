@@ -551,11 +551,9 @@ async fn list_requests(
                     row.get("dispatch_state"),
                     row.get("dispatch_attempted_at_unix"),
                     unix_now(),
-                ) && current_main_commit
-                        .as_deref()
-                        .is_some_and(|main| {
-                            is_current_main_revision(&row.get::<String, _>("commit_hash"), main)
-                        }),
+                ) && current_main_commit.as_deref().is_some_and(|main| {
+                    is_current_main_revision(&row.get::<String, _>("commit_hash"), main)
+                }),
                 approval_order_ready: row.get("approval_order_ready"),
                 approval_order_blocker: row
                     .get::<Option<String>, _>("approval_order_blocker_json")
@@ -1154,10 +1152,11 @@ async fn dispatch_approved_authorized(
             false,
         );
     }
-    let current_main_commit = match fetch_main_commit_at(&state.client, &state.main_commit_url).await {
-        Ok(commit) => commit,
-        Err(_) => {
-            return stage_error(
+    let current_main_commit =
+        match fetch_main_commit_at(&state.client, &state.main_commit_url).await {
+            Ok(commit) => commit,
+            Err(_) => {
+                return stage_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "dispatch_not_started",
                 "main_revision_check",
@@ -1165,8 +1164,8 @@ async fn dispatch_approved_authorized(
                 true,
                 false,
             );
-        }
-    };
+            }
+        };
     if !is_current_main_revision(&stored_request.0, &current_main_commit) {
         return stage_error(
             StatusCode::CONFLICT,
@@ -1892,23 +1891,30 @@ mod dispatch_tests {
             .execute(&pool).await.unwrap();
 
         assert!(has_earlier_open_request(&pool, "newer", 100).await.unwrap());
-        assert!(!has_earlier_open_request(&pool, "older-stale", 100).await.unwrap());
+        assert!(!has_earlier_open_request(&pool, "older-stale", 100)
+            .await
+            .unwrap());
         sqlx::query("UPDATE platform_deploy_requests SET status='succeeded', dispatch_state='completed' WHERE id='worker'")
             .execute(&pool)
             .await
             .unwrap();
         assert!(has_earlier_open_request(&pool, "newer", 100).await.unwrap());
-        sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='same-revision-older'")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE platform_deploy_requests SET status='rejected' WHERE id='same-revision-older'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         assert!(!has_earlier_open_request(&pool, "newer", 100).await.unwrap());
         sqlx::query("UPDATE platform_deploy_requests SET commit_hash='cccccccccccccccccccccccccccccccccccccccc' WHERE id='older-stale'")
             .execute(&pool).await.unwrap();
         assert!(has_earlier_open_request(&pool, "newer", 100).await.unwrap());
         sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='older-stale'")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(!has_earlier_open_request(&pool, "newer", 100).await.unwrap());
     }
-
 }
 
 async fn invoke_platform_ops(
@@ -2207,8 +2213,8 @@ fn same_origin(state: &DeployRequestState, headers: &HeaderMap) -> bool {
 }
 
 fn validate_request(request: &CreateDeployRequest) -> Result<(), &'static str> {
-    if !matches!(request.server_mode.as_str(), "monolith" | "services") {
-        return Err("server_mode must be 'monolith' or 'services'\n");
+    if request.server_mode != "services" {
+        return Err("server_mode must be 'services'\n");
     }
     match (
         request.deployment_scope.as_str(),
@@ -2684,8 +2690,12 @@ mod tests {
         .unwrap();
         assert_eq!(blocker["id"], "same-commit-pending");
 
-        sqlx::query("UPDATE platform_deploy_requests SET status='rejected' WHERE id='same-commit-pending'")
-            .execute(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE platform_deploy_requests SET status='rejected' WHERE id='same-commit-pending'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let rows = fetch_request_rows(&pool, None, None, 10).await.unwrap();
         let current = rows
             .iter()
@@ -2711,6 +2721,10 @@ mod tests {
 
         let mut request = valid_request();
         request.server_mode = "automatic".to_string();
+        assert!(validate_request(&request).is_err());
+
+        let mut request = valid_request();
+        request.server_mode = "monolith".to_string();
         assert!(validate_request(&request).is_err());
     }
 

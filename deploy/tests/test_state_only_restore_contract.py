@@ -47,15 +47,18 @@ class StateOnlyRestoreContractTests(unittest.TestCase):
         self.assertLess(restore.index(platform_check), restore.index(lock))
         self.assertLess(restore.index(gateway_check), restore.index(lock))
 
-    def test_fresh_host_restore_reconciles_old_ssh_grants_and_activates_only_after_state_copy(self) -> None:
+    def test_fresh_host_restore_reconciles_old_ssh_grants_before_copy_and_restarts_services_in_cleanup(self) -> None:
         restore = (REPO_ROOT / "deploy/scripts/restore-state-only.sh").read_text()
         reconcile = 'reconcile-fresh-host-ssh.py" "${BUNDLE_STATE}/platform/platform.sqlite3'
         copy_state = 'cp -a -- "${source}" "${target}"'
-        activate = 'systemctl enable --now vapor-platform-server.service'
+        activate = 'systemctl enable --now \\\n    vapor-homepage.service vapor-docs.service vapor-identity.service \\\n    vapor-diagnostics.service vapor-registry.service vapor-artifact.service \\\n    vapor-build-cache.service vapor-platform-server.service'
+        cleanup_trap = 'trap cleanup EXIT'
         health = '"${SCRIPT_DIR}/health-check.sh"'
         self.assertIn("--fresh-host", restore)
         self.assertIn(reconcile, restore)
         self.assertLess(restore.index(reconcile), restore.index(copy_state))
+        self.assertIn(activate, restore)
+        self.assertIn(cleanup_trap, restore)
         self.assertLess(restore.index(copy_state), restore.index(activate))
         self.assertLess(restore.index(activate), restore.index(health))
         self.assertIn("services to remain staged and inactive", restore)

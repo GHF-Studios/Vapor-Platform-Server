@@ -100,8 +100,6 @@ class RecoveryMetadata:
 
 
 def runtime_binaries(runtime_mode: str) -> tuple[str, ...]:
-    if runtime_mode == "monolith":
-        return ("vapor_platform_server",)
     if runtime_mode == "services":
         return (
             "vapor_homepage_server",
@@ -217,7 +215,7 @@ def read_recovery_metadata(path: pathlib.Path) -> RecoveryMetadata:
     if manifest.get("schema_version") != 2:
         raise MetadataError("bundle has an unsupported recovery schema")
     runtime_mode = manifest.get("runtime_mode")
-    if runtime_mode not in {"monolith", "services"}:
+    if runtime_mode != "services":
         raise MetadataError("bundle runtime mode is unsupported")
     declared_commit = manifest.get("deploy_root_commit")
     if not isinstance(declared_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", declared_commit):

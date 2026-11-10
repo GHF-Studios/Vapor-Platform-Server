@@ -11,7 +11,7 @@ VAPOR_REPO_URL="${VAPOR_REPO_URL:-https://github.com/GHF-Studios/Vapor-Platform-
 VAPOR_BRANCH="${VAPOR_BRANCH:-main}"
 __VAPOR_APPROVED_REQUEST_ID="${VAPOR_APPROVED_DEPLOY_ID:-}"
 __VAPOR_APPROVED_REQUEST_MODE="${VAPOR_SERVER_MODE:-}"
-VAPOR_SERVER_MODE="${VAPOR_SERVER_MODE:-monolith}"
+VAPOR_SERVER_MODE="${VAPOR_SERVER_MODE:-services}"
 VAPOR_DEPLOY_ROOT="${VAPOR_DEPLOY_ROOT:-/opt/vapor-platform-server}"
 VAPOR_STATE_ROOT="${VAPOR_STATE_ROOT:-/var/lib/vapor-server}"
 VAPOR_CONFIG_DIR="${VAPOR_CONFIG_DIR:-/etc/vapor-server}"
@@ -30,7 +30,7 @@ else
 fi
 if [ -n "${__VAPOR_APPROVED_REQUEST_ID}" ]; then
   case "${__VAPOR_APPROVED_REQUEST_MODE}" in
-    monolith|services) VAPOR_SERVER_MODE="${__VAPOR_APPROVED_REQUEST_MODE}" ;;
+    services) VAPOR_SERVER_MODE="${__VAPOR_APPROVED_REQUEST_MODE}" ;;
     *)
       echo "error: approved deployment request mode is missing or invalid" >&2
       exit 2
@@ -127,7 +127,7 @@ write_operation_record() {
 
   case "$operation" in deploy|restore) ;; *) return 1 ;; esac
   case "$result" in success|failed) ;; *) return 1 ;; esac
-  case "$server_mode" in monolith|services) ;; *) return 1 ;; esac
+  case "$server_mode" in services) ;; *) return 1 ;; esac
   [[ "$started_at_utc" =~ $timestamp_pattern && "$finished_at_utc" =~ $timestamp_pattern ]] || return 1
   if [ "$revision" != "unknown" ] && [[ ! "$revision" =~ ^[0-9A-Fa-f]{7,40}$ ]]; then
     return 1
@@ -164,9 +164,6 @@ validate_vapor_host_config() {
   local template="${DEPLOY_DIR}/caddy/Caddyfile.template"
   local -a args
 
-  if [ "${VAPOR_SERVER_MODE}" = "services" ]; then
-    template="${DEPLOY_DIR}/caddy/Caddyfile.services.template"
-  fi
   args=(
     --template "${template}"
     --public-domain "${VAPOR_DOMAIN}"

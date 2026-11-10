@@ -1,7 +1,7 @@
-use axum::Json;
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde::Serialize;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -26,7 +26,6 @@ pub(crate) struct ServerNode {
     pub(crate) id: String,
     pub(crate) slot_id: String,
     pub(crate) label: String,
-    pub(crate) role: String,
     pub(crate) state: &'static str,
     pub(crate) metrics_state: &'static str,
     pub(crate) observed_at_unix: u64,
@@ -128,7 +127,6 @@ impl Sampler {
             id: crate::server_operation_schema::local_node_id(),
             slot_id: crate::server_operation_schema::local_slot_id(),
             label: node_label(),
-            role: "control-plane".to_owned(),
             state: if has_metrics { "online" } else { "unavailable" },
             metrics_state: if !has_metrics {
                 "unavailable"
@@ -216,7 +214,7 @@ pub async fn admin_snapshot(headers: HeaderMap) -> Response {
                 .iter()
                 .filter(|node| node.state == "online")
                 .count();
-            snapshot.scope = "platform-host-and-enrolled-nodes";
+            snapshot.scope = "platform-host-and-connected-servers";
             let mut response = (StatusCode::OK, Json(snapshot)).into_response();
             response.headers_mut().insert(
                 CACHE_CONTROL,

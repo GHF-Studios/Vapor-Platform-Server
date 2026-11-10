@@ -71,7 +71,7 @@ fail_claim() {
 if [[ ! "${REQUEST_COMMIT}" =~ ^[A-Fa-f0-9]{40}$ || ! "${REQUEST_TREE}" =~ ^[A-Fa-f0-9]{40}$ ]]; then
   fail_claim "request contained an invalid root revision"
 fi
-if [[ "${REQUEST_MODE}" != "monolith" && "${REQUEST_MODE}" != "services" ]]; then
+if [[ "${REQUEST_MODE}" != "services" ]]; then
   fail_claim "request contained an invalid deployment target"
 fi
 if [[ "${REQUEST_SCOPE}" != "full" && "${REQUEST_SCOPE}" != "service" ]]; then
@@ -82,9 +82,6 @@ if [[ "${REQUEST_SCOPE}" = "full" && -n "${REQUEST_TARGET}" ]]; then
 fi
 if [[ "${REQUEST_SCOPE}" = "service" && -z "${REQUEST_TARGET}" ]]; then
   fail_claim "service deployment request has no service target"
-fi
-if [[ "${REQUEST_SCOPE}" = "service" && "${REQUEST_MODE}" != "services" ]]; then
-  fail_claim "service deployment request requires services mode"
 fi
 if [ ! -d "${VAPOR_DEPLOY_ROOT}/.git" ]; then
   fail_claim "the bootstrapped Platform source checkout is missing"

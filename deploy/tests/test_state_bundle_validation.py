@@ -57,7 +57,7 @@ ROOT = "vapor-platform-recovery"
 REVISION = "a" * 40
 VALID_MANIFEST = f"""schema_version = 2
 created_at_utc = "2026-11-01T00:00:00Z"
-runtime_mode = "monolith"
+runtime_mode = "services"
 deploy_root_commit = "{REVISION}"
 operating_system = "Ubuntu 24.04.3 LTS"
 architecture = "x86_64"
@@ -119,7 +119,19 @@ def valid_members() -> list[tuple[str, str | None, bytes | None]]:
         (f"{ROOT}/host/caddy", "dir", None),
         (f"{ROOT}/host/caddy/Caddyfile", "file", b"vapor.example.test {}\n"),
         (f"{ROOT}/host/systemd", "dir", None),
-        (f"{ROOT}/host/systemd/vapor-platform-server.service", "file", b"[Service]\n"),
+        *[
+            (f"{ROOT}/host/systemd/{unit}", "file", b"[Service]\n")
+            for unit in (
+                "vapor-homepage.service",
+                "vapor-docs.service",
+                "vapor-identity.service",
+                "vapor-diagnostics.service",
+                "vapor-registry.service",
+                "vapor-artifact.service",
+                "vapor-build-cache.service",
+                "vapor-platform-server.service",
+            )
+        ],
         (f"{ROOT}/host/systemd/vapor-platform-ops.socket", "file", b"[Socket]\n"),
         (f"{ROOT}/host/systemd/vapor-platform-ops@.service", "file", b"[Service]\n"),
     ]

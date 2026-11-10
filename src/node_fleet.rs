@@ -20,7 +20,6 @@ const REPORT_MIN_INTERVAL_SECONDS: i64 = 10;
 const REPORT_FRESHNESS_SECONDS: i64 = 90;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 60;
 const MAX_AGENT_VERSION_BYTES: usize = 64;
-const ROLE_ALLOWLIST: &[&str] = &["control-plane", "builder", "backup", "general"];
 static NODE_STATE: OnceLock<NodeState> = OnceLock::new();
 
 #[derive(Clone)]
@@ -41,7 +40,6 @@ struct NetworkQuery {
 #[serde(deny_unknown_fields)]
 struct CreateNodeRequest {
     label: String,
-    role: String,
     #[serde(default)]
     slot_id: Option<String>,
 }
@@ -66,6 +64,7 @@ pub(crate) struct TelemetryReport {
     agent_version: String,
     network: Option<crate::network_telemetry::NetworkSnapshot>,
     services: Vec<crate::service_telemetry::ServiceMetrics>,
+    processes: crate::process_snapshot::ProcessSnapshot,
 }
 
 #[derive(Serialize)]
@@ -94,7 +93,6 @@ struct CreatedNode {
     id: String,
     slot_id: String,
     label: String,
-    role: String,
     status: String,
     version: i64,
     reporter_credential: String,
@@ -107,7 +105,6 @@ struct NodeRecord {
     id: String,
     slot_id: String,
     label: String,
-    role: String,
     status: String,
     version: i64,
     created_at_unix: i64,
@@ -127,7 +124,6 @@ struct NodeEvent {
     node_id: String,
     event: String,
     label: String,
-    role: String,
     actor_profile_id: String,
     at_unix: i64,
 }
@@ -144,7 +140,6 @@ struct NodeInventory {
 struct ServerSlot {
     id: String,
     label: String,
-    role: String,
     status: String,
     version: i64,
     current_node_id: Option<String>,
@@ -159,10 +154,14 @@ fn router_with_state(state: NodeState) -> Router {
     Router::new()
         .route("/api/admin/server-nodes", get(list_nodes).post(create_node))
         .route("/api/admin/server-nodes/{id}/network", get(node_network))
+        .route(
+            "/api/admin/server-nodes/{id}/processes",
+            get(node_processes),
+        )
         .route("/api/admin/server-nodes/{id}/revoke", post(revoke_node))
         .route("/api/fleet/v1/nodes/{id}/telemetry", post(report_telemetry))
         .with_state(state)
-        .layer(DefaultBodyLimit::max(16 * 1024))
+        .layer(DefaultBodyLimit::max(256 * 1024))
         .route_layer(axum::middleware::from_fn(no_store))
 }
 
@@ -170,12 +169,12 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     let directory = state_directory();
     tokio::fs::create_dir_all(directory).await?;
     let pool = create_pool();
+    reset_host_inventory_schema(&pool).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS platform_server_nodes (
             id TEXT PRIMARY KEY,
             slot_id TEXT,
             label TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('control-plane','builder','backup','general')),
             status TEXT NOT NULL CHECK(status IN ('active','revoked')),
             credential_sha256 TEXT NOT NULL,
             executor_credential_sha256 TEXT,
@@ -197,7 +196,9 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
             network_json TEXT,
             network_sampled_at_unix INTEGER,
             services_json TEXT,
-            services_sampled_at_unix INTEGER
+            services_sampled_at_unix INTEGER,
+            processes_json TEXT,
+            processes_sampled_at_unix INTEGER
         )",
     )
     .execute(&pool)
@@ -260,7 +261,6 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
             node_id TEXT NOT NULL,
             event TEXT NOT NULL CHECK(event IN ('created','revoked')),
             label TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('control-plane','builder','backup','general')),
             actor_profile_id TEXT NOT NULL,
             at_unix INTEGER NOT NULL
         )",
@@ -287,62 +287,66 @@ pub(crate) async fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+const HOST_INVENTORY_SCHEMA_VERSION: i64 = 2;
+
+async fn reset_host_inventory_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let marker_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='platform_host_inventory_schema'",
+    )
+    .fetch_one(pool)
+    .await?;
+    let schema_version = if marker_exists == 1 {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT schema_version FROM platform_host_inventory_schema WHERE singleton=1",
+        )
+        .fetch_optional(pool)
+        .await?
+    } else {
+        None
+    };
+    let inventory_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN
+         ('platform_server_nodes','platform_server_slots','platform_server_node_events','platform_server_network_samples')",
+    )
+    .fetch_one(pool)
+    .await?;
+    if inventory_exists > 0 && schema_version != Some(HOST_INVENTORY_SCHEMA_VERSION) {
+        let mut transaction = pool.begin().await?;
+        for table in [
+            "platform_server_node_events",
+            "platform_server_network_samples",
+            "platform_server_nodes",
+            "platform_server_slots",
+        ] {
+            sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+    }
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS platform_host_inventory_schema (
+            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+            schema_version INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO platform_host_inventory_schema(singleton,schema_version) VALUES (1,?)
+         ON CONFLICT(singleton) DO UPDATE SET schema_version=excluded.schema_version",
+    )
+    .bind(HOST_INVENTORY_SCHEMA_VERSION)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let columns = sqlx::query("PRAGMA table_info(platform_server_nodes)")
-        .fetch_all(pool)
-        .await?;
-    let has_slot_id = columns
-        .iter()
-        .any(|row| row.get::<String, _>("name") == "slot_id");
-    if !has_slot_id {
-        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN slot_id TEXT")
-            .execute(pool)
-            .await?;
-    }
-    if !columns
-        .iter()
-        .any(|row| row.get::<String, _>("name") == "executor_credential_sha256")
-    {
-        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN executor_credential_sha256 TEXT")
-            .execute(pool)
-            .await?;
-    }
-    let columns = sqlx::query("PRAGMA table_info(platform_server_nodes)")
-        .fetch_all(pool)
-        .await?;
-    if !columns
-        .iter()
-        .any(|row| row.get::<String, _>("name") == "executor_last_seen_at_unix")
-    {
-        sqlx::query(
-            "ALTER TABLE platform_server_nodes ADD COLUMN executor_last_seen_at_unix INTEGER",
-        )
-        .execute(pool)
-        .await?;
-    }
-    if !columns
-        .iter()
-        .any(|row| row.get::<String, _>("name") == "services_json")
-    {
-        sqlx::query("ALTER TABLE platform_server_nodes ADD COLUMN services_json TEXT")
-            .execute(pool)
-            .await?;
-    }
-    if !columns
-        .iter()
-        .any(|row| row.get::<String, _>("name") == "services_sampled_at_unix")
-    {
-        sqlx::query(
-            "ALTER TABLE platform_server_nodes ADD COLUMN services_sampled_at_unix INTEGER",
-        )
-        .execute(pool)
-        .await?;
-    }
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS platform_server_slots (
             id TEXT PRIMARY KEY,
             label TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('control-plane','builder','backup','general')),
             status TEXT NOT NULL CHECK(status IN ('active','vacant','retired')),
             version INTEGER NOT NULL,
             created_at_unix INTEGER NOT NULL,
@@ -354,27 +358,7 @@ async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-    sqlx::query(
-        "INSERT OR IGNORE INTO platform_server_slots
-         (id,label,role,status,version,created_at_unix,created_by_profile_id,current_node_id,changed_at_unix,changed_by_profile_id)
-         SELECT id,label,role,
-                CASE WHEN status='active' THEN 'active' ELSE 'vacant' END,
-                1,created_at_unix,created_by_profile_id,
-                CASE WHEN status='active' THEN id ELSE NULL END,
-                COALESCE(revoked_at_unix,created_at_unix),
-                COALESCE(revoked_by_profile_id,created_by_profile_id)
-         FROM platform_server_nodes",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query(
-        "UPDATE platform_server_nodes SET slot_id=id
-         WHERE slot_id IS NULL OR slot_id=''",
-    )
-    .execute(pool)
-    .await?;
     let local_slot_id = crate::server_operation_schema::local_slot_id();
-    let local_node_id = crate::server_operation_schema::local_node_id();
     let now = unix_now();
     let local_label = std::env::var("VAPOR_PLATFORM_SERVER_SLOT_LABEL")
         .ok()
@@ -382,13 +366,12 @@ async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .unwrap_or_else(|| "Core server".to_owned());
     sqlx::query(
         "INSERT OR IGNORE INTO platform_server_slots
-         (id,label,role,status,version,created_at_unix,created_by_profile_id,current_node_id,changed_at_unix,changed_by_profile_id)
-         VALUES (?,?,'control-plane','active',1,?,'platform-bootstrap',?,?,'platform-bootstrap')",
+         (id,label,status,version,created_at_unix,created_by_profile_id,current_node_id,changed_at_unix,changed_by_profile_id)
+         VALUES (?,?,'active',1,?,'platform-bootstrap',NULL,?,'platform-bootstrap')",
     )
     .bind(local_slot_id)
     .bind(local_label)
     .bind(now)
-    .bind(local_node_id)
     .bind(now)
     .execute(pool)
     .await?;
@@ -410,7 +393,7 @@ async fn initialize_slots(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error> {
     let state = NODE_STATE.get().ok_or(sqlx::Error::PoolTimedOut)?;
     let rows = sqlx::query(
-        "SELECT id,slot_id,label,role,status,created_at_unix,last_report_received_at_unix,
+        "SELECT id,slot_id,label,status,created_at_unix,last_report_received_at_unix,
                 sampled_at_unix,cpu_percent,logical_cpu_count,memory_total_bytes,
                 memory_available_bytes,uptime_seconds,load_average_1m,network_json,
                 services_json,services_sampled_at_unix
@@ -445,7 +428,6 @@ pub(crate) async fn fleet_nodes(now: i64) -> Result<Vec<ServerNode>, sqlx::Error
                     .get::<Option<String>, _>("slot_id")
                     .unwrap_or_else(|| row.get("id")),
                 label: row.get("label"),
-                role: row.get("role"),
                 state,
                 metrics_state: if has_metrics {
                     "complete"
@@ -495,7 +477,7 @@ async fn list_nodes(State(state): State<NodeState>, headers: HeaderMap) -> Respo
         Err(response) => return response,
     };
     let nodes = sqlx::query(
-        "SELECT id,slot_id,label,role,status,version,created_at_unix,created_by_profile_id,
+        "SELECT id,slot_id,label,status,version,created_at_unix,created_by_profile_id,
                 revoked_at_unix,revoked_by_profile_id,last_report_received_at_unix,
                 sampled_at_unix,agent_version,
                 (executor_credential_sha256 IS NOT NULL) AS executor_enabled,
@@ -506,13 +488,13 @@ async fn list_nodes(State(state): State<NodeState>, headers: HeaderMap) -> Respo
     .fetch_all(&state.pool)
     .await;
     let events = sqlx::query(
-        "SELECT event_id,node_id,event,label,role,actor_profile_id,at_unix
+        "SELECT event_id,node_id,event,label,actor_profile_id,at_unix
          FROM platform_server_node_events ORDER BY event_id DESC LIMIT 50",
     )
     .fetch_all(&state.pool)
     .await;
     let slots = sqlx::query(
-        "SELECT id,label,role,status,version,current_node_id,changed_at_unix
+        "SELECT id,label,status,version,current_node_id,changed_at_unix
          FROM platform_server_slots ORDER BY status,label,id",
     )
     .fetch_all(&state.pool)
@@ -553,9 +535,6 @@ async fn create_node(
     if label.is_empty() || label.chars().count() > 80 || label.chars().any(char::is_control) {
         return error(StatusCode::BAD_REQUEST, "invalid_server_label");
     }
-    if !ROLE_ALLOWLIST.contains(&request.role.as_str()) {
-        return error(StatusCode::BAD_REQUEST, "invalid_server_role");
-    }
     let id = uuid::Uuid::new_v4().to_string();
     let new_slot = request.slot_id.is_none();
     let slot_id = request
@@ -590,16 +569,14 @@ async fn create_node(
     let slot_version = if new_slot {
         None
     } else {
-        let slot =
-            sqlx::query("SELECT status,version,label,role FROM platform_server_slots WHERE id=?")
-                .bind(&slot_id)
-                .fetch_optional(&mut *transaction)
-                .await;
+        let slot = sqlx::query("SELECT status,version,label FROM platform_server_slots WHERE id=?")
+            .bind(&slot_id)
+            .fetch_optional(&mut *transaction)
+            .await;
         match slot {
             Ok(Some(slot))
                 if slot.get::<String, _>("status") == "vacant"
-                    && slot.get::<String, _>("label") == label
-                    && slot.get::<String, _>("role") == request.role =>
+                    && slot.get::<String, _>("label") == label =>
             {
                 Some(slot.get::<i64, _>("version"))
             }
@@ -632,16 +609,15 @@ async fn create_node(
         .execute(&mut *transaction)
         .await;
         if !changed.is_ok_and(|result| result.rows_affected() == 1) {
-            return error(StatusCode::CONFLICT, "server_slot_changed_during_enrollment");
+            return error(StatusCode::CONFLICT, "server_slot_changed_during_reconnect");
         }
     } else if sqlx::query(
         "INSERT INTO platform_server_slots
-         (id,label,role,status,version,created_at_unix,created_by_profile_id,current_node_id,changed_at_unix,changed_by_profile_id)
-         VALUES (?,?,?,'active',1,?,?,?,?,?)",
+         (id,label,status,version,created_at_unix,created_by_profile_id,current_node_id,changed_at_unix,changed_by_profile_id)
+         VALUES (?,?,'active',1,?,?,?,?,?)",
     )
     .bind(&slot_id)
     .bind(label)
-    .bind(&request.role)
     .bind(now)
     .bind(&actor)
     .bind(&id)
@@ -655,13 +631,12 @@ async fn create_node(
     }
     let inserted = sqlx::query(
         "INSERT INTO platform_server_nodes
-         (id,slot_id,label,role,status,credential_sha256,executor_credential_sha256,version,created_at_unix,created_by_profile_id)
-         VALUES (?,?,?,?,'active',?,?,1,?,?)",
+         (id,slot_id,label,status,credential_sha256,executor_credential_sha256,version,created_at_unix,created_by_profile_id)
+         VALUES (?,?,?,'active',?,?,1,?,?)",
     )
     .bind(&id)
     .bind(&slot_id)
     .bind(label)
-    .bind(&request.role)
     .bind(&credential_sha256)
     .bind(&executor_credential_sha256)
     .bind(now)
@@ -669,17 +644,9 @@ async fn create_node(
     .execute(&mut *transaction)
     .await;
     if inserted.is_err()
-        || insert_node_event(
-            &mut transaction,
-            &id,
-            "created",
-            label,
-            &request.role,
-            &actor,
-            now,
-        )
-        .await
-        .is_err()
+        || insert_node_event(&mut transaction, &id, "created", label, &actor, now)
+            .await
+            .is_err()
         || transaction.commit().await.is_err()
     {
         return error(
@@ -693,7 +660,6 @@ async fn create_node(
             id,
             slot_id,
             label: label.to_owned(),
-            role: request.role,
             status: "active".to_owned(),
             version: 1,
             reporter_credential: credential,
@@ -727,7 +693,7 @@ async fn revoke_node(
         }
     };
     let row = sqlx::query(
-        "SELECT slot_id,label,role FROM platform_server_nodes
+        "SELECT slot_id,label FROM platform_server_nodes
          WHERE id=? AND status='active' AND version=?",
     )
     .bind(&id)
@@ -750,7 +716,6 @@ async fn revoke_node(
         }
     };
     let label: String = row.get("label");
-    let role: String = row.get("role");
     let slot_id: Option<String> = row.get("slot_id");
     let updated = sqlx::query(
         "UPDATE platform_server_nodes SET status='revoked',version=version+1,
@@ -783,7 +748,7 @@ async fn revoke_node(
     if !slot_updated.is_ok_and(|result| result.rows_affected() == 1) {
         return error(StatusCode::CONFLICT, "server_slot_changed_or_missing");
     }
-    if insert_node_event(&mut transaction, &id, "revoked", &label, &role, &actor, now)
+    if insert_node_event(&mut transaction, &id, "revoked", &label, &actor, now)
         .await
         .is_err()
         || transaction.commit().await.is_err()
@@ -822,6 +787,7 @@ async fn report_telemetry(
         .as_ref()
         .and_then(|snapshot| serde_json::to_string(snapshot).ok());
     let services_json = serde_json::to_string(&report.services).ok();
+    let processes_json = serde_json::to_string(&report.processes).ok();
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => {
@@ -839,7 +805,9 @@ async fn report_telemetry(
              network_json=COALESCE(?,network_json),
              network_sampled_at_unix=CASE WHEN ? IS NULL THEN network_sampled_at_unix ELSE ? END,
              services_json=COALESCE(?,services_json),
-             services_sampled_at_unix=CASE WHEN ? IS NULL THEN services_sampled_at_unix ELSE ? END
+             services_sampled_at_unix=CASE WHEN ? IS NULL THEN services_sampled_at_unix ELSE ? END,
+             processes_json=COALESCE(?,processes_json),
+             processes_sampled_at_unix=CASE WHEN ? IS NULL THEN processes_sampled_at_unix ELSE ? END
          WHERE id=? AND status='active' AND credential_sha256=?
            AND (last_report_received_at_unix IS NULL OR last_report_received_at_unix<=?)
            AND (sampled_at_unix IS NULL OR sampled_at_unix<?)",
@@ -859,6 +827,9 @@ async fn report_telemetry(
     .bind(&services_json)
     .bind(&services_json.as_ref().map(|_| report.sampled_at_unix))
     .bind(&services_json.as_ref().map(|_| report.sampled_at_unix))
+    .bind(&processes_json)
+    .bind(&processes_json.as_ref().map(|_| report.sampled_at_unix))
+    .bind(&processes_json.as_ref().map(|_| report.sampled_at_unix))
     .bind(&id)
     .bind(&credential_sha256)
     .bind(now.saturating_sub(REPORT_MIN_INTERVAL_SECONDS))
@@ -935,12 +906,18 @@ async fn report_telemetry(
 }
 
 fn valid_report(report: &TelemetryReport, now: i64) -> bool {
-    report.schema_version == 3
+    report.schema_version == 4
         && report
             .network
             .as_ref()
             .map_or(true, crate::network_telemetry::valid_network_snapshot)
         && crate::service_telemetry::valid_service_snapshot(&report.services)
+        && crate::process_snapshot::valid_snapshot(&report.processes, now)
+        && report
+            .processes
+            .observed_at_unix
+            .abs_diff(report.sampled_at_unix.max(0) as u64)
+            <= 60
         && report.sampled_at_unix >= now.saturating_sub(REPORT_FRESHNESS_SECONDS)
         && report.sampled_at_unix <= now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
         && report.cpu_percent.is_finite()
@@ -1130,6 +1107,58 @@ async fn node_network(
     }
 }
 
+async fn node_processes(
+    State(state): State<NodeState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_root(&state, &headers).await {
+        return response;
+    }
+    if id == crate::server_operation_schema::local_node_id() {
+        return match crate::process_snapshot::read_snapshot() {
+            Ok(snapshot) => private_json(StatusCode::OK, snapshot),
+            Err(_) => error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "host_process_inventory_unavailable",
+            ),
+        };
+    }
+    let row = sqlx::query("SELECT status,processes_json FROM platform_server_nodes WHERE id=?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await;
+    match row {
+        Ok(Some(row)) if row.get::<String, _>("status") != "active" => {
+            error(StatusCode::GONE, "server_node_disconnected")
+        }
+        Ok(Some(row)) => {
+            let snapshot = row
+                .get::<Option<String>, _>("processes_json")
+                .and_then(|value| {
+                    serde_json::from_str::<crate::process_snapshot::ProcessSnapshot>(&value).ok()
+                });
+            match snapshot {
+                Some(snapshot)
+                    if crate::process_snapshot::valid_snapshot(&snapshot, unix_now()) =>
+                {
+                    private_json(StatusCode::OK, snapshot)
+                }
+                Some(_) => error(StatusCode::SERVICE_UNAVAILABLE, "process_inventory_stale"),
+                None => error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "process_inventory_not_yet_available",
+                ),
+            }
+        }
+        Ok(None) => error(StatusCode::NOT_FOUND, "server_node_not_found"),
+        Err(_) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "server_node_inventory_unavailable",
+        ),
+    }
+}
+
 fn bearer_credential<'a>(headers: &'a HeaderMap, expected_id: &str) -> Option<&'a str> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)?
@@ -1221,18 +1250,16 @@ async fn insert_node_event(
     node_id: &str,
     event: &str,
     label: &str,
-    role: &str,
     actor: &str,
     now: i64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO platform_server_node_events
-         (node_id,event,label,role,actor_profile_id,at_unix) VALUES (?,?,?,?,?,?)",
+         (node_id,event,label,actor_profile_id,at_unix) VALUES (?,?,?,?,?)",
     )
     .bind(node_id)
     .bind(event)
     .bind(label)
-    .bind(role)
     .bind(actor)
     .bind(now)
     .execute(&mut **transaction)
@@ -1247,7 +1274,6 @@ fn node_record(row: sqlx::sqlite::SqliteRow) -> NodeRecord {
             .get::<Option<String>, _>("slot_id")
             .unwrap_or_else(|| row.get("id")),
         label: row.get("label"),
-        role: row.get("role"),
         status: row.get("status"),
         version: row.get("version"),
         created_at_unix: row.get("created_at_unix"),
@@ -1266,7 +1292,6 @@ fn server_slot(row: sqlx::sqlite::SqliteRow) -> ServerSlot {
     ServerSlot {
         id: row.get("id"),
         label: row.get("label"),
-        role: row.get("role"),
         status: row.get("status"),
         version: row.get("version"),
         current_node_id: row.get("current_node_id"),
@@ -1280,7 +1305,6 @@ fn node_event(row: sqlx::sqlite::SqliteRow) -> NodeEvent {
         node_id: row.get("node_id"),
         event: row.get("event"),
         label: row.get("label"),
-        role: row.get("role"),
         actor_profile_id: row.get("actor_profile_id"),
         at_unix: row.get("at_unix"),
     }
@@ -1340,9 +1364,9 @@ fn unix_now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{NodeState, router_with_state, sha256_hex};
+    use super::{router_with_state, sha256_hex, NodeState};
     use axum::body::Body;
-    use axum::http::{Request, StatusCode, header};
+    use axum::http::{header, Request, StatusCode};
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::{Row, SqlitePool};
     use std::time::Duration;
@@ -1360,7 +1384,15 @@ mod tests {
             "uptime_seconds": 10,
             "load_average_1m": 0.1,
             "agent_version": "test",
-            "network": null
+            "network": null,
+            "processes": {
+                "schema_version": 1,
+                "source": "procfs",
+                "observed_at_unix": now,
+                "total_processes": 0,
+                "truncated": false,
+                "processes": []
+            }
         });
         let service_ids = [
             "homepage",
@@ -1390,14 +1422,14 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         base["services"] = serde_json::json!(service_snapshot());
-        for version in [1, 2, 4] {
+        for version in [1, 2, 3, 5] {
             let mut outdated = base.clone();
             outdated["schema_version"] = serde_json::json!(version);
             let report: super::TelemetryReport = serde_json::from_value(outdated).unwrap();
             assert!(!super::valid_report(&report, now));
         }
         let mut current = base.clone();
-        current["schema_version"] = serde_json::json!(3);
+        current["schema_version"] = serde_json::json!(4);
         current["services"] = serde_json::json!(service_snapshot());
         let report: super::TelemetryReport = serde_json::from_value(current.clone()).unwrap();
         assert!(super::valid_report(&report, now));
@@ -1407,7 +1439,7 @@ mod tests {
         assert!(!super::valid_report(&report, now));
 
         let mut invalid = current;
-        invalid["schema_version"] = serde_json::json!(3);
+        invalid["schema_version"] = serde_json::json!(4);
         invalid["network"] = serde_json::json!({
             "interfaces": (0..17).map(|index| serde_json::json!({
                 "name": format!("eth{index}"), "loopback": false,
@@ -1461,8 +1493,8 @@ mod tests {
         sqlx::query(
             "CREATE TABLE platform_server_nodes (
                 id TEXT PRIMARY KEY,
+                slot_id TEXT,
                 label TEXT NOT NULL,
-                role TEXT NOT NULL,
                 status TEXT NOT NULL,
                 credential_sha256 TEXT NOT NULL,
                 executor_credential_sha256 TEXT,
@@ -1484,7 +1516,9 @@ mod tests {
                 network_json TEXT,
                 network_sampled_at_unix INTEGER,
                 services_json TEXT,
-                services_sampled_at_unix INTEGER
+                services_sampled_at_unix INTEGER,
+                processes_json TEXT,
+                processes_sampled_at_unix INTEGER
             )",
         )
         .execute(&pool)
@@ -1513,7 +1547,6 @@ mod tests {
                 node_id TEXT NOT NULL,
                 event TEXT NOT NULL,
                 label TEXT NOT NULL,
-                role TEXT NOT NULL,
                 actor_profile_id TEXT NOT NULL,
                 at_unix INTEGER NOT NULL
             )",
@@ -1525,86 +1558,117 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn logical_slot_migration_preserves_existing_active_node_as_its_incarnation() {
-        let pool = test_pool().await;
-        let node_id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO platform_server_nodes
-             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
-             VALUES (?, 'Build node', 'builder', 'active', 'credential-hash', 1, 123, 'owner')",
-        )
-        .bind(&node_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+    async fn host_inventory_reset_is_scoped_to_host_tables() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for table in [
+            "identity_sessions",
+            "platform_deploy_requests",
+            "platform_ssh_access_requests",
+            "platform_server_operations",
+        ] {
+            sqlx::query(&format!("CREATE TABLE {table} (id TEXT PRIMARY KEY)"))
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(&format!("INSERT INTO {table} (id) VALUES ('keep-me')"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for table in [
+            "platform_server_nodes",
+            "platform_server_slots",
+            "platform_server_node_events",
+            "platform_server_network_samples",
+        ] {
+            sqlx::query(&format!("CREATE TABLE {table} (role TEXT NOT NULL)"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
 
-        super::initialize_slots(&pool).await.unwrap();
+        super::reset_host_inventory_schema(&pool).await.unwrap();
 
-        let (slot_id, current_node_id, slot_label, slot_role): (String, String, String, String) =
-            sqlx::query_as(
-                "SELECT s.id,s.current_node_id,s.label,s.role
-                 FROM platform_server_slots s WHERE s.id=?",
+        for table in [
+            "identity_sessions",
+            "platform_deploy_requests",
+            "platform_ssh_access_requests",
+            "platform_server_operations",
+        ] {
+            let retained: String = sqlx::query_scalar(&format!("SELECT id FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(retained, "keep-me", "unrelated table {table} must survive");
+        }
+        for table in [
+            "platform_server_nodes",
+            "platform_server_slots",
+            "platform_server_node_events",
+            "platform_server_network_samples",
+        ] {
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
             )
-            .bind(&node_id)
+            .bind(table)
             .fetch_one(&pool)
             .await
             .unwrap();
-        let incarnation_slot_id: String =
-            sqlx::query_scalar("SELECT slot_id FROM platform_server_nodes WHERE id=?")
-                .bind(&node_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+            assert_eq!(
+                exists, 0,
+                "{table} must be recreated from the role-free schema"
+            );
+        }
 
-        assert_eq!(slot_id, node_id);
-        assert_eq!(current_node_id, node_id);
-        assert_eq!(incarnation_slot_id, slot_id);
-        assert_eq!(slot_label, "Build node");
-        assert_eq!(slot_role, "builder");
-
-        let (local_slot, local_node, local_role): (String, String, String) =
-            sqlx::query_as("SELECT id,current_node_id,role FROM platform_server_slots WHERE id=?")
-                .bind(crate::server_operation_schema::local_slot_id())
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(local_slot, "core");
-        assert_eq!(local_node, crate::server_operation_schema::local_node_id());
-        assert_eq!(local_role, "control-plane");
-    }
-
-    #[tokio::test]
-    async fn logical_slot_migration_keeps_revoked_installation_historical_and_vacant() {
-        let pool = test_pool().await;
-        let node_id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO platform_server_nodes
-             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id,revoked_at_unix,revoked_by_profile_id)
-             VALUES (?, 'Old host', 'backup', 'revoked', 'old-hash', 2, 123, 'owner', 456, 'owner')",
+            "CREATE TABLE platform_server_nodes (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
         )
-        .bind(&node_id)
         .execute(&pool)
         .await
         .unwrap();
-
-        super::initialize_slots(&pool).await.unwrap();
-
-        let current_node_id: Option<String> =
-            sqlx::query_scalar("SELECT current_node_id FROM platform_server_slots WHERE id=?")
-                .bind(&node_id)
+        sqlx::query(
+            "INSERT INTO platform_server_nodes (id,label) VALUES ('current','Core server')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        super::reset_host_inventory_schema(&pool).await.unwrap();
+        let retained_host: String =
+            sqlx::query_scalar("SELECT label FROM platform_server_nodes WHERE id='current'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        let historical_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM platform_server_nodes WHERE id=? AND status='revoked'",
-        )
-        .bind(&node_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        assert_eq!(retained_host, "Core server");
+    }
 
+    #[tokio::test]
+    async fn fresh_host_inventory_has_only_physical_place_metadata() {
+        let pool = test_pool().await;
+        super::initialize_slots(&pool).await.unwrap();
+
+        let (local_slot, status, current_node_id): (String, String, Option<String>) =
+            sqlx::query_as(
+                "SELECT id,status,current_node_id FROM platform_server_slots WHERE id=?",
+            )
+            .bind(crate::server_operation_schema::local_slot_id())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(local_slot, "core");
+        assert_eq!(status, "active");
         assert_eq!(current_node_id, None);
-        assert_eq!(historical_count, 1);
+
+        let columns = sqlx::query("PRAGMA table_info(platform_server_slots)")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(!columns
+            .iter()
+            .any(|row| row.get::<String, _>("name") == "role"));
     }
 
     #[tokio::test]
@@ -1629,7 +1693,7 @@ mod tests {
             .oneshot(admin_request(
                 "POST",
                 "/api/admin/server-nodes",
-                serde_json::json!({"label":"Worker", "role":"builder"}),
+                serde_json::json!({"label":"Worker"}),
             ))
             .await
             .unwrap();
@@ -1664,7 +1728,7 @@ mod tests {
             .oneshot(admin_request(
                 "POST",
                 "/api/admin/server-nodes",
-                serde_json::json!({"label":"Worker", "role":"builder", "slot_id":slot_id}),
+                serde_json::json!({"label":"Worker", "slot_id":slot_id}),
             ))
             .await
             .unwrap();
@@ -1698,7 +1762,7 @@ mod tests {
         authz_task.abort();
     }
 
-    fn telemetry_request_v3(
+    fn telemetry_request_v4(
         node_id: &str,
         credential: &str,
         sampled_at_unix: i64,
@@ -1731,7 +1795,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let body = serde_json::json!({
-            "schema_version": 3,
+            "schema_version": 4,
             "sampled_at_unix": sampled_at_unix,
             "cpu_percent": 24.5,
             "logical_cpu_count": 8,
@@ -1744,7 +1808,15 @@ mod tests {
                 "interfaces": [{"name":"eth0","loopback":false,"rx_bytes":300,"rx_packets":3,"rx_errors":0,"rx_dropped":0,"tx_bytes":200,"tx_packets":2,"tx_errors":0,"tx_dropped":0}],
                 "tcp_states": {"established":2,"syn_sent":0,"syn_received":0,"fin_wait_1":0,"fin_wait_2":0,"time_wait":1,"close":0,"close_wait":0,"last_ack":0,"listen":1,"closing":0,"other":0}
             },
-            "services": services
+            "services": services,
+            "processes": {
+                "schema_version": 1,
+                "source": "procfs",
+                "observed_at_unix": sampled_at_unix,
+                "total_processes": 0,
+                "truncated": false,
+                "processes": []
+            }
         });
         Request::builder()
             .method("POST")
@@ -1763,8 +1835,8 @@ mod tests {
         let now = super::unix_now();
         sqlx::query(
             "INSERT INTO platform_server_nodes
-             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
-             VALUES (?, 'Test node', 'general', 'active', ?, 1, ?, 'test-profile')",
+             (id,label,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+             VALUES (?, 'Test node', 'active', ?, 1, ?, 'test-profile')",
         )
         .bind(&node_id)
         .bind(sha256_hex(credential.as_bytes()))
@@ -1781,7 +1853,7 @@ mod tests {
         });
         let accepted = app
             .clone()
-            .oneshot(telemetry_request_v3(&node_id, &credential, now, false))
+            .oneshot(telemetry_request_v4(&node_id, &credential, now, false))
             .await
             .unwrap();
         assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
@@ -1835,15 +1907,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_three_service_snapshot_is_stored_only_after_valid_report() {
+    async fn schema_four_service_and_process_snapshots_are_stored_only_after_valid_report() {
         let pool = test_pool().await;
         let node_id = uuid::Uuid::new_v4().to_string();
         let credential = format!("v1.{node_id}.{}.{}", "a".repeat(32), "b".repeat(32));
         let now = super::unix_now();
         sqlx::query(
             "INSERT INTO platform_server_nodes
-             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
-             VALUES (?, 'Test node', 'general', 'active', ?, 1, ?, 'test-profile')",
+             (id,label,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+             VALUES (?, 'Test node', 'active', ?, 1, ?, 'test-profile')",
         )
         .bind(&node_id)
         .bind(sha256_hex(credential.as_bytes()))
@@ -1851,18 +1923,58 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        let (authz_endpoint, authz_task) = root_auth_server().await;
         let app = router_with_state(NodeState {
             pool: pool.clone(),
-            authz_endpoint: String::new(),
-            service_token: None,
+            authz_endpoint,
+            service_token: Some("a".repeat(64)),
             client: reqwest::Client::new(),
         });
         let accepted = app
             .clone()
-            .oneshot(telemetry_request_v3(&node_id, &credential, now, false))
+            .oneshot(telemetry_request_v4(&node_id, &credential, now, false))
             .await
             .unwrap();
         assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+
+        let process_response = app
+            .clone()
+            .oneshot(admin_request(
+                "GET",
+                &format!("/api/admin/server-nodes/{node_id}/processes"),
+                serde_json::Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(process_response.status(), StatusCode::OK);
+        assert_eq!(
+            process_response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap(),
+            "private, no-store"
+        );
+        let process_value: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(process_response.into_body(), 16 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(process_value["source"], "procfs");
+        assert!(process_value["processes"].as_array().unwrap().is_empty());
+        assert!(process_value["processes"][0].get("cmdline").is_none());
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/admin/server-nodes/{node_id}/processes"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
         let (stored_json, stored_at): (String, i64) = sqlx::query_as(
             "SELECT services_json,services_sampled_at_unix FROM platform_server_nodes WHERE id=?",
         )
@@ -1876,7 +1988,7 @@ mod tests {
         assert_eq!(stored[1]["cpu_millicores"], 1000);
 
         let rejected = app
-            .oneshot(telemetry_request_v3(&node_id, &credential, now + 1, true))
+            .oneshot(telemetry_request_v4(&node_id, &credential, now + 1, true))
             .await
             .unwrap();
         assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -1888,6 +2000,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(preserved, now);
+        authz_task.abort();
     }
 
     #[tokio::test]
@@ -1898,8 +2011,8 @@ mod tests {
         let now = super::unix_now();
         sqlx::query(
             "INSERT INTO platform_server_nodes
-             (id,label,role,status,credential_sha256,version,created_at_unix,created_by_profile_id)
-             VALUES (?, 'CI worker', 'builder', 'active', ?, 1, ?, 'test-profile')",
+             (id,label,status,credential_sha256,version,created_at_unix,created_by_profile_id)
+             VALUES (?, 'CI worker', 'active', ?, 1, ?, 'test-profile')",
         )
         .bind(&node_id)
         .bind(sha256_hex(credential.as_bytes()))
@@ -1923,7 +2036,7 @@ mod tests {
         let invalid_credential = credential.replace('a', "c");
         let rejected = app
             .clone()
-            .oneshot(telemetry_request_v3(
+            .oneshot(telemetry_request_v4(
                 &node_id,
                 &invalid_credential,
                 now,
@@ -1935,7 +2048,7 @@ mod tests {
 
         let accepted = app
             .clone()
-            .oneshot(telemetry_request_v3(&node_id, &credential, now, false))
+            .oneshot(telemetry_request_v4(&node_id, &credential, now, false))
             .await
             .unwrap();
         assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
@@ -1946,7 +2059,7 @@ mod tests {
 
         let throttled = app
             .clone()
-            .oneshot(telemetry_request_v3(&node_id, &credential, now + 1, false))
+            .oneshot(telemetry_request_v4(&node_id, &credential, now + 1, false))
             .await
             .unwrap();
         assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -1979,7 +2092,7 @@ mod tests {
         .unwrap();
         let out_of_order = app
             .clone()
-            .oneshot(telemetry_request_v3(&node_id, &credential, now, false))
+            .oneshot(telemetry_request_v4(&node_id, &credential, now, false))
             .await
             .unwrap();
         assert_eq!(out_of_order.status(), StatusCode::CONFLICT);
@@ -1998,7 +2111,7 @@ mod tests {
             .await
             .unwrap();
         let revoked = app
-            .oneshot(telemetry_request_v3(&node_id, &credential, now + 2, false))
+            .oneshot(telemetry_request_v4(&node_id, &credential, now + 2, false))
             .await
             .unwrap();
         assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);

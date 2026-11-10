@@ -207,20 +207,12 @@ write_env_value "$build_cache_env" "$build_cache_orchestrator_key" "$build_cache
 write_env_value "$identity_env" "$identity_request_key" "$platform_request_service_token"
 write_env_value "$platform_env" "$platform_request_key" "$platform_request_service_token"
 
-if [ "$VAPOR_SERVER_MODE" = "services" ]; then
-  authz_url="http://127.0.0.1:7113/v1/internal/authorization/check"
-else
-  authz_url="http://127.0.0.1:7110/api/identity/v1/internal/authorization/check"
-fi
+authz_url="http://127.0.0.1:7113/v1/internal/authorization/check"
 write_env_value "$registry_env" "VAPOR_REGISTRY_IDENTITY_AUTHZ_URL" "$authz_url"
 write_env_value "$platform_env" "VAPOR_PLATFORM_IDENTITY_AUTHZ_URL" "$authz_url"
 write_env_value "$artifact_env" "VAPOR_ARTIFACT_IDENTITY_AUTHZ_URL" "$authz_url"
 write_env_value "$build_cache_env" "VAPOR_BUILD_CACHE_IDENTITY_AUTHZ_URL" "$authz_url"
-if [ "$VAPOR_SERVER_MODE" = "services" ]; then
-  request_authz_url="http://127.0.0.1:7113/v1/internal/automation/verify"
-else
-  request_authz_url="http://127.0.0.1:7110/api/identity/v1/internal/automation/verify"
-fi
+request_authz_url="http://127.0.0.1:7113/v1/internal/automation/verify"
 write_env_value "$platform_env" "VAPOR_PLATFORM_IDENTITY_REQUEST_AUTHZ_URL" "$request_authz_url"
 
 echo "authorization: Registry, Platform, Artifact, and Build Cache use separate server-local Identity tokens; values hidden"

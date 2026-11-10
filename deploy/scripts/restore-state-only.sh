@@ -234,14 +234,14 @@ for path in identity platform registry docs updates operations; do
   fi
 done
 if [ "${FRESH_HOST}" = true ]; then
-  if [ "${VAPOR_SERVER_MODE}" = services ]; then
-    systemctl enable --now \
-      vapor-homepage.service vapor-docs.service vapor-identity.service \
-      vapor-diagnostics.service vapor-registry.service vapor-artifact.service \
-      vapor-build-cache.service vapor-platform-server.service
-  else
-    systemctl enable --now vapor-platform-server.service
-  fi
+  [ "${VAPOR_SERVER_MODE}" = services ] || {
+    echo "state-only-restore: unsupported runtime topology" >&2
+    exit 1
+  }
+  systemctl enable --now \
+    vapor-homepage.service vapor-docs.service vapor-identity.service \
+    vapor-diagnostics.service vapor-registry.service vapor-artifact.service \
+    vapor-build-cache.service vapor-platform-server.service
   systemctl enable --now caddy.service vapor-platform-ops.socket
   if [ "${VAPOR_RECOVERY_STAGING:-0}" = "1" ]; then
     # The recovery coordinator still owns the deploy/state lock until this

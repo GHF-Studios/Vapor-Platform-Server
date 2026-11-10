@@ -13,7 +13,7 @@ const MAX_IDENTITY_AUTHORIZATION_RESPONSE_BYTES: usize = 4096;
 
 #[cfg_attr(not(unix), allow(dead_code))]
 fn valid_deployment_target(value: Option<&str>) -> bool {
-    matches!(value, Some("monolith" | "services"))
+    matches!(value, Some("services"))
 }
 
 fn normalize_command_output(output: &str) -> Result<String, ()> {
@@ -3009,7 +3009,7 @@ mod endpoint_tests {
 
     #[test]
     fn deployment_target_must_be_explicit_and_supported() {
-        assert!(valid_deployment_target(Some("monolith")));
+        assert!(!valid_deployment_target(Some("monolith")));
         assert!(valid_deployment_target(Some("services")));
         assert!(!valid_deployment_target(None));
         assert!(!valid_deployment_target(Some("automatic")));

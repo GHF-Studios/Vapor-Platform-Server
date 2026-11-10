@@ -210,11 +210,9 @@ if [ "${RESUME}" = true ] && [ "${marker_phase}" = awaiting_provider_checks ]; t
     || fail "resume bundle source pin differs from the completed recovery"
   [ -f "${CONFIG_ROOT}/platform.env" ] && [ ! -L "${CONFIG_ROOT}/platform.env" ] \
     || fail "restored Platform configuration is missing or unsafe"
-  if grep -q '^VAPOR_SERVER_MODE=services$' "${CONFIG_ROOT}/platform.env"; then
-    IDENTITY_STATUS_URL=http://127.0.0.1:7113/v1/auth/status
-  else
-    IDENTITY_STATUS_URL=http://127.0.0.1:7110/api/identity/v1/auth/status
-  fi
+  grep -q '^VAPOR_SERVER_MODE=services$' "${CONFIG_ROOT}/platform.env" \
+    || fail "recovery bundle does not describe the supported independent-services runtime"
+  IDENTITY_STATUS_URL=http://127.0.0.1:7113/v1/auth/status
   STATUS_FILE="$(mktemp /run/vapor-recovery-identity-status.XXXXXX)"
   curl --fail --silent --show-error --connect-timeout 3 --max-time 15 \
     "${IDENTITY_STATUS_URL}" > "${STATUS_FILE}" \
@@ -282,6 +280,7 @@ PY
 }
 
 MODE="$(read_metadata runtime_mode)" || fail "bundle runtime mode is unavailable"
+[ "${MODE}" = services ] || fail "bundle does not describe the supported independent-services runtime"
 METADATA_REVISION="$(read_metadata root_commit)" || fail "bundle source revision is unavailable"
 [ "${REVISION}" = "${METADATA_REVISION}" ] || fail "bootstrap source pin disagrees with the pinned metadata"
 DOMAIN="$(read_metadata domain)" || fail "bundle domain is unavailable"
@@ -352,7 +351,7 @@ if revision != expected_revision or submodules != expected_submodules or dirty o
     raise SystemExit("fresh-recovery: checkout differs from the clean recorded source pins")
 PY
 
-export VAPOR_SERVER_MODE="${MODE}"
+export VAPOR_SERVER_MODE=services
 export VAPOR_DOMAIN="${DOMAIN}"
 export VAPOR_BRANCH=main
 export VAPOR_REPO_URL="${REPOSITORY_URL}"

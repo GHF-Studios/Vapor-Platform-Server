@@ -12,7 +12,6 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
-const DEFAULT_PROBE_ORIGIN: &str = "http://127.0.0.1:7110";
 const DEFAULT_IDENTITY_AUTHZ_URL: &str =
     "http://127.0.0.1:7110/api/identity/v1/internal/authorization/check";
 
@@ -24,7 +23,6 @@ struct AdminSection {
     name: &'static str,
     path: Option<&'static str>,
     description: &'static str,
-    service_ids: &'static [&'static str],
     state: SectionState,
 }
 
@@ -34,24 +32,14 @@ enum SectionState {
     Planned,
 }
 
-// This is the only section inventory. Service health is reported separately by
-// the overview endpoint; a mounted route must not imply that its service is up.
+// This is the route inventory. The shared header owns the compact service
+// summary; Hosting owns the detailed health list.
 const MODULES: &[AdminSection] = &[
     AdminSection {
         group: "Operate",
         name: "Overview",
         path: Some("/admin"),
-        description: "Service health and readiness",
-        service_ids: &[
-            "platform",
-            "homepage",
-            "docs",
-            "identity",
-            "diagnostics",
-            "registry",
-            "artifacts",
-            "build-cache",
-        ],
+        description: "Decisions and failures that need attention",
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -59,7 +47,6 @@ const MODULES: &[AdminSection] = &[
         name: "Registry",
         path: Some("/admin/registry"),
         description: "Ecosystem source inventory; typed content catalog not implemented",
-        service_ids: &["registry"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -67,7 +54,6 @@ const MODULES: &[AdminSection] = &[
         name: "Identity",
         path: Some("/admin/identity"),
         description: "Accounts and access administration",
-        service_ids: &["identity"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -75,7 +61,6 @@ const MODULES: &[AdminSection] = &[
         name: "Artifacts",
         path: Some("/admin/artifacts"),
         description: "Signed Vapor releases",
-        service_ids: &["artifacts"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -83,7 +68,6 @@ const MODULES: &[AdminSection] = &[
         group: "Ecosystem",
         path: Some("/admin/build-cache"),
         description: "Signed Cargo target snapshots; not a shared compiler cache",
-        service_ids: &["build-cache"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -91,7 +75,6 @@ const MODULES: &[AdminSection] = &[
         name: "Native builders",
         path: None,
         description: "VPS-managed Linux and Windows build orchestration is not available yet",
-        service_ids: &[],
         state: SectionState::Planned,
     },
     AdminSection {
@@ -99,7 +82,6 @@ const MODULES: &[AdminSection] = &[
         name: "Approvals",
         path: Some("/admin/approvals"),
         description: "Pending decisions from Platform and Identity",
-        service_ids: &["platform", "identity"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -107,7 +89,6 @@ const MODULES: &[AdminSection] = &[
         name: "Deployments",
         path: Some("/admin/deployments"),
         description: "Deployment lifecycle and execution stages",
-        service_ids: &["platform"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -115,7 +96,6 @@ const MODULES: &[AdminSection] = &[
         name: "SSH Access",
         path: Some("/admin/ssh-access"),
         description: "Temporary access grants and active sessions",
-        service_ids: &["platform"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -123,16 +103,6 @@ const MODULES: &[AdminSection] = &[
         name: "Hosting",
         path: Some("/admin/hosting"),
         description: "Service health and feature readiness",
-        service_ids: &[
-            "platform",
-            "homepage",
-            "docs",
-            "identity",
-            "diagnostics",
-            "registry",
-            "artifacts",
-            "build-cache",
-        ],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -140,7 +110,6 @@ const MODULES: &[AdminSection] = &[
         name: "Servers",
         path: Some("/admin/servers"),
         description: "Machine inventory and private host telemetry",
-        service_ids: &["platform"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -148,7 +117,6 @@ const MODULES: &[AdminSection] = &[
         name: "History",
         path: Some("/admin/history"),
         description: "Recent owner-sourced request and operation history",
-        service_ids: &["platform", "identity"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -156,7 +124,6 @@ const MODULES: &[AdminSection] = &[
         name: "Recovery",
         path: Some("/admin/recovery"),
         description: "Recovery evidence and backup status",
-        service_ids: &["platform"],
         state: SectionState::Implemented,
     },
     AdminSection {
@@ -164,7 +131,6 @@ const MODULES: &[AdminSection] = &[
         name: "Browser console",
         path: Some("/admin/emergency-console"),
         description: "Explicit short-lived root browser terminal",
-        service_ids: &[],
         state: SectionState::Implemented,
     },
 ];
@@ -193,10 +159,6 @@ body { margin:0; min-height:100vh; }
 .operation-tabs a:hover, .operation-tabs a[aria-current="page"] { background:#26394e; color:#fff; }
 .nav-disabled { display:flex; justify-content:space-between; gap:8px; padding:9px 10px; margin:3px 0; color:#788797; }
 .nav-status { color:#9eacba; font-size:10px; white-space:nowrap; }
-.nav-status.status-unavailable { color:#ed7a80; }
-.nav-status.status-healthy { color:#6fc58a; }
-.nav-status.status-unknown { color:#9eacba; }
-.nav-status.status-degraded { color:#d4bd69; }
 .nav-status.status-planned { color:#d4bd69; }
 .overview-summary { display:flex; align-items:center; justify-content:space-between; gap:10px 18px; flex-wrap:wrap; margin:0 0 10px; padding:10px 12px; border:1px solid #2b3a4b; border-radius:6px; background:#151f2a; }
 .overview-summary p { margin:0; }
@@ -341,7 +303,6 @@ main { padding:30px clamp(20px,4vw,56px); max-width:1100px; }
 .server-node-select[aria-pressed="true"] { outline:2px solid #7bc6a4; outline-offset:3px; border-radius:4px; }
 .server-node-header { display:flex; justify-content:space-between; align-items:center; gap:10px; }
 .server-node-header h3 { margin:0; font-size:15px; }
-.server-node-role { color:#9eacba; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
 .server-node-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0 0; }
 .server-node-metrics > div { min-width:0; background:#111821; border-radius:4px; padding:8px; }
 .server-node-metrics dt { color:#9eacba; font-size:11px; }
@@ -418,6 +379,119 @@ form.inline { display:inline; }
 @media(max-width:720px) { .shell { grid-template-columns:1fr; } .shell > nav { border-right:0; border-bottom:1px solid #2b3a4b; padding:12px; } .nav-group { display:inline-block; margin:8px 8px 4px; } .shell > nav a { display:inline-flex; } .admin-header { align-items:flex-start; flex-direction:column; padding:12px 14px; } .admin-statuses { justify-content:flex-start; } main { padding:20px 14px; } }
 @media(max-width:620px) { .history-controls { grid-template-columns:1fr; } }
 @media(max-width:760px) { .history-workbench { grid-template-columns:1fr; } .history-record-list { max-height:30vh; border-right:0; border-bottom:1px solid #2b3a4b; } }
+
+/* Compact instrument-workbench pass: reuse the established ink and mint palette. */
+:root {
+  --page: #111821;
+  --sidebar: #182330;
+  --surface: #182330;
+  --surface-raised: #202f3f;
+  --surface-input: #111821;
+  --line: #2b3a4b;
+  --line-quiet: #293747;
+  --text: #e4eaf1;
+  --text-secondary: #b7c3cf;
+  --text-muted: #9eacba;
+  --accent: #9fe1ce;
+  --focus: #8fc5f4;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius-control: 6px;
+  --radius-card: 8px;
+}
+body { background:var(--page); color:var(--text); }
+.shell { grid-template-columns:220px minmax(0,1fr); }
+.shell > nav { padding:16px 12px; background:var(--sidebar); border-color:var(--line); }
+.brand { margin-bottom:12px; font-size:15px; font-weight:600; letter-spacing:0; }
+.workspace-bridges { margin-bottom:12px; padding:8px; border-color:var(--line); border-radius:var(--radius-card); background:#141e29; }
+.workspace-bridges > p { margin:0 0 4px; color:var(--text-muted); font-size:11px; letter-spacing:0; text-transform:none; }
+.workspace-bridges a { min-height:32px; padding:4px 8px !important; font-size:13px; }
+.nav-group { margin:20px 8px 6px; color:var(--text-muted); font-size:11px; letter-spacing:0; text-transform:none; }
+.nav-section { margin-top:8px; }
+.nav-section > summary { min-height:32px; padding:4px 8px; }
+.shell > nav a { min-height:32px; gap:8px; padding:4px 8px; margin:2px 0; border-radius:var(--radius-control); }
+.shell > nav a:hover, .shell > nav a[aria-current="page"] { background:#26394e; color:#fff; }
+.nav-disabled { min-height:32px; padding:4px 8px; margin:2px 0; }
+.nav-status { font-size:11px; }
+.operation-tabs { gap:4px; margin:8px 0 16px; padding-bottom:4px; }
+.operation-tabs a { min-height:32px; padding:6px 10px; border-radius:var(--radius-control) var(--radius-control) 0 0; }
+.admin-header { gap:12px; padding:10px 24px; border-color:var(--line); background:#151f2a; }
+.admin-section-name { font-size:14px; font-weight:500; }
+.admin-statuses { gap:4px 12px; }
+.admin-status-item { font-size:12px; }
+.status-pill { padding:1px 6px; border-radius:6px; font-size:11px; }
+main { width:100%; max-width:none; min-width:0; padding:24px clamp(16px,2vw,32px); }
+.eyebrow, .history-kind { color:var(--text-muted); font-size:11px; letter-spacing:0; text-transform:none; }
+h1 { margin:4px 0 16px; font-size:26px; line-height:1.2; font-weight:550; }
+h2 { line-height:1.25; }
+.page-intro { max-width:720px; margin:-8px 0 16px; color:var(--text-secondary); line-height:1.5; }
+.button-link { min-height:34px; padding:0 12px; border-radius:var(--radius-control); background:var(--accent); font-weight:600; }
+.button-link:hover { background:#b8f0df; }
+.card { background:var(--surface); border-color:var(--line); border-radius:var(--radius-card); padding:12px; }
+.deployment-card { gap:6px; }
+.deployment-card-header h3 { font-size:14px; font-weight:550; }
+.history-workbench, .ssh-list-panel, .ssh-detail-panel, .approval-source { border-color:var(--line); border-radius:var(--radius-card); }
+.history-record-list, .ssh-list-toolbar, .ssh-detail-header { border-color:var(--line); }
+.history-record { gap:4px; padding:8px 10px; }
+.history-record-title, .ssh-record strong { font-size:13px; font-weight:550; }
+.history-record-detail, .ssh-detail-panel { padding:12px; }
+.history-source-panel, .ssh-history, .server-room-tabs { border-color:var(--line); }
+.request-queue-table { margin-top:4px; }
+.request-queue-table th, .request-queue-table td { padding:6px 8px; }
+.request-queue-table th, .service-directory th, .server-service-resource-table th { color:var(--text-muted); font-size:11px; font-weight:500; letter-spacing:0; text-transform:none; }
+.history-meta, .history-source-status { gap:4px 8px; margin:6px 0; }
+.history-state, .approval-state { border-radius:6px; padding:1px 6px; font-size:11px; }
+.ssh-workbench { grid-template-columns:minmax(230px,.72fr) minmax(0,1.7fr); gap:12px; }
+.ssh-list-toolbar { padding:8px; }
+.ssh-list-toolbar label { margin-bottom:6px; }
+.ssh-record { padding:8px 10px; }
+.ssh-record span { margin-top:2px; }
+.ssh-facts, .recovery-facts { gap:8px; margin:12px 0; }
+.ssh-fact, .recovery-fact { padding:8px; border-radius:var(--radius-control); }
+.ssh-action-row, .recovery-actions { gap:6px; margin-top:10px; }
+.approval-source { margin:8px 0; }
+.approval-source > summary { gap:8px; min-height:36px; padding:8px 10px; font-weight:550; }
+.approval-source-body { padding:0 10px 8px; }
+.approval-deploy { padding:8px 10px; margin:6px 0; }
+.approval-deploy-header h3 { font-size:14px; font-weight:550; }
+.approval-deploy-primary { gap:4px 8px; margin:4px 0; }
+.approval-deploy-summary { margin:4px 0; }
+.approval-deploy-actions { gap:6px; margin-top:6px; }
+.approval-deploy-actions button { min-height:32px; padding:4px 8px; }
+.server-fleet-grid { gap:8px; }
+.server-node { padding:10px; }
+.server-node-metrics { gap:6px; margin-top:8px; }
+.server-node-metrics > div { padding:6px; border-radius:var(--radius-control); }
+.server-node-metrics dd { margin-top:2px; }
+.server-network-interfaces { gap:6px; }
+.server-network-interface { padding:8px; border-radius:var(--radius-control); }
+.server-room-tabs { margin-bottom:10px; }
+.server-room-tabs [role="tab"] { min-height:32px; padding:6px 10px; }
+.server-room-actions { gap:6px; margin:8px 0; }
+.server-room-actions > button { min-height:36px; }
+.server-node-form { padding:10px; margin:8px 0; border-radius:var(--radius-card); }
+.server-module-actions { gap:6px; margin:8px 0; }
+.server-module-actions button { min-height:34px; }
+.server-operation-list { gap:4px; margin-top:8px; }
+.server-operation-item { gap:4px 8px; padding:6px 0; }
+table { margin:8px 0 16px; }
+td, th { padding:6px 8px; border-color:var(--line); }
+input, select, button { min-height:32px; border-color:#40536a; border-radius:var(--radius-control); padding:4px 8px; }
+button { font-weight:500; }
+label { margin:6px 0; }
+.notice, .error { padding:8px 10px; border-radius:var(--radius-control); }
+@media(max-width:720px) {
+  .shell { grid-template-columns:1fr; }
+  .shell > nav { padding:12px; }
+  .admin-header { padding:10px 16px; }
+  main { padding:16px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  *, *::before, *::after { scroll-behavior:auto !important; transition-duration:0.01ms !important; animation-duration:0.01ms !important; animation-iteration-count:1 !important; }
+}
 "#;
 
 const JS: &str = r#"
@@ -475,30 +549,9 @@ const JS: &str = r#"
       element.textContent = label;
       element.className = `status-pill status-${state}`;
     };
-    const updateNavHealth = services => {
-      for (const link of document.querySelectorAll('[data-admin-services]')) {
-        const status = link.querySelector('[data-nav-status]');
-        if (!status) continue;
-        const requiredIds = link.dataset.adminServices.split(',').filter(Boolean);
-        const required = requiredIds.map(id => services && services.find(item => item.id === id));
-        if (!required.length || required.some(service => !service ||
-            (service.health !== 'healthy' && service.health !== 'unavailable'))) {
-          status.textContent = 'Unknown';
-          status.className = 'nav-status status-unknown';
-          continue;
-        }
-        const healthyCount = required.filter(service => service.health === 'healthy').length;
-        const state = healthyCount === required.length ? 'healthy' :
-          healthyCount === 0 ? 'unavailable' : 'degraded';
-        status.textContent = state === 'healthy' ? 'Healthy' :
-          state === 'unavailable' ? 'Offline' : 'Degraded';
-        status.className = `nav-status status-${state}`;
-      }
-    };
     if (!response) {
       setPill(operator, 'Unavailable', 'unavailable');
       setPill(platform, 'Unavailable', 'unavailable');
-      updateNavHealth(null);
       return;
     }
     if (!response.ok) {
@@ -507,7 +560,6 @@ const JS: &str = r#"
       const state = response.status === 401 || response.status === 403 ? 'protected' : 'unavailable';
       setPill(operator, label, state);
       setPill(platform, response.status === 401 || response.status === 403 ? 'Access restricted' : 'Unavailable', state);
-      updateNavHealth(null);
       return;
     }
 
@@ -520,11 +572,10 @@ const JS: &str = r#"
     const platformLabel = platformState === 'healthy' ? 'Healthy' :
       platformState === 'unavailable' ? 'Offline' : 'Unknown';
     setPill(platform, platformLabel, platformState);
-    updateNavHealth(services);
   };
-  const overview = document.querySelector('#platform-overview, #operations-status');
-  const hasServiceBadges = document.querySelector('[data-admin-services]');
-  if (overview || hasServiceBadges) {
+  const overview = document.querySelector('#operations-status');
+  const hasPlatformStatus = document.querySelector('[data-platform-status]');
+  if (overview || hasPlatformStatus) {
     fetch('/api/admin/overview', { credentials: 'same-origin', cache: 'no-store' })
       .then(async response => ({ response, body: await response.json().catch(() => null) }))
       .then(({ response, body }) => {
@@ -557,14 +608,6 @@ const JS: &str = r#"
         summaryText.append(state, document.createTextNode(` · ${services.length} services · revision ${body.deployed_revision || 'not recorded'}`));
         summary.append(summaryText);
         overview.append(summary);
-
-        if (overview.id === 'platform-overview') {
-          const hosting = document.createElement('a');
-          hosting.href = '/admin/hosting';
-          hosting.textContent = 'View service details';
-          overview.append(hosting);
-          return;
-        }
 
         const table = document.createElement('table');
         table.className = 'service-directory';
@@ -691,7 +734,7 @@ const JS: &str = r#"
         title.textContent = `${record.operation === 'deploy' ? 'Latest deployment' : 'Latest restore'}: ${record.result}`;
         const details = document.createElement('p');
         details.className = 'muted';
-        details.textContent = `Revision ${record.revision} · ${record.server_mode} · started ${record.started_at_utc} · finished ${record.finished_at_utc}`;
+        details.textContent = `Revision ${record.revision} · started ${record.started_at_utc} · finished ${record.finished_at_utc}`;
         latestOperation.append(title, details);
       })
       .catch(() => {
@@ -786,13 +829,13 @@ const JS: &str = r#"
     };
     const serviceDeployTargets = new Set((document.querySelector('[data-deployment-targets]')?.dataset.deploymentTargets || '').split(',').filter(Boolean));
     const validDeploymentSelection = item => {
-      if (!['monolith', 'services'].includes(item.server_mode)) return false;
+      if (item.server_mode !== 'services') return false;
       if (item.deployment_scope === 'full') return item.service_target === null;
       return item.deployment_scope === 'service' && item.server_mode === 'services' && serviceDeployTargets.has(item.service_target);
     };
     const deploymentSelectionLabel = item => {
       if (!validDeploymentSelection(item)) return 'missing or invalid (cannot be approved)';
-      if (item.deployment_scope === 'full') return `Full ${item.server_mode} deployment`;
+      if (item.deployment_scope === 'full') return 'Platform update';
       return `Service: ${item.service_target}`;
     };
     const isExpiredByTime = item => Number(item.expires_at_unix) > 0
@@ -1153,7 +1196,6 @@ const JS: &str = r#"
         record.details = [
           `Started: ${humanTime(Number(item.started_at_unix))}`,
           `Finished: ${humanTime(Number(item.finished_at_unix))}`,
-          `Mode: ${safeText(item.server_mode)}`,
           `Operation ID: ${safeText(item.operation_id)}`
         ];
         record.search = [record.title, record.subject, ...record.details].join(' ');
@@ -1992,7 +2034,6 @@ const JS: &str = r#"
     const nodeForm = document.querySelector('#server-node-connect-form');
     const nodeSlot = document.querySelector('#server-node-slot');
     const nodeLabel = document.querySelector('#server-node-label');
-    const nodeRole = document.querySelector('#server-node-role');
     const nodeStatus = document.querySelector('#server-node-management-status');
     const nodeManagement = document.querySelector('#server-node-management');
     const nodeSecretPanel = document.querySelector('#server-node-secret');
@@ -2009,12 +2050,18 @@ const JS: &str = r#"
     const selectedServerName = document.querySelector('#server-selected-name');
     const selectedServerState = document.querySelector('#server-selected-state');
     const selectedServerOverview = document.querySelector('#server-selected-overview');
-  const networkPanel = document.querySelector('#server-network-panel');
+  const networkPanel = document.querySelector('[data-server-panel="diagnostics"]');
   const networkStatus = document.querySelector('#server-network-status');
   const networkDetails = document.querySelector('#server-network-details');
   const networkRange = document.querySelector('#server-network-range');
   const networkCanvas = document.querySelector('#server-network-chart');
   const networkRefresh = document.querySelector('#server-network-refresh');
+  const processPanel = document.querySelector('[data-server-panel="processes"]');
+  const processStatus = document.querySelector('#server-process-status');
+  const processList = document.querySelector('#server-process-list');
+  const processRefresh = document.querySelector('#server-process-refresh');
+  let processRequest = null;
+  let processRequestServerId = null;
     let createdNodeConfig = null;
     let connectionMode = 'new';
     let selectedServerId = null;
@@ -2030,6 +2077,7 @@ const JS: &str = r#"
       }
       for (const panel of serverPanels) panel.hidden = panel.dataset.serverPanel !== name;
       if (name === 'diagnostics' && selectedServerId) refreshNetwork();
+      if (name === 'processes') refreshProcesses();
     };
     for (const tab of serverTabs) {
       tab.addEventListener('click', () => activateServerTool(tab.dataset.serverTab));
@@ -2046,7 +2094,7 @@ const JS: &str = r#"
       if (selectedServerName) selectedServerName.textContent = node.label || 'Unnamed server';
       const stateLabels = { online: 'Online', stale: 'Stale telemetry', revoked: 'Disconnected', 'never-reported': 'Waiting for first check-in', unavailable: 'Unavailable' };
       const controlState = node.id === lastFleetData?.local_node_id || node.executor_online ? 'typed controls ready' : 'telemetry only · typed controls unavailable';
-      if (selectedServerState) selectedServerState.textContent = `${stateLabels[node.state] || 'Unavailable'} · ${node.role || 'server'} · ${controlState}`;
+      if (selectedServerState) selectedServerState.textContent = `${stateLabels[node.state] || 'Unavailable'} · ${controlState}`;
       if (selectedServerOverview) {
         selectedServerOverview.replaceChildren();
         const metrics = document.createElement('dl'); metrics.className = 'server-node-metrics';
@@ -2066,6 +2114,7 @@ const JS: &str = r#"
       }
       if (serverOperationData) renderServerOperations(serverOperationData);
       if (networkPanel && !networkPanel.hidden) refreshNetwork();
+      if (processPanel && !processPanel.hidden) refreshProcesses();
     };
     const formatBytes = value => {
       let amount = Number(value);
@@ -2119,7 +2168,7 @@ const JS: &str = r#"
       table.append(head, body); serverServiceMetrics.append(table);
     };
     const renderFleet = data => {
-      if (data?.schema_version !== 1 || !['local-platform-host-only', 'platform-host-and-enrolled-nodes'].includes(data?.scope) || typeof data.local_node_id !== 'string' || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
+      if (data?.schema_version !== 1 || !['local-platform-host-only', 'platform-host-and-connected-servers'].includes(data?.scope) || typeof data.local_node_id !== 'string' || !Array.isArray(data.nodes) || !Number.isInteger(data.reporting_node_count)) throw new Error('The server inventory response has an unsupported format.');
       lastFleetData = data;
       fleetList.replaceChildren();
       const reporting = data.nodes.filter(node => node.state === 'online').length;
@@ -2136,7 +2185,6 @@ const JS: &str = r#"
         const status = document.createElement('span'); status.className = `server-node-status${node.state === 'online' ? '' : node.state === 'stale' ? ' stale' : ' unavailable'}`;
         status.textContent = stateLabels[node.state] || 'Unavailable';
         header.append(title, status); select.append(header);
-        const role = document.createElement('p'); role.className = 'server-node-role'; role.textContent = node.role || 'server';
         const metrics = document.createElement('dl'); metrics.className = 'server-node-metrics';
         metric(metrics, 'CPU', Number.isFinite(node.cpu_percent) ? `${Number(node.cpu_percent).toFixed(1)}% · ${node.logical_cpu_count || '?'} cores` : `Sampling · ${node.logical_cpu_count || '?'} cores`);
         metric(metrics, 'Memory', node.memory_total_bytes != null && node.memory_available_bytes != null ? `${formatBytes(Number(node.memory_total_bytes) - Number(node.memory_available_bytes))} used / ${formatBytes(node.memory_total_bytes)}` : 'Unavailable');
@@ -2145,7 +2193,7 @@ const JS: &str = r#"
         const freshness = document.createElement('p'); freshness.className = 'server-fleet-note';
         const age = Math.max(0, Math.floor(Date.now() / 1000) - Number(node.observed_at_unix || data.observed_at_unix));
         freshness.textContent = node.state === 'never-reported' ? 'No telemetry received yet.' : `Received ${age < 5 ? 'just now' : `${age}s ago`} · metrics ${node.metrics_state || 'unknown'}`;
-        select.addEventListener('click', () => renderSelectedServer(node)); card.append(select, role, metrics, freshness); fleetList.append(card);
+        select.addEventListener('click', () => renderSelectedServer(node)); card.append(select, metrics, freshness); fleetList.append(card);
       }
       if (serverActionTarget && data.local_node_id) {
         serverActionTarget.dataset.localNodeId = data.local_node_id;
@@ -2168,6 +2216,67 @@ const JS: &str = r#"
       } finally { if (fleetRefresh) fleetRefresh.disabled = false; }
     };
     fleetRefresh?.addEventListener('click', refreshFleet); refreshFleet();
+
+    const refreshProcesses = async () => {
+      if (!processPanel || processPanel.hidden || !processList || !processStatus) return;
+      const nodeId = selectedServerId || lastFleetData?.local_node_id;
+      if (!nodeId) {
+        processList.replaceChildren();
+        processStatus.textContent = 'Select a host before reading its process list.';
+        return;
+      }
+      if (processRequest && processRequestServerId === nodeId) return;
+      processRequest?.abort();
+      const controller = new AbortController();
+      processRequest = controller;
+      processRequestServerId = nodeId;
+      let timedOut = false;
+      const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 6000);
+      if (processRefresh) processRefresh.disabled = true;
+      processStatus.textContent = 'Reading the selected host process list…';
+      try {
+        const response = await fetch(`/api/admin/server-nodes/${encodeURIComponent(nodeId)}/processes`, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || data?.schema_version !== 1 || !Array.isArray(data.processes)) {
+          const messages = {
+            process_inventory_not_yet_available: 'The selected host has not reported its process list yet.',
+            process_inventory_stale: 'The selected host process list is stale. Check the host agent connection.',
+            server_node_disconnected: 'The selected host is disconnected.',
+            server_node_not_found: 'The selected host is no longer registered.'
+          };
+          throw new Error(response.status === 401 || response.status === 403 ? 'Root sign-in is required.' : messages[data?.error] || `Process inventory unavailable (HTTP ${response.status}).`);
+        }
+        processList.replaceChildren();
+        const table = document.createElement('table'); table.className = 'server-service-resource-table';
+        const head = document.createElement('thead'); const header = document.createElement('tr');
+        for (const label of ['PID', 'Parent', 'Process', 'State', 'UID', 'Threads', 'Memory', 'CPU']) { const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label; header.append(cell); }
+        head.append(header); const body = document.createElement('tbody');
+        for (const item of data.processes) {
+          const row = document.createElement('tr');
+          const pid = document.createElement('th'); pid.scope = 'row'; pid.textContent = String(item.pid);
+          row.append(pid);
+          const cpu = item.cpu_percent != null && Number.isFinite(Number(item.cpu_percent)) ? `${Number(item.cpu_percent).toFixed(1)}%` : '—';
+          for (const value of [String(item.parent_pid), item.name, item.state, item.uid == null ? '—' : String(item.uid), String(item.threads), item.resident_bytes == null ? 'Unavailable' : formatBytes(item.resident_bytes), cpu]) {
+            const cell = document.createElement('td'); cell.textContent = String(value); row.append(cell);
+          }
+          body.append(row);
+        }
+        table.append(head, body); processList.append(table);
+        const age = Math.max(0, Math.floor(Date.now() / 1000) - Number(data.observed_at_unix || 0));
+        processStatus.textContent = `${data.total_processes} processes · sampled ${age < 5 ? 'just now' : `${age}s ago`}${data.truncated ? ' · showing first 512' : ''}`;
+      } catch (error) {
+        if (processRequest !== controller) return;
+        if (error.name === 'AbortError' && !timedOut) return;
+        processList.replaceChildren(); processStatus.textContent = timedOut ? 'Process inventory request timed out.' : error.message || 'Process inventory unavailable.';
+      } finally {
+        clearTimeout(timeout);
+        if (processRequest === controller) {
+          processRequest = null; processRequestServerId = null;
+          if (processRefresh) processRefresh.disabled = false;
+        }
+      }
+    };
+    processRefresh?.addEventListener('click', refreshProcesses);
 
     let networkRequest = null;
     let networkRequestServerId = null;
@@ -2345,13 +2454,13 @@ const JS: &str = r#"
         nodeSlot.replaceChildren(new Option('Create a new logical slot', ''));
         for (const slot of data.slots) {
           if (slot.status === 'vacant') {
-            const option = new Option(`${slot.label} · ${slot.role} · ${slot.id}`, slot.id);
-            option.dataset.label = slot.label; option.dataset.role = slot.role; nodeSlot.add(option);
+            const option = new Option(`${slot.label} · ${slot.id}`, slot.id);
+            option.dataset.label = slot.label; nodeSlot.add(option);
           }
           const row = document.createElement('article'); row.className = 'server-node-management-row';
           const details = document.createElement('div');
           const title = document.createElement('strong'); title.textContent = slot.label;
-          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${slot.role} · ${slot.status} · ${slot.current_node_id ? `current installation ${slot.current_node_id}` : 'no active installation'} · slot ${slot.id}`;
+          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${slot.status} · ${slot.current_node_id ? `current installation ${slot.current_node_id}` : 'no active installation'} · slot ${slot.id}`;
           details.append(title, meta); row.append(details); nodeManagement.append(row);
         }
         if (nodeStartReplacement) nodeStartReplacement.disabled = nodeSlot.options.length <= 1;
@@ -2367,7 +2476,7 @@ const JS: &str = r#"
           if (localId) serverActionTarget.add(new Option('Core server · this Platform host', localId));
           for (const node of data.nodes) {
             if (node.status === 'active' && node.executor_enabled && node.executor_online) {
-              serverActionTarget.add(new Option(`${node.label} · ${node.role}`, node.id));
+              serverActionTarget.add(new Option(node.label, node.id));
             }
           }
           const desiredTarget = selectedServerId || selectedTarget;
@@ -2380,7 +2489,7 @@ const JS: &str = r#"
           const details = document.createElement('div');
           const title = document.createElement('strong'); title.textContent = node.label;
           const capability = node.status !== 'active' ? 'revoked' : node.executor_online ? 'telemetry + typed actions · online' : node.executor_enabled ? 'executor configured · offline' : 'telemetry only';
-          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${node.role} · ${capability} · ${node.status} · slot ${node.slot_id} · installation ${node.id} · ${node.last_report_received_at_unix ? `last report ${new Date(node.last_report_received_at_unix * 1000).toLocaleString()}` : 'never reported'}`;
+          const meta = document.createElement('p'); meta.className = 'muted'; meta.textContent = `${capability} · ${node.status} · slot ${node.slot_id} · installation ${node.id} · ${node.last_report_received_at_unix ? `last report ${new Date(node.last_report_received_at_unix * 1000).toLocaleString()}` : 'never reported'}`;
           details.append(title, meta); row.append(details);
           if (node.status === 'active') {
             const revoke = document.createElement('button'); revoke.type = 'button'; revoke.textContent = 'Revoke';
@@ -2402,7 +2511,7 @@ const JS: &str = r#"
           const summary = document.createElement('summary'); summary.textContent = `Recent server changes · ${recentEvents.length}`;
           const list = document.createElement('ul');
           for (const event of recentEvents) {
-            const item = document.createElement('li'); item.textContent = `${event.event} · ${event.label} (${event.role}) · ${new Date(event.at_unix * 1000).toLocaleString()} · operator ${event.actor_profile_id}`; list.append(item);
+            const item = document.createElement('li'); item.textContent = `${event.event} · ${event.label} · ${new Date(event.at_unix * 1000).toLocaleString()} · operator ${event.actor_profile_id}`; list.append(item);
           }
           disclosure.append(summary, list); nodeManagement.append(disclosure);
         }
@@ -2414,10 +2523,9 @@ const JS: &str = r#"
       const slot = connectionMode === 'replacement' && selected?.value ? selected : null;
       if (slot) {
         nodeLabel.value = slot.dataset.label;
-        nodeRole.value = slot.dataset.role;
-        nodeLabel.readOnly = true; nodeRole.disabled = true;
+        nodeLabel.readOnly = true;
       } else {
-        nodeLabel.readOnly = false; nodeRole.disabled = false;
+        nodeLabel.readOnly = false;
       }
     };
     const startConnection = mode => {
@@ -2454,7 +2562,7 @@ const JS: &str = r#"
       if (connectionMode === 'replacement' && !nodeSlot.value) { nodeStatus.textContent = 'Choose a vacant server place for the replacement.'; return; }
       const submit = nodeForm.querySelector('button[type="submit"]'); submit.disabled = true; nodeStatus.textContent = 'Preparing the connection…';
       try {
-        const request = { label: nodeLabel.value, role: nodeRole.value };
+        const request = { label: nodeLabel.value };
         if (nodeSlot.value) request.slot_id = nodeSlot.value;
         const created = await postNodeApi('/api/admin/server-nodes', request);
         nodeSecretValue.textContent = `Telemetry credential:\n${created.reporter_credential}\n\nTyped executor credential:\n${created.executor_credential}\n\n${created.warning}`;
@@ -2819,12 +2927,10 @@ fn render_admin_navigation(current_path: &str) -> String {
                     } else {
                         ""
                     };
-                    let services = section.service_ids.join(",");
                     html.push_str(&format!(
-                        "<a href=\"{}\" title=\"{}\" data-admin-services=\"{}\"{}><span>{}</span><small class=\"nav-status status-unknown\" data-nav-status>Checking</small></a>",
+                        "<a href=\"{}\" title=\"{}\"{}>{}</a>",
                         escape_html(path),
                         escape_html(section.description),
-                        escape_html(&services),
                         current,
                         escape_html(section.name)
                     ));
@@ -2851,7 +2957,7 @@ fn section_path_matches(section_path: &str, current_path: &str) -> bool {
 }
 
 async fn landing() -> Response {
-    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><p class=\"page-intro\">Service health and work that needs an operator decision. Sign in with an authorized Steam-linked Vapor account to load protected information.</p><section class=\"card\" aria-labelledby=\"service-overview-title\"><div class=\"request-queue-header\"><h2 id=\"service-overview-title\">Service health</h2></div><div id=\"platform-overview\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Approvals and execution follow-up</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Counts describe loaded records; “shown” means older pages remain. Awaiting approval means a decision is still needed. Execution follow-up means approval is already saved, but deployment dispatch needs attention. Active SSH grants, running deployments, and past decisions have their own work areas.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section>";
+    let fragment = "<p class=\"eyebrow\">Platform</p><h1>Overview</h1><p class=\"page-intro\">Decisions awaiting you and deployment work that needs follow-up.</p><section class=\"card\" aria-labelledby=\"operator-queue-title\"><div class=\"request-queue-header\"><h2 id=\"operator-queue-title\">Needs attention</h2><button id=\"operator-queue-refresh\" type=\"button\">Refresh</button></div><p class=\"muted\">Pending approvals and failed deployment dispatches need follow-up.</p><div id=\"operator-queue\" aria-live=\"polite\"><p class=\"muted\">Checking operator access…</p></div></section>";
     admin_page_response(StatusCode::OK, fragment)
 }
 
@@ -2863,14 +2969,15 @@ fn server_fleet_page_content() -> &'static str {
     concat!(
         "<p class=\"eyebrow\">Infrastructure · Operator workbench</p><div class=\"server-fleet-toolbar\"><div><h1>Servers</h1><p class=\"page-intro\">Inspect and operate the machines that run Vapor. Use named controls for routine work; the separately gated console is there for tasks the tools do not cover.</p></div><button id=\"server-fleet-refresh\" type=\"button\">Refresh</button></div>",
         "<section class=\"card\" aria-labelledby=\"server-machines-title\"><div class=\"server-fleet-toolbar\"><h2 id=\"server-machines-title\">Machines</h2><div id=\"server-fleet-summary\" role=\"status\" aria-live=\"polite\">Loading server inventory…</div></div><div id=\"server-fleet-list\" class=\"server-fleet-grid\"><p class=\"muted\">Loading machine telemetry…</p></div></section>",
-        "<section class=\"card server-room\" aria-label=\"Selected server tools\"><header class=\"server-room-selected\"><div><p class=\"eyebrow\">Selected machine</p><h2 id=\"server-selected-name\">Core server</h2></div><p id=\"server-selected-state\" class=\"muted\">Waiting for inventory…</p></header><div class=\"server-room-tabs\" role=\"tablist\" aria-label=\"Server tools\"><button id=\"server-tab-overview\" type=\"button\" role=\"tab\" aria-selected=\"true\" aria-controls=\"server-panel-overview\" tabindex=\"0\" data-server-tab=\"overview\">Overview</button><button id=\"server-tab-services\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-services\" tabindex=\"-1\" data-server-tab=\"services\">Services</button><button id=\"server-tab-diagnostics\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-diagnostics\" tabindex=\"-1\" data-server-tab=\"diagnostics\">Diagnostics</button><button id=\"server-tab-access\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-access\" tabindex=\"-1\" data-server-tab=\"access\">SSH access</button><button id=\"server-tab-activity\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-activity\" tabindex=\"-1\" data-server-tab=\"activity\">Activity</button><button id=\"server-tab-console\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-console\" tabindex=\"-1\" data-server-tab=\"console\">Console</button><button id=\"server-tab-connections\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-connections\" tabindex=\"-1\" data-server-tab=\"connections\">Connections</button></div>",
+        "<section class=\"card server-room\" aria-label=\"Selected server tools\"><header class=\"server-room-selected\"><div><p class=\"eyebrow\">Selected machine</p><h2 id=\"server-selected-name\">Core server</h2></div><p id=\"server-selected-state\" class=\"muted\">Waiting for inventory…</p></header><div class=\"server-room-tabs\" role=\"tablist\" aria-label=\"Server tools\"><button id=\"server-tab-overview\" type=\"button\" role=\"tab\" aria-selected=\"true\" aria-controls=\"server-panel-overview\" tabindex=\"0\" data-server-tab=\"overview\">Overview</button><button id=\"server-tab-processes\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-processes\" tabindex=\"-1\" data-server-tab=\"processes\">Processes</button><button id=\"server-tab-services\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-services\" tabindex=\"-1\" data-server-tab=\"services\">Vapor services</button><button id=\"server-tab-diagnostics\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-diagnostics\" tabindex=\"-1\" data-server-tab=\"diagnostics\">Network</button><button id=\"server-tab-access\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-access\" tabindex=\"-1\" data-server-tab=\"access\">SSH access</button><button id=\"server-tab-activity\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-activity\" tabindex=\"-1\" data-server-tab=\"activity\">Activity</button><button id=\"server-tab-console\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-console\" tabindex=\"-1\" data-server-tab=\"console\">Console</button><button id=\"server-tab-connections\" type=\"button\" role=\"tab\" aria-selected=\"false\" aria-controls=\"server-panel-connections\" tabindex=\"-1\" data-server-tab=\"connections\">Connections</button></div>",
+        "<section id=\"server-panel-processes\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-processes\" data-server-panel=\"processes\" hidden><div class=\"server-network-toolbar\"><h3>Host processes</h3><button id=\"server-process-refresh\" type=\"button\">Refresh</button></div><p id=\"server-process-status\" class=\"muted\" role=\"status\" aria-live=\"polite\">Select Processes to inspect the current host process list.</p><div id=\"server-process-list\"></div><p class=\"muted\">CPU is measured since the previous refresh. Process arguments, environment variables, and executable paths are excluded.</p></section>",
         "<section id=\"server-panel-overview\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-overview\" data-server-panel=\"overview\"><h3>Host overview</h3><p class=\"muted\">CPU, memory, load, and uptime below describe the selected machine as a whole. Service-by-service readings are not collected yet.</p><div id=\"server-selected-overview\" class=\"server-selected-overview\" role=\"status\">Select a machine to inspect its latest sample.</div></section>",
         "<section id=\"server-panel-services\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-services\" data-server-panel=\"services\" hidden><h3>Services and modules</h3><p class=\"muted\">Choose a named module on the selected machine. Read CPU, memory, and block I/O from fixed service cgroups; missing readings stay unavailable. <a href=\"/admin/hosting\">View service health</a>.</p><div class=\"server-operation-controls\"><label>Machine<select id=\"server-action-target\"><option value=\"\">Loading hosts…</option></select></label></div><div id=\"server-module-actions\" class=\"server-module-actions\"><button type=\"button\" data-service=\"homepage\" data-label=\"Homepage\">Restart Homepage</button><button type=\"button\" data-service=\"docs\" data-label=\"Docs\">Restart Docs</button><button type=\"button\" data-service=\"identity\" data-label=\"Identity\">Restart Identity</button><button type=\"button\" data-service=\"diagnostics\" data-label=\"Diagnostics\">Restart Diagnostics</button><button type=\"button\" data-service=\"registry\" data-label=\"Registry\">Restart Registry</button><button type=\"button\" data-service=\"artifact\" data-label=\"Artifact\">Restart Artifact</button><button type=\"button\" data-service=\"build_cache\" data-label=\"Build Cache\">Restart Build Cache</button><button type=\"button\" data-service=\"caddy\" data-label=\"Web gateway\">Restart Web gateway</button></div><p class=\"muted\">Restarting the machine or web gateway is currently limited to the core server.</p><button id=\"server-action-reboot\" type=\"button\">Restart machine…</button><p id=\"server-action-status\" role=\"status\" aria-live=\"polite\">Waiting for server inventory…</p></section>",
         "<section id=\"server-panel-diagnostics\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-diagnostics\" data-server-panel=\"diagnostics\" hidden><div class=\"server-network-toolbar\"><h3>Network traffic</h3><label>History<select id=\"server-network-range\"><option value=\"1h\">1 hour</option><option value=\"6h\">6 hours</option><option value=\"24h\">24 hours</option><option value=\"7d\">7 days</option></select></label><button id=\"server-network-refresh\" type=\"button\">Refresh</button></div><p id=\"server-network-status\" class=\"muted\" role=\"status\" aria-live=\"polite\">Choose a server to inspect network counters.</p><canvas id=\"server-network-chart\" class=\"server-network-chart\" height=\"120\" aria-label=\"Inbound traffic history chart\"></canvas><div id=\"server-network-details\"></div><p class=\"muted\">Traffic history excludes loopback from totals. The agent reports interface counters and TCP state counts; it does not retain peer addresses or packet contents.</p></section>",
         "<section id=\"server-panel-access\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-access\" data-server-panel=\"access\" hidden><h3>SSH authorizations</h3><p class=\"muted\">Review temporary SSH requests and active grants for the core server. Remote-host SSH management is not connected to this workbench yet.</p><a class=\"button-link\" href=\"/admin/ssh-access\">Open SSH access manager</a></section>",
         "<section id=\"server-panel-activity\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-activity\" data-server-panel=\"activity\" hidden><h3>Recent server actions</h3><p class=\"muted\">Every action is recorded before it is sent to a machine. An uncertain result is shown for review and is never silently repeated.</p><div id=\"server-operation-list\" class=\"server-operation-list\"><p class=\"muted\">Loading action history…</p></div></section>",
         "<section id=\"server-panel-console\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-console\" data-server-panel=\"console\" hidden><h3>Emergency console</h3><p class=\"muted\">This is a separate, time-limited root shell for the core server. It is not shared desktop access; typed server tools remain the normal path.</p><a class=\"button-link\" href=\"/admin/emergency-console\">Open emergency console controls</a></section>",
-        "<section id=\"server-panel-connections\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-connections\" data-server-panel=\"connections\" hidden><h3>Connect a machine</h3><p class=\"muted\">Provision the VPS through your provider first. Vapor then records the machine and prepares its outbound monitoring and typed-action connection.</p><div class=\"server-room-actions\"><button id=\"server-node-start-new\" type=\"button\">Add server<small>Connect a new machine you already own</small></button><button id=\"server-node-start-replacement\" type=\"button\">Reconnect replacement<small>Attach a fresh install to a vacant server place</small></button></div><form id=\"server-node-connect-form\" class=\"server-node-connect-form server-node-form\" hidden><h4 id=\"server-node-form-title\">Add server</h4><p id=\"server-node-form-copy\" class=\"muted\">This prepares Vapor’s connection; it does not provision hardware.</p><label>Server place<select id=\"server-node-slot\" name=\"slot_id\"><option value=\"\">Create a new place</option></select></label><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><label>Primary use<select id=\"server-node-role\" name=\"role\"><option value=\"builder\">Build worker</option><option value=\"backup\">Backup node</option><option value=\"general\">General</option><option value=\"control-plane\">Control plane</option></select></label><button id=\"server-node-submit\" type=\"submit\">Prepare connection</button><button id=\"server-node-cancel\" type=\"button\">Cancel</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><h4>Connection prepared</h4><ol class=\"server-node-setup-steps\"><li>Download the config file.</li><li>Install the tested Vapor node-agent package on that machine.</li><li>Start the agent and return here; it appears online after it checks in.</li></ol><p class=\"muted\">The config contains two one-time credentials. Platform stores only their separate hashes. Keep the download private and remove extra copies.</p><pre id=\"server-node-secret-value\" hidden></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-download\" type=\"button\">Download agent config</button><button id=\"server-node-secret-reveal\" type=\"button\" aria-expanded=\"false\">Show one-time credentials</button><button id=\"server-node-secret-close\" type=\"button\">Clear setup data</button></div></div><details class=\"server-node-records\"><summary>Connection records and history</summary><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></details></section>",
+        "<section id=\"server-panel-connections\" class=\"server-room-panel\" role=\"tabpanel\" aria-labelledby=\"server-tab-connections\" data-server-panel=\"connections\" hidden><h3>Connect a machine</h3><p class=\"muted\">Provision the VPS through your provider first. Vapor then records the machine and prepares its outbound monitoring and typed-action connection.</p><div class=\"server-room-actions\"><button id=\"server-node-start-new\" type=\"button\">Add server<small>Connect a new machine you already own</small></button><button id=\"server-node-start-replacement\" type=\"button\">Reconnect replacement<small>Attach a fresh install to a vacant server place</small></button></div><form id=\"server-node-connect-form\" class=\"server-node-connect-form server-node-form\" hidden><h4 id=\"server-node-form-title\">Add server</h4><p id=\"server-node-form-copy\" class=\"muted\">This prepares Vapor’s connection; it does not provision hardware.</p><label>Server place<select id=\"server-node-slot\" name=\"slot_id\"><option value=\"\">Create a new place</option></select></label><label>Display name<input id=\"server-node-label\" name=\"label\" maxlength=\"80\" required autocomplete=\"off\"></label><button id=\"server-node-submit\" type=\"submit\">Prepare connection</button><button id=\"server-node-cancel\" type=\"button\">Cancel</button></form><div id=\"server-node-secret\" class=\"server-node-secret\" hidden><h4>Connection prepared</h4><ol class=\"server-node-setup-steps\"><li>Download the config file.</li><li>Install the tested Vapor node-agent package on that machine.</li><li>Start the agent and return here; it appears online after it checks in.</li></ol><p class=\"muted\">The config contains two one-time credentials. Platform stores only their separate hashes. Keep the download private and remove extra copies.</p><pre id=\"server-node-secret-value\" hidden></pre><div class=\"server-fleet-toolbar\"><button id=\"server-node-secret-download\" type=\"button\">Download agent config</button><button id=\"server-node-secret-reveal\" type=\"button\" aria-expanded=\"false\">Show one-time credentials</button><button id=\"server-node-secret-close\" type=\"button\">Clear setup data</button></div></div><details class=\"server-node-records\"><summary>Connection records and history</summary><p id=\"server-node-management-status\" role=\"status\" aria-live=\"polite\">Loading server records…</p><div id=\"server-node-management\"></div></details></section>",
         "</section>"
     )
 }
@@ -3134,8 +3241,7 @@ async fn overview(headers: axum::http::HeaderMap) -> Response {
     let endpoint = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_URL")
         .unwrap_or_else(|_| DEFAULT_IDENTITY_AUTHZ_URL.to_owned());
     let service_token = std::env::var("VAPOR_PLATFORM_IDENTITY_AUTHZ_TOKEN").ok();
-    let origin = std::env::var("VAPOR_PLATFORM_PROBE_ORIGIN")
-        .unwrap_or_else(|_| DEFAULT_PROBE_ORIGIN.to_owned());
+    let probe_targets = ProbeTargets::local_services();
     let auth_client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(1))
         .timeout(Duration::from_secs(3))
@@ -3163,7 +3269,7 @@ async fn overview(headers: axum::http::HeaderMap) -> Response {
         &headers,
         service_token.as_deref(),
         &endpoint,
-        &origin,
+        &probe_targets,
         &auth_client,
         &probe_client,
     )
@@ -3247,7 +3353,7 @@ async fn read_operation_record(path: &Path) -> Result<Option<OperationRecord>, (
         && (record.revision == "unknown"
             || ((7..=40).contains(&record.revision.len())
                 && record.revision.bytes().all(|byte| byte.is_ascii_hexdigit())))
-        && matches!(record.server_mode.as_str(), "monolith" | "services");
+        && record.server_mode == "services";
     if valid {
         Ok(Some(record))
     } else {
@@ -3300,7 +3406,7 @@ async fn overview_with_clients(
     headers: &axum::http::HeaderMap,
     service_token: Option<&str>,
     endpoint: &str,
-    origin: &str,
+    probe_targets: &ProbeTargets,
     auth_client: &reqwest::Client,
     probe_client: &reqwest::Client,
 ) -> Response {
@@ -3310,14 +3416,7 @@ async fn overview_with_clients(
     {
         return auth_unavailable_response(failure);
     }
-    if !valid_probe_origin(origin) {
-        return private_json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            serde_json::json!({"error":"service_probe_unavailable"}),
-        );
-    }
-
-    let services = probe_services(probe_client, origin).await;
+    let services = probe_services(probe_client, probe_targets).await;
     private_json_response(
         StatusCode::OK,
         Overview {
@@ -3354,90 +3453,32 @@ fn admin_page_auth_response(failure: crate::admin_auth::AuthFailure) -> Response
     admin_page_response(failure.status(), fragment)
 }
 
-async fn probe_services(client: &reqwest::Client, origin: &str) -> Vec<ServiceSummary> {
-    probe_services_for_mode(
-        client,
-        origin,
-        std::env::var("VAPOR_SERVER_MODE").as_deref() == Ok("services"),
-    )
-    .await
+#[derive(Clone)]
+struct ProbeTargets {
+    health_urls: [String; 8],
+    build_cache_status_url: String,
 }
 
-async fn probe_services_for_mode(
-    client: &reqwest::Client,
-    origin: &str,
-    services_mode: bool,
-) -> Vec<ServiceSummary> {
-    if services_mode {
-        let (
-            platform,
-            homepage,
-            docs,
-            identity,
-            diagnostics,
-            registry,
-            artifacts,
-            build_cache,
-            build_cache_readiness,
-        ) = tokio::join!(
-            probe_health(client, "http://127.0.0.1:7110", "/healthz"),
-            probe_health(client, "http://127.0.0.1:7111", "/healthz"),
-            probe_health(client, "http://127.0.0.1:7112", "/healthz"),
-            probe_health(client, "http://127.0.0.1:7113", "/healthz"),
-            probe_health(client, "http://127.0.0.1:7114", "/healthz"),
-            probe_health(client, "http://127.0.0.1:7115", "/healthz"),
-            probe_health(client, "http://127.0.0.1:7116", "/healthz"),
-            probe_health(client, "http://127.0.0.1:7117", "/healthz"),
-            probe_build_cache_readiness(client, "http://127.0.0.1:7117", "/v1/status"),
-        );
-        return vec![
-            service(
-                "platform",
-                "Platform",
-                platform,
-                "not reported",
-                Some("/admin"),
-            ),
-            service("homepage", "Homepage", homepage, "not reported", None),
-            service("docs", "Docs", docs, "not reported", None),
-            service(
-                "identity",
-                "Identity",
-                identity,
-                "not reported",
-                Some("/admin/identity"),
-            ),
-            service(
-                "diagnostics",
-                "Diagnostics",
-                diagnostics,
-                "not reported",
-                None,
-            ),
-            service(
-                "registry",
-                "Registry",
-                registry,
-                "not reported",
-                Some("/admin/registry"),
-            ),
-            service(
-                "artifacts",
-                "Artifacts",
-                artifacts,
-                "not reported",
-                Some("/admin/artifacts"),
-            ),
-            service(
-                "build-cache",
-                "Build Cache",
-                build_cache,
-                build_cache_readiness,
-                Some("/admin/build-cache"),
-            ),
-        ];
+impl ProbeTargets {
+    fn local_services() -> Self {
+        Self {
+            health_urls: [
+                "http://127.0.0.1:7110/healthz",
+                "http://127.0.0.1:7111/healthz",
+                "http://127.0.0.1:7112/healthz",
+                "http://127.0.0.1:7113/healthz",
+                "http://127.0.0.1:7114/healthz",
+                "http://127.0.0.1:7115/healthz",
+                "http://127.0.0.1:7116/healthz",
+                "http://127.0.0.1:7117/healthz",
+            ]
+            .map(str::to_owned),
+            build_cache_status_url: "http://127.0.0.1:7117/v1/status".to_owned(),
+        }
     }
+}
 
+async fn probe_services(client: &reqwest::Client, targets: &ProbeTargets) -> Vec<ServiceSummary> {
     let (
         platform,
         homepage,
@@ -3449,15 +3490,15 @@ async fn probe_services_for_mode(
         build_cache,
         build_cache_readiness,
     ) = tokio::join!(
-        probe_health(client, origin, "/api/admin/platform-healthz"),
-        probe_health(client, origin, "/healthz"),
-        probe_health(client, origin, "/docs/healthz"),
-        probe_health(client, origin, "/api/identity/v1/status"),
-        probe_health(client, origin, "/api/diagnostics/healthz"),
-        probe_health(client, origin, "/api/registry/healthz"),
-        probe_health(client, origin, "/api/updates/healthz"),
-        probe_health(client, origin, "/api/build-cache/healthz"),
-        probe_build_cache_readiness(client, origin, "/api/build-cache/v1/status"),
+        probe_health_url(client, &targets.health_urls[0]),
+        probe_health_url(client, &targets.health_urls[1]),
+        probe_health_url(client, &targets.health_urls[2]),
+        probe_health_url(client, &targets.health_urls[3]),
+        probe_health_url(client, &targets.health_urls[4]),
+        probe_health_url(client, &targets.health_urls[5]),
+        probe_health_url(client, &targets.health_urls[6]),
+        probe_health_url(client, &targets.health_urls[7]),
+        probe_build_cache_readiness_url(client, &targets.build_cache_status_url),
     );
     vec![
         service(
@@ -3507,15 +3548,15 @@ async fn probe_services_for_mode(
     ]
 }
 
-async fn probe_health(client: &reqwest::Client, origin: &str, path: &str) -> &'static str {
-    match client.get(format!("{origin}{path}")).send().await {
+async fn probe_health_url(client: &reqwest::Client, url: &str) -> &'static str {
+    match client.get(url).send().await {
         Ok(response) if response.status().is_success() => "healthy",
         _ => "unavailable",
     }
 }
 
-async fn probe_build_cache_readiness(client: &reqwest::Client, origin: &str, path: &str) -> String {
-    let mut response = match client.get(format!("{origin}{path}")).send().await {
+async fn probe_build_cache_readiness_url(client: &reqwest::Client, url: &str) -> String {
+    let mut response = match client.get(url).send().await {
         Ok(response) if response.status().is_success() => response,
         _ => return "unavailable".to_owned(),
     };
@@ -3599,12 +3640,6 @@ fn service(
         readiness: readiness.into(),
         admin_url,
     }
-}
-
-fn valid_probe_origin(origin: &str) -> bool {
-    crate::admin_auth::valid_loopback_endpoint(origin)
-        && reqwest::Url::parse(origin)
-            .is_ok_and(|url| url.path() == "/" && url.query().is_none() && url.fragment().is_none())
 }
 
 fn private_json_response<T: Serialize>(status: StatusCode, body: T) -> Response {
@@ -3781,15 +3816,6 @@ mod tests {
         (status, "private-probe-payload").into_response()
     }
 
-    async fn fake_monolith_health(uri: Uri) -> axum::response::Response {
-        let status = if uri.path() == "/api/admin/platform-healthz" {
-            StatusCode::SERVICE_UNAVAILABLE
-        } else {
-            StatusCode::OK
-        };
-        (status, "private-probe-payload").into_response()
-    }
-
     async fn slow_health() -> &'static str {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         "ok"
@@ -3838,9 +3864,11 @@ mod tests {
         assert!(!fragment.contains("<!doctype html>"));
         assert!(!fragment.contains("<main"));
         assert!(fragment.contains("<h1>Overview</h1>"));
-        assert!(fragment.contains("id=\"platform-overview\""));
+        assert!(!fragment.contains("id=\"platform-overview\""));
+        assert!(fragment.contains("<h2 id=\"operator-queue-title\">Needs attention</h2>"));
+        assert!(!fragment.contains("Service health"));
         assert!(fragment.contains("id=\"operator-queue\""));
-        assert!(fragment.contains("“shown” means older pages remain"));
+        assert!(fragment.contains("failed deployment dispatches need follow-up"));
         assert!(!fragment.contains("Operator work areas"));
         assert!(!fragment.contains("action-links"));
     }
@@ -3862,14 +3890,14 @@ mod tests {
         assert!(script.contains("className = 'request-queue-table'"));
         assert!(script.contains("service.readiness !== 'not reported'"));
         assert!(script.contains("All service probes healthy"));
-        assert!(script.contains("overview.id === 'platform-overview'"));
+        assert!(!script.contains("platform-overview"));
         assert!(script.contains("source.summarize(records)"));
         assert!(script.contains(
             "moreAvailable = !Array.isArray(items) && typeof items?.next_cursor === 'string'"
         ));
         assert!(script.contains("permission-requests/page?limit=200"));
         assert!(script.contains("${outcome.moreAvailable ? ' shown' : ''}"));
-        assert!(script.contains("hosting.textContent = 'View service details'"));
+        assert!(script.contains("document.querySelector('#operations-status')"));
         assert!(script.contains("actionHref = '/admin/deployments'"));
         assert!(script.contains("actionHref = '/admin/ssh-access'"));
         assert!(!script.contains("className = 'service-grid'"));
@@ -4114,13 +4142,14 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_navigation_badges_name_all_required_services() {
+    fn navigation_keeps_service_health_in_the_shared_status_area() {
         let approvals = super::render_admin_navigation("/admin/approvals");
         let hosting = super::render_admin_navigation("/admin/hosting");
-        assert!(approvals.contains("data-admin-services=\"platform,identity\""));
-        assert!(hosting.contains(
-            "data-admin-services=\"platform,homepage,docs,identity,diagnostics,registry,artifacts,build-cache\""
-        ));
+        let header = super::render_admin_header("/admin/approvals");
+        assert!(!approvals.contains("data-admin-services"));
+        assert!(!hosting.contains("data-admin-services"));
+        assert!(!approvals.contains("Checking</small>"));
+        assert!(header.contains("data-platform-status"));
     }
 
     #[test]
@@ -4129,31 +4158,6 @@ mod tests {
         assert!(header.contains(
         "data-deployment-targets=\"atlas,homepage,docs,identity,diagnostics,registry,artifact,build-cache,platform\""
         ));
-    }
-
-    #[tokio::test]
-    async fn monolith_probes_platform_and_homepage_as_distinct_services() {
-        let app = Router::new().fallback(any(fake_monolith_health));
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-
-        let services =
-            super::probe_services_for_mode(&reqwest::Client::new(), &origin, false).await;
-        let platform = services
-            .iter()
-            .find(|service| service.id == "platform")
-            .unwrap();
-        let homepage = services
-            .iter()
-            .find(|service| service.id == "homepage")
-            .unwrap();
-        assert_eq!(platform.health, "unavailable");
-        assert_eq!(homepage.health, "healthy");
-
-        server.abort();
     }
 
     #[tokio::test]
@@ -4727,7 +4731,9 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
         assert!(script.contains("item.approval_order_ready === true"));
-        assert!(script.contains("item.approval_order_blocker && typeof item.approval_order_blocker.id === 'string'"));
+        assert!(script.contains(
+            "item.approval_order_blocker && typeof item.approval_order_blocker.id === 'string'"
+        ));
         assert!(script.contains("Blocked by ${orderBlocker.id.slice(0, 8)}"));
         assert!(script.contains("Waiting for prior deployment"));
         assert!(script.contains("created_at_unix || 0) - Number(b.created_at_unix || 0)"));
@@ -4790,9 +4796,9 @@ mod tests {
             .unwrap();
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let script = std::str::from_utf8(&body).unwrap();
-        assert!(script.contains("[data-admin-services]"));
-        assert!(script.contains("required.some(service => !service"));
-        assert!(script.contains("healthyCount === 0 ? 'unavailable' : 'degraded'"));
+        assert!(!script.contains("[data-admin-services]"));
+        assert!(!script.contains("updateNavHealth"));
+        assert!(script.contains("[data-platform-status]"));
         assert!(script.contains("if (!overview) return;"));
     }
 
@@ -4822,7 +4828,7 @@ mod tests {
         let path = directory.join("latest.json");
         tokio::fs::write(
             &path,
-            r#"{"schema_version":1,"operation":"deploy","result":"success","started_at_utc":"2026-11-02T12:00:00Z","finished_at_utc":"2026-11-02T12:01:00Z","revision":"0123456789abcdef0123456789abcdef01234567","server_mode":"monolith"}"#,
+            r#"{"schema_version":1,"operation":"deploy","result":"success","started_at_utc":"2026-11-02T12:00:00Z","finished_at_utc":"2026-11-02T12:01:00Z","revision":"0123456789abcdef0123456789abcdef01234567","server_mode":"services"}"#,
         )
         .await
         .unwrap();
@@ -4830,7 +4836,7 @@ mod tests {
         let record = super::read_operation_record(&path).await.unwrap().unwrap();
         assert_eq!(record.operation, "deploy");
         assert_eq!(record.result, "success");
-        assert_eq!(record.server_mode, "monolith");
+        assert_eq!(record.server_mode, "services");
 
         tokio::fs::remove_dir_all(directory).await.unwrap();
     }
@@ -4882,7 +4888,7 @@ mod tests {
         let path = directory.join("latest.json");
         tokio::fs::write(
             &path,
-            r#"{"schema_version":1,"operation":"deploy","result":"failed","started_at_utc":"2026-11-02T12:00:00Z","finished_at_utc":"2026-11-02T12:01:00Z","revision":"unknown","server_mode":"monolith","private_path":"/srv/private/deploy.log","token":"must-not-escape"}"#,
+            r#"{"schema_version":1,"operation":"deploy","result":"failed","started_at_utc":"2026-11-02T12:00:00Z","finished_at_utc":"2026-11-02T12:01:00Z","revision":"unknown","server_mode":"services","private_path":"/srv/private/deploy.log","token":"must-not-escape"}"#,
         )
         .await
         .unwrap();
@@ -4945,6 +4951,23 @@ mod tests {
         ))
     }
 
+    fn test_probe_targets(origin: &str) -> super::ProbeTargets {
+        let service_ids = [
+            "platform",
+            "homepage",
+            "docs",
+            "identity",
+            "diagnostics",
+            "registry",
+            "artifacts",
+            "build-cache",
+        ];
+        super::ProbeTargets {
+            health_urls: service_ids.map(|id| format!("{origin}/{id}/healthz")),
+            build_cache_status_url: format!("{origin}/api/build-cache/v1/status"),
+        }
+    }
+
     #[tokio::test]
     async fn overview_authorizes_root_then_returns_only_health_summaries() {
         let state = OverviewMockState {
@@ -4978,7 +5001,7 @@ mod tests {
             &headers,
             Some(SERVICE_TOKEN),
             &endpoint,
-            &origin,
+            &test_probe_targets(&origin),
             &client,
             &client,
         )
@@ -5042,7 +5065,7 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         let client = reqwest::Client::new();
-        let services = super::probe_services(&client, &origin).await;
+        let services = super::probe_services(&client, &test_probe_targets(&origin)).await;
         let docs = services
             .iter()
             .find(|service| service.id == "docs")
@@ -5129,7 +5152,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            super::probe_health(&client, &origin, "/slow").await,
+            super::probe_health_url(&client, &format!("{origin}/slow")).await,
             "unavailable"
         );
         server.abort();

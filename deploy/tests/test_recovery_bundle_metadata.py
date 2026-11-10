@@ -169,8 +169,9 @@ class RecoveryBundleMetadataTests(unittest.TestCase):
         )
         self.assertEqual(METADATA.build_binaries("services")[0], "vapor_platform_ops")
 
-    def test_monolith_mode_requires_only_its_runtime_binary(self) -> None:
-        self.assertEqual(METADATA.runtime_binaries("monolith"), ("vapor_platform_server",))
+    def test_monolith_mode_is_rejected(self) -> None:
+        with self.assertRaisesRegex(METADATA.MetadataError, "unsupported"):
+            METADATA.runtime_binaries("monolith")
 
     def test_reads_exact_revision_mode_and_observed_toolchain(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

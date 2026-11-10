@@ -272,8 +272,8 @@ pub(crate) fn valid_loopback_endpoint(endpoint: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthFailure, authorize_root, authorize_root_with_client, isolated_admin_origin,
-        resolve_browser_admin_origin, valid_loopback_endpoint,
+        authorize_root, authorize_root_with_client, isolated_admin_origin,
+        resolve_browser_admin_origin, valid_loopback_endpoint, AuthFailure,
     };
     use axum::extract::State;
     use axum::http::{HeaderMap, HeaderValue, StatusCode};
