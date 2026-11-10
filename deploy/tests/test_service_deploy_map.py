@@ -38,6 +38,14 @@ class ServiceDeployMapTests(unittest.TestCase):
                 self.assertIn(redirect, caddy)
                 self.assertLess(caddy.index(redirect), caddy.index("handle_path /docs/*"))
 
+    def test_project_pages_are_owned_by_registry_on_both_hosts(self) -> None:
+        for name in ("Caddyfile.template", "Caddyfile.admin-host.example"):
+            with self.subTest(name=name):
+                caddy = (REPO_ROOT / "deploy" / "caddy" / name).read_text(encoding="utf-8")
+                self.assertEqual(caddy.count("@project_ui path /dashboard /dashboard/* /projects/*"), 2)
+                self.assertEqual(caddy.count("handle @project_ui {\n\t\treverse_proxy 127.0.0.1:7115\n\t}"), 2)
+                self.assertIn("handle {\n\t\treverse_proxy 127.0.0.1:7111", caddy)
+
     def test_each_target_has_only_fixed_deployer_metadata(self) -> None:
         caddy = (REPO_ROOT / "deploy" / "caddy" / "Caddyfile.template").read_text(encoding="utf-8")
         for target, record in DEPLOY_MAP.DEPLOY_TARGETS.items():

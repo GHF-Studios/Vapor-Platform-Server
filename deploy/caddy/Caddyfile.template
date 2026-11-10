@@ -52,6 +52,11 @@
 		reverse_proxy 127.0.0.1:7117
 	}
 
+	@project_ui path /dashboard /dashboard/* /projects/*
+	handle @project_ui {
+		reverse_proxy 127.0.0.1:7115
+	}
+
 	handle {
 		reverse_proxy 127.0.0.1:7111
 	}
@@ -71,6 +76,11 @@
 
 	handle /api/admin* {
 		reverse_proxy 127.0.0.1:7110
+	}
+
+	@project_ui path /dashboard /dashboard/* /projects/*
+	handle @project_ui {
+		reverse_proxy 127.0.0.1:7115
 	}
 
 	{{VAPOR_ADMIN_IDENTITY_ROUTES}}

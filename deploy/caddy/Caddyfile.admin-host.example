@@ -82,6 +82,11 @@
 		reverse_proxy 127.0.0.1:7117
 	}
 
+	@project_ui path /dashboard /dashboard/* /projects/*
+	handle @project_ui {
+		reverse_proxy 127.0.0.1:7115
+	}
+
 	handle {
 		reverse_proxy 127.0.0.1:7111
 	}
@@ -142,6 +147,11 @@
 
 	handle /cli/ssh/* {
 		reverse_proxy 127.0.0.1:7113
+	}
+
+	@project_ui path /dashboard /dashboard/* /projects/*
+	handle @project_ui {
+		reverse_proxy 127.0.0.1:7115
 	}
 
 	handle {
