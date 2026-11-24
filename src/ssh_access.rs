@@ -787,7 +787,10 @@ async fn run_root_operation(payload: &RootOperation<'_>) -> Result<(), String> {
     if output.ok {
         Ok(())
     } else {
-        Err("privileged helper rejected the operation".to_owned())
+        // The helper validates these short, control-character-free details
+        // before returning them. Preserve the actionable reason for the
+        // root-only request history instead of collapsing every rejection.
+        Err(format!("privileged helper reported failure: {}", output.detail))
     }
 }
 
