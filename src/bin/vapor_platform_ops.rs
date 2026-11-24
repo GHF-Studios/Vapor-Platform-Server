@@ -97,14 +97,12 @@ fn identity_response_allows_root(status: reqwest::StatusCode, body: &[u8], now_u
 }
 
 #[cfg_attr(not(unix), allow(dead_code))]
-fn grant_setup_failure_detail(
-    primary_failure: &'static str,
-    rollback_completed: bool,
-) -> &'static str {
+fn grant_setup_failure_detail(primary_failure: &str, rollback_completed: bool) -> String {
     if rollback_completed {
-        primary_failure
+        primary_failure.to_owned()
     } else {
         "grant setup failed and rollback was incomplete; access artifacts may remain; retry revoke and inspect the host"
+            .to_owned()
     }
 }
 
@@ -445,7 +443,7 @@ mod unix_impl {
         match result {
             Ok((id, state, detail)) => emit(true, &id, state, detail),
             Err((id, detail)) => {
-                emit(false, &id, "failed", detail);
+                emit(false, &id, "failed", &detail);
                 std::process::exit(1);
             }
         }
@@ -1307,23 +1305,23 @@ mod unix_impl {
 
     async fn run(
         bytes: Vec<u8>,
-    ) -> Result<(String, &'static str, &'static str), (String, &'static str)> {
+    ) -> Result<(String, &'static str, &'static str), (String, String)> {
         if unsafe { libc::geteuid() } != 0 {
-            return Err((String::new(), "root privileges required"));
+            return Err((String::new(), "root privileges required".to_owned()));
         }
         let input: Input = serde_json::from_slice(&bytes)
-            .map_err(|_| (String::new(), "invalid operation request"))?;
+            .map_err(|_| (String::new(), "invalid operation request".to_owned()))?;
         let id = uuid::Uuid::parse_str(&input.request_id)
-            .map_err(|_| (String::new(), "invalid operation identifier"))?
+            .map_err(|_| (String::new(), "invalid operation identifier".to_owned()))?
             .to_string();
         let operation = input
             .operation
             .as_deref()
-            .ok_or_else(|| (id.clone(), "missing operation"))?;
+            .ok_or_else(|| (id.clone(), "missing operation".to_owned()))?;
         if operation != "server_action"
             && (input.target_node_id.is_some() || input.action.is_some())
         {
-            return Err((id, "unexpected server action fields"));
+            return Err((id, "unexpected server action fields".to_owned()));
         }
         if operation == "server_action"
             && (input.granted_capabilities.is_some()
@@ -1332,13 +1330,13 @@ mod unix_impl {
                 || input.expected_fingerprint.is_some()
                 || input.host_admin_confirmed.is_some())
         {
-            return Err((id, "unexpected fields for server action"));
+            return Err((id, "unexpected fields for server action".to_owned()));
         }
         if !matches!(
             operation,
             "dispatch_deploy" | "reconcile_deploy" | "grant_ssh" | "revoke_ssh" | "server_action"
         ) {
-            return Err((id, "unsupported operation"));
+            return Err((id, "unsupported operation".to_owned()));
         }
         let session = input
             .session_token
@@ -1349,9 +1347,9 @@ mod unix_impl {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-')
             })
-            .ok_or_else(|| (id.clone(), "root session is required"))?;
+            .ok_or_else(|| (id.clone(), "root session is required".to_owned()))?;
         if !authorize_root(session).await {
-            return Err((id, "root Identity authorization failed"));
+            return Err((id, "root Identity authorization failed".to_owned()));
         }
         let db_path = configured_value("VAPOR_PLATFORM_DB")
             .map(PathBuf::from)
@@ -1371,21 +1369,25 @@ mod unix_impl {
             .max_connections(1)
             .connect_with(options)
             .await
-            .map_err(|_| (id.clone(), "Platform database is unavailable"))?;
+            .map_err(|_| (id.clone(), "Platform database is unavailable".to_owned()))?;
         match operation {
             "dispatch_deploy" => {
-                verify_deploy_request(&pool, &id, input.expected_version.unwrap_or(0)).await?;
+                verify_deploy_request(&pool, &id, input.expected_version.unwrap_or(0))
+                    .await
+                    .map_err(|(failure_id, detail)| (failure_id, detail.to_owned()))?;
                 let unit = format!("vapor-deploy@{id}.service");
                 run_command(
                     "/usr/bin/systemctl",
                     &["start", "--no-block", unit.as_str()],
                 )
                 .await
-                .map_err(|_| (id.clone(), "could not queue approved deployment"))?;
+                .map_err(|_| (id.clone(), "could not queue approved deployment".to_owned()))?;
                 Ok((id, "queued", "approved deployment queued"))
             }
             "reconcile_deploy" => {
-                reconcile_deploy(&pool, &id, input.expected_version.unwrap_or(0)).await?;
+                reconcile_deploy(&pool, &id, input.expected_version.unwrap_or(0))
+                    .await
+                    .map_err(|(failure_id, detail)| (failure_id, detail.to_owned()))?;
                 Ok((id, "failed", "inactive deploy worker marked failed"))
             }
             "grant_ssh" => {
@@ -1393,18 +1395,20 @@ mod unix_impl {
                 Ok((id, "active", "temporary SSH grant activated"))
             }
             "revoke_ssh" => {
-                revoke_ssh(&pool, &id, input.expected_version.unwrap_or(0)).await?;
+                revoke_ssh(&pool, &id, input.expected_version.unwrap_or(0))
+                    .await
+                    .map_err(|(failure_id, detail)| (failure_id, detail.to_owned()))?;
                 Ok((id, "revoked", "temporary SSH grant revoked"))
             }
             "server_action" => {
                 let target_node_id = input
                     .target_node_id
                     .as_deref()
-                    .ok_or_else(|| (id.clone(), "server target is required"))?;
+                    .ok_or_else(|| (id.clone(), "server target is required".to_owned()))?;
                 let action = input
                     .action
                     .as_ref()
-                    .ok_or_else(|| (id.clone(), "server action is required"))?;
+                    .ok_or_else(|| (id.clone(), "server action is required".to_owned()))?;
                 let state = run_server_action(
                     &pool,
                     &id,
@@ -1412,7 +1416,8 @@ mod unix_impl {
                     target_node_id,
                     action,
                 )
-                .await?;
+                .await
+                .map_err(|(failure_id, detail)| (failure_id, detail.to_owned()))?;
                 let detail = if state == "awaiting_reboot" {
                     "reboot requested; completion will be checked after startup"
                 } else {
@@ -1420,7 +1425,7 @@ mod unix_impl {
                 };
                 Ok((id, state, detail))
             }
-            _ => Err((id, "unsupported operation")),
+            _ => Err((id, "unsupported operation".to_owned())),
         }
     }
 
@@ -1779,25 +1784,25 @@ mod unix_impl {
         pool: &SqlitePool,
         id: &str,
         input: &Input,
-    ) -> Result<(), (String, &'static str)> {
+    ) -> Result<(), (String, String)> {
         if !std::path::Path::new("/etc/vapor-server/ssh-access-enabled").is_file() {
             return Err((
                 id.to_string(),
-                "temporary SSH access is disabled on this host",
+                "temporary SSH access is disabled on this host".to_owned(),
             ));
         }
         let version = input.expected_version.unwrap_or(0);
         let duration = input.granted_duration_seconds.unwrap_or(0);
         let granted = input.granted_capabilities.as_deref().unwrap_or(&[]);
         if version < 2 || !(1..=MAX_DURATION).contains(&duration) || !valid_capabilities(granted) {
-            return Err((id.to_string(), "invalid grant scope or duration"));
+            return Err((id.to_string(), "invalid grant scope or duration".to_owned()));
         }
         if granted.iter().any(|capability| capability == "host_admin")
             && input.host_admin_confirmed != Some(true)
         {
             return Err((
                 id.to_string(),
-                "unrestricted root needs explicit confirmation",
+                "unrestricted root needs explicit confirmation".to_owned(),
             ));
         }
         let row = sqlx::query(
@@ -1806,10 +1811,10 @@ mod unix_impl {
     )
     .bind(id)
     .fetch_optional(pool)
-    .await
-    .map_err(|_| (id.to_string(), "could not read SSH request"))?;
+        .await
+        .map_err(|_| (id.to_string(), "could not read SSH request".to_owned()))?;
         let Some(row) = row else {
-            return Err((id.to_string(), "SSH request does not exist"));
+            return Err((id.to_string(), "SSH request does not exist".to_owned()));
         };
         let status: String = row.get("status");
         let actual_version: i64 = row.get("version");
@@ -1820,21 +1825,24 @@ mod unix_impl {
             || actual_version != version
             || operation_detail.as_deref() != Some("granting")
         {
-            return Err((id.to_string(), "SSH grant is not approved"));
+            return Err((id.to_string(), "SSH grant is not approved".to_owned()));
         }
         let public_key: String = row.get("public_key");
         let expected_fingerprint = input.expected_fingerprint.as_deref().unwrap_or("");
         let computed_fingerprint = ssh_ed25519_fingerprint(&public_key)
-            .ok_or((id.to_string(), "stored SSH public key is invalid"))?;
+            .ok_or((id.to_string(), "stored SSH public key is invalid".to_owned()))?;
         if fingerprint != expected_fingerprint || computed_fingerprint != expected_fingerprint {
-            return Err((id.to_string(), "approved SSH key changed after review"));
+            return Err((
+                id.to_string(),
+                "approved SSH key changed after review".to_owned(),
+            ));
         }
         let expires = input.expires_at_unix.unwrap_or(0);
         if expires <= unix_now()
             || expires > unix_now().saturating_add(duration)
             || stored_expiry != Some(expires)
         {
-            return Err((id.to_string(), "invalid grant expiry"));
+            return Err((id.to_string(), "invalid grant expiry".to_owned()));
         }
         create_managed_account(pool, id, version, &public_key, granted, expires).await?;
         Ok(())
@@ -1847,8 +1855,9 @@ mod unix_impl {
         public_key: &str,
         capabilities: &[String],
         expires: i64,
-    ) -> Result<(), (String, &'static str)> {
-        let _lifecycle_lock = acquire_cleanup_lock(id)?;
+    ) -> Result<(), (String, String)> {
+        let _lifecycle_lock = acquire_cleanup_lock(id)
+            .map_err(|(failure_id, detail)| (failure_id, detail.to_owned()))?;
         let row = sqlx::query(
             "SELECT status, version, operation_detail, expires_at_unix
              FROM platform_ssh_access_requests WHERE id = ?",
@@ -1856,9 +1865,9 @@ mod unix_impl {
         .bind(id)
         .fetch_optional(pool)
         .await
-        .map_err(|_| (id.to_string(), "could not recheck SSH grant state"))?;
+        .map_err(|_| (id.to_string(), "could not recheck SSH grant state".to_owned()))?;
         let Some(row) = row else {
-            return Err((id.to_string(), "SSH grant no longer exists"));
+            return Err((id.to_string(), "SSH grant no longer exists".to_owned()));
         };
         if row.get::<String, _>("status") != "provisioning"
             || row.get::<i64, _>("version") != expected_version
@@ -1866,13 +1875,13 @@ mod unix_impl {
             || row.get::<Option<i64>, _>("expires_at_unix") != Some(expires)
             || expires <= unix_now()
         {
-            return Err((id.to_string(), "SSH grant is no longer current"));
+            return Err((id.to_string(), "SSH grant is no longer current".to_owned()));
         }
         let username = ssh_username(id);
         if account_exists(&username) {
             return Err((
                 id.to_string(),
-                "temporary account already exists; refusing duplicate grant",
+                "temporary account already exists; refusing duplicate grant".to_owned(),
             ));
         }
         match create_managed_account_locked(id, public_key, capabilities, expires).await {
@@ -1881,7 +1890,7 @@ mod unix_impl {
                 let rollback_completed = remove_managed_account_locked(id).await.is_ok();
                 Err((
                     id.to_string(),
-                    super::grant_setup_failure_detail(primary_failure, rollback_completed),
+                    super::grant_setup_failure_detail(&primary_failure, rollback_completed),
                 ))
             }
         }
@@ -1892,16 +1901,18 @@ mod unix_impl {
         public_key: &str,
         capabilities: &[String],
         expires: i64,
-    ) -> Result<(), (String, &'static str)> {
+    ) -> Result<(), (String, String)> {
         if !temporary_group_sudoers_are_clear() {
             return Err((
                 id.to_string(),
-                "temporary SSH group has a group-wide sudo rule; no access was granted",
+                "temporary SSH group has a group-wide sudo rule; no access was granted".to_owned(),
             ));
         }
         let username = ssh_username(id);
-        let hash = random_password_hash(id).await?;
-        if run_command(
+        let hash = random_password_hash(id)
+            .await
+            .map_err(|(failure_id, detail)| (failure_id, detail.to_owned()))?;
+        if let Err(detail) = run_useradd(
             "/usr/sbin/useradd",
             &[
                 "--create-home",
@@ -1916,9 +1927,8 @@ mod unix_impl {
             ],
         )
         .await
-        .is_err()
         {
-            return Err((id.to_string(), "could not create temporary account"));
+            return Err((id.to_string(), detail));
         }
         let home = format!("/home/{username}");
         let ssh_dir = format!("{home}/.ssh");
@@ -1929,7 +1939,10 @@ mod unix_impl {
                 .await
                 .is_err()
         {
-            return Err((id.to_string(), "could not secure temporary account home"));
+            return Err((
+                id.to_string(),
+                "could not secure temporary account home".to_owned(),
+            ));
         }
         let workspace = format!("{home}/workspace");
         if run_command(
@@ -1948,7 +1961,10 @@ mod unix_impl {
         .await
         .is_err()
         {
-            return Err((id.to_string(), "could not prepare temporary workspace"));
+            return Err((
+                id.to_string(),
+                "could not prepare temporary workspace".to_owned(),
+            ));
         }
         if run_command(
             "/usr/bin/install",
@@ -1959,16 +1975,22 @@ mod unix_impl {
         {
             return Err((
                 id.to_string(),
-                "could not prepare managed SSH key directory",
+                "could not prepare managed SSH key directory".to_owned(),
             ));
         }
         if install_expiry_units(id, expires).await.is_err() {
-            return Err((id.to_string(), "could not install persistent expiry timer"));
+            return Err((
+                id.to_string(),
+                "could not install persistent expiry timer".to_owned(),
+            ));
         }
         let key_path = format!("{ssh_dir}/authorized_keys");
         let key_line = format!("{public_key}\n");
         if atomic_write_root_file(&key_path, key_line.as_bytes(), 0o644).is_err() {
-            return Err((id.to_string(), "could not install managed public key"));
+            return Err((
+                id.to_string(),
+                "could not install managed public key".to_owned(),
+            ));
         }
         let sudoers_path = format!("/etc/sudoers.d/vapor-ssh-{id}");
         let sudoers = sudoers_contents(&username, capabilities);
@@ -1977,12 +1999,15 @@ mod unix_impl {
                 .await
                 .is_err()
         {
-            return Err((id.to_string(), "scoped sudo policy did not validate"));
+            return Err((
+                id.to_string(),
+                "scoped sudo policy did not validate".to_owned(),
+            ));
         }
         if !effective_sudo_policy_matches(&username, capabilities) {
             return Err((
                 id.to_string(),
-                "effective sudo policy does not match the approved capabilities",
+                "effective sudo policy does not match the approved capabilities".to_owned(),
             ));
         }
         Ok(())
@@ -2534,6 +2559,50 @@ mod unix_impl {
                     .map(|directory| directory.join("platform.sqlite3"))
             })
             .unwrap_or_else(|| PathBuf::from("/var/lib/vapor-server/platform/platform.sqlite3"))
+    }
+
+    async fn run_useradd(path: &str, args: &[&str]) -> Result<(), String> {
+        let output = tokio::process::Command::new(path)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .await
+            .map_err(|error| format!("could not start useradd ({:?})", error.kind()))?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let exit_status = output
+            .status
+            .code()
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "signal".to_owned());
+        let mut redacted_diagnostic = String::from_utf8_lossy(&output.stderr).into_owned();
+        let password_hash = args
+            .windows(2)
+            .find(|pair| pair[0] == "--password")
+            .map(|pair| pair[1]);
+        if let Some(secret) = password_hash {
+            redacted_diagnostic = redacted_diagnostic.replace(secret, "[redacted]");
+        }
+        let mut diagnostic = String::new();
+        for character in redacted_diagnostic.chars() {
+            if character.is_control() {
+                continue;
+            }
+            if diagnostic.len() + character.len_utf8() > 180 {
+                break;
+            }
+            diagnostic.push(character);
+        }
+        let diagnostic = if diagnostic.trim().is_empty() {
+            "no stderr diagnostic".to_owned()
+        } else {
+            diagnostic.trim().to_owned()
+        };
+        Err(format!("useradd exited with {exit_status}: {diagnostic}"))
     }
 
     async fn run_command(path: &str, args: &[&str]) -> Result<(), ()> {
