@@ -90,8 +90,14 @@ release_directory="$bundle_directory/releases/$version/$platform"
 manifest_path="$release_directory/manifest.json"
 signature_path="$release_directory/manifest.json.sig"
 archive_path="$release_directory/vapor.tar.gz"
-if [ ! -f "$manifest_path" ] || [ ! -f "$signature_path" ] || [ ! -f "$archive_path" ]; then
-  echo "error: bundle is missing its manifest, signature, or archive" >&2
+case "$platform" in
+  windows-x86_64) setup_name=vapor-setup.exe ;;
+  linux-x86_64) setup_name=vapor-setup ;;
+esac
+setup_path="$release_directory/$setup_name"
+export VAPOR_RELEASE_SETUP_PATH="$setup_path"
+if [ ! -f "$manifest_path" ] || [ ! -f "$signature_path" ] || [ ! -f "$archive_path" ] || [ ! -f "$setup_path" ]; then
+  echo "error: bundle is missing its manifest, signature, archive, or setup executable" >&2
   exit 1
 fi
 
@@ -124,6 +130,7 @@ directory = os.path.join(bundle, "releases", version, platform)
 manifest_path = os.path.join(directory, "manifest.json")
 signature_path = os.path.join(directory, "manifest.json.sig")
 archive_path = os.path.join(directory, "vapor.tar.gz")
+setup_path = os.environ["VAPOR_RELEASE_SETUP_PATH"]
 with open(manifest_path, "rb") as manifest_file:
     raw_manifest = manifest_file.read(64 * 1024 + 1)
 if len(raw_manifest) > 64 * 1024:
@@ -142,6 +149,7 @@ if set(manifest) != {
     "platform",
     "minimum_updater_version",
     "artifact",
+    "setup",
     "release_notes_url",
 }:
     sys.exit("error: manifest fields do not match the supported release schema")
@@ -184,6 +192,11 @@ if set(artifact) != {"url", "size", "sha256"}:
 expected_url = f"https://vapor.ghf-studios.site/api/updates/v1/vapor/releases/{version}/{platform}/vapor.tar.gz"
 if not isinstance(artifact.get("url"), str) or artifact["url"] != expected_url:
     sys.exit("error: artifact URL does not match the configured public endpoint")
+setup_name = "vapor-setup.exe" if platform == "windows-x86_64" else "vapor-setup"
+setup = manifest.get("setup")
+expected_setup_url = f"https://vapor.ghf-studios.site/api/updates/v1/vapor/releases/{version}/{platform}/{setup_name}"
+if not isinstance(setup, dict) or set(setup) != {"url", "size", "sha256"} or setup.get("url") != expected_setup_url:
+    sys.exit("error: setup record does not match the configured public endpoint")
 digest = hashlib.sha256()
 size = 0
 with open(archive_path, "rb") as archive:
@@ -198,6 +211,18 @@ if (
     or artifact["sha256"] != digest.hexdigest()
 ):
     sys.exit("error: archive size/hash does not match the signed manifest")
+digest = hashlib.sha256()
+size = 0
+with open(setup_path, "rb") as setup_file:
+    for block in iter(lambda: setup_file.read(1024 * 1024), b""):
+        size += len(block)
+        digest.update(block)
+if (
+    size == 0 or size > 512 * 1024 * 1024
+    or type(setup.get("size")) is not int or setup["size"] != size
+    or not isinstance(setup.get("sha256"), str) or setup["sha256"] != digest.hexdigest()
+):
+    sys.exit("error: setup executable size/hash does not match the signed manifest")
 with open(signature_path, "rb") as signature_file:
     signature_hex = signature_file.read(257)
 if not re.fullmatch(rb"[0-9a-f]{128}", signature_hex):
@@ -246,6 +271,7 @@ mkdir -p -- "$stage_directory/releases/$version"
 install -m 0644 -- "$manifest_path" "$stage_directory/releases/$version/$platform.manifest.json"
 install -m 0644 -- "$signature_path" "$stage_directory/releases/$version/$platform.manifest.json.sig"
 install -m 0644 -- "$archive_path" "$stage_directory/releases/$version/$platform.vapor.tar.gz"
+install -m 0644 -- "$setup_path" "$stage_directory/releases/$version/$platform.$setup_name"
 
 release_stage="$stage_directory/releases/$version/$platform"
 mkdir -p -- "$release_stage"
@@ -253,6 +279,7 @@ chmod 0755 "$release_stage"
 mv -- "$stage_directory/releases/$version/$platform.manifest.json" "$release_stage/manifest.json"
 mv -- "$stage_directory/releases/$version/$platform.manifest.json.sig" "$release_stage/manifest.json.sig"
 mv -- "$stage_directory/releases/$version/$platform.vapor.tar.gz" "$release_stage/vapor.tar.gz"
+mv -- "$stage_directory/releases/$version/$platform.$setup_name" "$release_stage/$setup_name"
 mv -T -- "$release_stage" "$final_release_directory"
 
 pointer_directory="$updates_root/channels/$channel"

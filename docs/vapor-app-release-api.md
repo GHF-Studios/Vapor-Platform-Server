@@ -25,6 +25,8 @@ The exact immutable release endpoints are:
 GET /api/updates/v1/vapor/releases/{version}/{platform}/manifest.json
 GET /api/updates/v1/vapor/releases/{version}/{platform}/manifest.json.sig
 GET /api/updates/v1/vapor/releases/{version}/{platform}/vapor.tar.gz
+GET /api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe
+GET /api/updates/v1/vapor/releases/{version}/linux-x86_64/vapor-setup
 ```
 
 The latest JSON response is served byte-for-byte from the selected immutable
@@ -35,7 +37,9 @@ signature and the artifact size and SHA-256 before staging an update.
 
 Manifest fields are `schema` (integer `1`), `key_id`, SemVer `version`,
 `channel`, `platform`, `minimum_updater_version`, `artifact` (`url`, `size`,
-`sha256`), and `release_notes_url`. The manifest is not rewritten or
+`sha256`), `setup` (`url`, `size`, `sha256`), and `release_notes_url`. The
+signed setup record identifies the website-distributed `vapor-setup` binary;
+that binary installs only the signed application archive. The manifest is not rewritten or
 re-serialized by the server.
 
 ## Preparing and publishing a release
@@ -92,6 +96,7 @@ channels/{channel}/{platform}.version
 releases/{version}/{platform}/manifest.json
 releases/{version}/{platform}/manifest.json.sig
 releases/{version}/{platform}/vapor.tar.gz
+releases/{version}/{platform}/vapor-setup[.exe]
 ```
 
 The pointer contains only the selected version and a trailing newline is
