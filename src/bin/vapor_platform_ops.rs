@@ -1023,7 +1023,7 @@ mod unix_impl {
                     }
                     Err((_, detail)) => {
                         let _ = sqlx::query("UPDATE platform_ssh_access_requests SET status='failed', version=version+1, operation_detail=? WHERE id=? AND status='provisioning' AND version=?")
-                            .bind(detail).bind(&id).bind(version + 1).execute(&pool).await;
+                            .bind(&detail).bind(&id).bind(version + 1).execute(&pool).await;
                         return Err(format!("grant failed: {detail}; inspect with ssh show"));
                     }
                 }
