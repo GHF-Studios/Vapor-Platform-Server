@@ -58,6 +58,7 @@ production topology.
 /admin/build-cache        -> Build Cache-owned read-only Cargo target snapshot inventory
 /api/admin/overview       -> root-authorized service health summary
 /api/admin/operations     -> root-authorized latest deploy/restore status
+/api/ssh-access/          -> Platform temporary SSH access request API
 /api/identity/            -> identity
 /api/diagnostics/         -> diagnostics
 /api/registry/            -> registry

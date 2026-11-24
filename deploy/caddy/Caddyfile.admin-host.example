@@ -54,6 +54,10 @@
 		reverse_proxy 127.0.0.1:7110
 	}
 
+	handle /api/ssh-access/* {
+		reverse_proxy 127.0.0.1:7110
+	}
+
 	handle /api/identity/v1/internal/* {
 		respond "not found" 404
 	}
