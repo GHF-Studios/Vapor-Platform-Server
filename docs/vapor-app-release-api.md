@@ -73,11 +73,13 @@ build Vapor; it packages a previously built archive, which must contain Vapor
 only and no Mad Max game files or extracted game content.
 
 This feed and archive pipeline is not yet a Windows GUI installer or a complete
-self-update installation flow. Vapor-Installer now contains a client-side
-Ed25519 manifest verifier and streaming archive size/SHA-256 verifier. They are
-not yet connected to network downloads, safe extraction, staged application,
-rollback, or GUI update status, and no production public trust key is embedded.
-Those remain client work before a public release is usable end to end.
+self-update installation flow. In the current Vapor-Client checkout, the
+Vapor-Installer source contains no client-side Ed25519 manifest verifier,
+archive size/SHA-256 verifier, network download, safe extraction, staged
+activation, rollback, or GUI update status. No production public trust key is
+embedded in that checkout. These remain client work before a public release is
+usable end to end. Recheck the live client source before changing this status;
+older copies of this document incorrectly described the verifier as present.
 
 ## Operator-managed storage
 
