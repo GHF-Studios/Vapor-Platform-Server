@@ -6,6 +6,8 @@ vapor-docs.service
 vapor-identity.service
 vapor-diagnostics.service
 vapor-deploy@.service
+vapor-platform-ops.socket
+vapor-platform-ops@.service
 vapor-state-export.service
 vapor-state-export.timer
 vapor-state-only-export.service
@@ -27,6 +29,13 @@ not deploy it. The deploy unit has no start timeout because a first build can
 legitimately take a long time. A wedged worker therefore needs operator
 attention before later deploy/export/restore work can acquire the shared lock.
 Temporary SSH grants use a separate one-shot expiry timer per grant.
+
+The root-owned `vapor-platform-ops.socket` activates one
+`vapor-platform-ops@<request-id>.service` per bounded operation request. That
+short-lived helper keeps `ProtectSystem=strict`, but can write under `/etc` so
+shadow-utils can create and remove its dynamically named account-database lock
+and temporary files. This permission does not apply to the long-running
+Platform service.
 
 The state-only exporter writes under `/var/backups/vapor-server/state-only`
 with its own pointer and retention. It snapshots the SQLite databases online

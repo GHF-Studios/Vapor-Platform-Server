@@ -333,6 +333,11 @@ the operator must type the fingerprint exactly. `host_admin` is exclusive and
 requires a second `UNRESTRICTED ROOT` confirmation. It provisions a request-
 specific account with unrestricted sudo; connect as the displayed temporary
 account and use `sudo -i` for a root shell. It does not grant `root@host` SSH.
+Each short-lived helper instance keeps `ProtectSystem=strict` and has `/etc`
+writable in its own filesystem namespace because `useradd` must create
+dynamically named temporary and lock files beside the account databases. The
+long-running Platform service remains unprivileged and does not receive this
+write access.
 Revoke requires typing
 `YES`. Reconfigure explains the revoke-and-new-request process and makes no
 change. `verify` is read-only and compares an active grant with its managed
