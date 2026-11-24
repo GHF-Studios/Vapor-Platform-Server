@@ -312,7 +312,7 @@ async fn create_request(
     let open_count: i64 = match sqlx::query_scalar(
         "SELECT COUNT(*) FROM platform_ssh_access_requests
          WHERE (requester_profile_id = ? OR fingerprint = ?)
-         AND status IN ('pending','provisioning','active','failed')",
+         AND status IN ('pending','provisioning','active')",
     )
     .bind(&credential.actor_profile_id)
     .bind(&key.fingerprint)
