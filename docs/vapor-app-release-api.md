@@ -17,6 +17,7 @@ The stable Windows feed is:
 ```text
 GET /api/updates/v1/vapor/stable/windows-x86_64/latest.json
 GET /api/updates/v1/vapor/stable/windows-x86_64/latest.json.sig
+GET /api/updates/v1/vapor/stable/windows-x86_64/versions.json
 ```
 
 The exact immutable release endpoints are:
@@ -25,7 +26,19 @@ The exact immutable release endpoints are:
 GET /api/updates/v1/vapor/releases/{version}/{platform}/manifest.json
 GET /api/updates/v1/vapor/releases/{version}/{platform}/manifest.json.sig
 GET /api/updates/v1/vapor/releases/{version}/{platform}/vapor.tar.gz
+GET /api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe
+GET /api/updates/v1/vapor/releases/{version}/linux-x86_64/vapor-setup
 ```
+
+The channel's `versions.json` endpoint returns the complete, newest-first list
+of stable semantic versions that have a complete immutable release for that
+platform. It is derived from the immutable release directories; advancing a
+stable channel pointer does not require a separate history-file update. Each
+listed version still uses its own immutable manifest and detached signature;
+the endpoint is a discovery index, not a replacement signature. The Installer
+continues to verify the exact manifest bytes before installing. The Homepage
+keeps the channel's latest version as its primary download and renders older
+entries as stable-release history.
 
 The latest JSON response is served byte-for-byte from the selected immutable
 `manifest.json`; its `.sig` response is served byte-for-byte from the matching
@@ -35,7 +48,9 @@ signature and the artifact size and SHA-256 before staging an update.
 
 Manifest fields are `schema` (integer `1`), `key_id`, SemVer `version`,
 `channel`, `platform`, `minimum_updater_version`, `artifact` (`url`, `size`,
-`sha256`), and `release_notes_url`. The manifest is not rewritten or
+`sha256`), `setup` (`url`, `size`, `sha256`), and `release_notes_url`. The
+signed setup record identifies the website-distributed `vapor-setup` binary;
+that binary installs only the signed application archive. The manifest is not rewritten or
 re-serialized by the server.
 
 ## Preparing and publishing a release
@@ -72,14 +87,61 @@ match a public key trusted by the client build. Release preparation does not
 build Vapor; it packages a previously built archive, which must contain Vapor
 only and no Mad Max game files or extracted game content.
 
-This feed and archive pipeline is not yet a Windows GUI installer or a complete
-self-update installation flow. In the current Vapor-Client checkout, the
-Vapor-Installer source contains no client-side Ed25519 manifest verifier,
-archive size/SHA-256 verifier, network download, safe extraction, staged
-activation, rollback, or GUI update status. No production public trust key is
-embedded in that checkout. These remain client work before a public release is
-usable end to end. Recheck the live client source before changing this status;
-older copies of this document incorrectly described the verifier as present.
+The current Vapor-Client feature branch contains the standalone Windows/Linux
+GUI bootstrap and CLI lifecycle. The Installer pins the production Ed25519
+public key, verifies the exact signed manifest, checks archive size and
+SHA-256, downloads over HTTPS, rejects unsafe archive entries, stages immutable
+versions, and atomically activates or repairs them. The `vapor-setup` binary
+opens the GUI without arguments and accepts `install [--channel stable]` for
+headless automation through the same signed acquisition path. The GUI
+workspace compiled through Vapor-managed Linux and Windows release builds; the
+staged Linux binary's help output includes the headless command. Vapor-managed
+Linux and Windows application archives have been assembled and signed locally,
+and the publish script accepted both against isolated temporary storage. No
+signed release is published on Artifact yet, so the live feed and clean-machine
+bootstrap have not been exercised. The Client now contains a default-branch
+release workflow and restricted publication receiver/provisioning scripts;
+the first live seed release and server/GitHub credential setup remain pending.
+
+## Restricted CI publication
+
+The default-branch Vapor release workflow streams one prepared bundle over SSH
+to `deploy/scripts/vapor-release-publish-receiver.sh`. It does not use an
+upload API, SCP, a general-purpose deploy key, or a shell account with arbitrary
+commands. The receiver accepts only `publish linux-x86_64` or
+`publish windows-x86_64`, rejects links, special files, unexpected paths,
+duplicate entries, and incomplete bundles, then delegates signature and
+artifact validation to the existing publisher.
+
+Provision the dedicated account and forced-command key after deploying the
+receiver and publisher scripts:
+
+```text
+sudo bash deploy/scripts/install-vapor-release-publisher.sh publisher_ed25519.pub vapor-release-public.pem
+```
+
+The first argument is a newly generated Ed25519 SSH public key whose private
+half is stored only as the protected `VAPOR_RELEASE_SSH_PRIVATE_KEY` GitHub
+environment secret. The second is the Ed25519 release verification public key
+matching the key pinned in Vapor Installer. The installer creates
+`vapor-release-publisher`, installs a forced-command key, and grants that user
+sudo permission for only the root-owned receiver. Do not reuse an operator or
+deployment SSH key.
+
+Configure the `vapor-stable-release` GitHub environment with the signing key
+secret `VAPOR_RELEASE_SIGNING_KEY_B64`, publisher key secret
+`VAPOR_RELEASE_SSH_PRIVATE_KEY`, pinned host key secret
+`VAPOR_RELEASE_SSH_KNOWN_HOSTS`, and variables `VAPOR_RELEASE_SSH_HOST` and
+`VAPOR_RELEASE_SSH_USER` (`vapor-release-publisher`). The environment should
+allow the `main` branch. Keep the signer key protected from pull-request jobs;
+the workflow publishes only after its Vapor build, staging, archive validation,
+and signing steps succeed on `main`.
+
+The workflow does not use GitHub checkout for project sources. It installs the
+current signed Vapor stable release, provisions Rust/Cargo and cross-build
+tools in Vapor User Data, and asks Vapor Installer to clone the Client at the
+triggering commit and Platform at a resolved commit under `~/Vapor/sources`.
+Cargo build, staging, and output-root discovery go through Vapor.
 
 ## Operator-managed storage
 
@@ -92,6 +154,7 @@ channels/{channel}/{platform}.version
 releases/{version}/{platform}/manifest.json
 releases/{version}/{platform}/manifest.json.sig
 releases/{version}/{platform}/vapor.tar.gz
+releases/{version}/{platform}/vapor-setup[.exe]
 ```
 
 The pointer contains only the selected version and a trailing newline is

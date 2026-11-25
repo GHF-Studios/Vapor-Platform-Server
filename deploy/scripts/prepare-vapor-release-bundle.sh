@@ -36,8 +36,8 @@ for value_name in release_version release_channel release_key_id; do
   fi
 done
 
-if [ "$release_platform" != "windows-x86_64" ]; then
-  echo "error: this release pipeline currently supports only windows-x86_64" >&2
+if [[ "$release_platform" != "windows-x86_64" && "$release_platform" != "linux-x86_64" ]]; then
+  echo "error: supported release platforms are windows-x86_64 and linux-x86_64" >&2
   exit 2
 fi
 
@@ -77,8 +77,13 @@ trap cleanup EXIT
 release_directory="$bundle_temp/releases/$release_version/$release_platform"
 mkdir -p -- "$release_directory" "$bundle_temp/channels/$release_channel"
 install -m 0644 -- "$archive_path" "$release_directory/vapor.tar.gz"
+case "$release_platform" in
+  windows-x86_64) setup_name=vapor-setup.exe ;;
+  linux-x86_64) setup_name=vapor-setup ;;
+esac
 
 export VAPOR_RELEASE_ARCHIVE="$release_directory/vapor.tar.gz"
+export VAPOR_RELEASE_SETUP="$release_directory/$setup_name"
 export VAPOR_RELEASE_VERSION="$release_version"
 export VAPOR_RELEASE_CHANNEL="$release_channel"
 export VAPOR_RELEASE_PLATFORM="$release_platform"
@@ -115,6 +120,8 @@ archive_path = os.environ["VAPOR_RELEASE_ARCHIVE"]
 
 if not semver.fullmatch(version) or not semver.fullmatch(minimum):
     sys.exit("error: release and minimum-updater versions must be valid SemVer")
+if platform not in {"windows-x86_64", "linux-x86_64"}:
+    sys.exit("error: unsupported release platform")
 if not segment.fullmatch(channel) or not segment.fullmatch(key_id):
     sys.exit("error: channel and key id must be safe ASCII path/identifier values")
 parsed_origin = urlparse(origin)
@@ -158,6 +165,38 @@ if size == 0:
 
 member_count = 0
 unpacked_size = 0
+archive_paths = set()
+app_manifest = None
+setup_member = None
+setup_digest = hashlib.sha256()
+setup_size = 0
+target = {
+    "windows-x86_64": "x86_64-pc-windows-gnullvm",
+    "linux-x86_64": "x86_64-unknown-linux-gnu",
+}[platform]
+required_runtime = {
+    "windows-x86_64": [
+        f"bin/{target}/vapor-entrypoint.exe",
+        f"bin/{target}/vapor.exe",
+        f"bin/{target}/vapor-installer.exe",
+        f"bin/{target}/vapor-setup.exe",
+        f"bin/{target}/vapor-gui.exe",
+        f"bin/{target}/vapor-client-service.exe",
+        f"bin/{target}/vapor-ide-host.exe",
+        f"bin/{target}/steam_api64.dll",
+        f"bin/{target}/libunwind.dll",
+    ],
+    "linux-x86_64": [
+        f"bin/{target}/vapor-entrypoint",
+        f"bin/{target}/vapor",
+        f"bin/{target}/vapor-installer",
+        f"bin/{target}/vapor-setup",
+        f"bin/{target}/vapor-gui",
+        f"bin/{target}/vapor-client-service",
+        f"bin/{target}/vapor-ide-host",
+        f"bin/{target}/libsteam_api.so",
+    ],
+}[platform]
 try:
     with tarfile.open(archive_path, mode="r:gz") as package:
         for member in package:
@@ -172,17 +211,45 @@ try:
                 or path.is_absolute()
                 or re.match(r"^[A-Za-z]:", name)
                 or ".." in path.parts
+                or any(part.endswith((".", " ")) or ":" in part for part in path.parts)
             ):
                 sys.exit(f"error: unsafe Windows archive path: {name!r}")
             if not (member.isfile() or member.isdir()):
                 sys.exit(f"error: unsupported archive entry type: {name!r}")
             folded_parts = {part.casefold() for part in path.parts}
-            if folded_parts.intersection({"madmax", "mad max", "madmaxmodding"}) or path.name.casefold() in {
+            if folded_parts.intersection({"madmax", "mad max", "madmaxmodding", "steamapps"}) or path.name.casefold() in {
                 "madmax.exe",
                 "madmax_dx11.exe",
                 "madmaxmodding.asi",
             }:
                 sys.exit(f"error: release archive appears to contain Mad Max game files: {name!r}")
+            normalized = "/".join(part.casefold() for part in path.parts if part not in ("", "."))
+            if normalized in {"content/default", "content/installed", "content/packages"} or normalized.startswith(("content/default/", "content/installed/", "content/packages/")):
+                sys.exit(f"error: release archive contains Steam/game payload: {name!r}")
+            if normalized:
+                if normalized in archive_paths:
+                    sys.exit(f"error: release archive contains duplicate or case-colliding paths: {name!r}")
+                archive_paths.add(normalized)
+            if normalized == "app.vapor.toml":
+                if not member.isfile() or member.size > 64 * 1024:
+                    sys.exit("error: App.vapor.toml must be a regular file no larger than 64 KiB")
+                stream = package.extractfile(member)
+                app_manifest = stream.read(64 * 1024 + 1).decode("utf-8") if stream else None
+            setup_relative = f"bin/{target}/{os.path.basename(os.environ['VAPOR_RELEASE_SETUP'])}".casefold()
+            if normalized == setup_relative:
+                if not member.isfile() or member.size == 0 or member.size > 512 * 1024 * 1024:
+                    sys.exit("error: standalone setup binary is not a regular bounded file")
+                setup_stream = package.extractfile(member)
+                if setup_stream is None:
+                    sys.exit("error: could not read the standalone setup executable from the archive")
+                with open(os.environ["VAPOR_RELEASE_SETUP"], "wb") as setup_output:
+                    for block in iter(lambda: setup_stream.read(1024 * 1024), b""):
+                        setup_size += len(block)
+                        setup_digest.update(block)
+                        setup_output.write(block)
+                if setup_size != member.size:
+                    sys.exit("error: extracted standalone setup size does not match its archive entry")
+                setup_member = member
             unpacked_size += member.size
             if unpacked_size > 8 * 1024 * 1024 * 1024:
                 sys.exit("error: release archive expands beyond the 8 GiB package limit")
@@ -190,6 +257,29 @@ except (OSError, tarfile.TarError) as error:
     sys.exit(f"error: release must be a readable gzip tar archive: {error}")
 if member_count == 0:
     sys.exit("error: release archive contains no files")
+if app_manifest is None:
+    sys.exit("error: archive must contain the dedicated standalone App.vapor.toml")
+section = None
+root_values = {}
+for line in app_manifest.splitlines():
+    line = line.split("#", 1)[0].strip()
+    if line.startswith("[") and line.endswith("]"):
+        section = line.strip("[]")
+        if section in {"root.steam", "root.content"}:
+            sys.exit("error: standalone App.vapor.toml must not contain Steam or game content metadata")
+        continue
+    if section == "root" and "=" in line:
+        key, value = line.split("=", 1)
+        root_values[key.strip()] = value.strip().strip('"')
+if root_values.get("name") != "vapor-client" or root_values.get("organization") != "ghf-studios":
+    sys.exit("error: App.vapor.toml does not identify the Vapor standalone product")
+missing_runtime = sorted(set(required_runtime) - archive_paths)
+if missing_runtime:
+    sys.exit("error: release archive is missing required runtime files: " + ", ".join(missing_runtime))
+if setup_member is None:
+    sys.exit("error: release archive is missing the standalone setup executable")
+if setup_size == 0:
+    sys.exit("error: extracted standalone setup executable is empty")
 
 manifest = {
     "schema": 1,
@@ -202,6 +292,11 @@ manifest = {
         "url": f"{origin}/api/updates/v1/vapor/releases/{version}/{platform}/vapor.tar.gz",
         "size": size,
         "sha256": digest.hexdigest(),
+    },
+    "setup": {
+        "url": f"{origin}/api/updates/v1/vapor/releases/{version}/{platform}/{os.path.basename(os.environ['VAPOR_RELEASE_SETUP'])}",
+        "size": setup_size,
+        "sha256": setup_digest.hexdigest(),
     },
     "release_notes_url": notes_url,
 }
