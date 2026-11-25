@@ -99,8 +99,49 @@ staged Linux binary's help output includes the headless command. Vapor-managed
 Linux and Windows application archives have been assembled and signed locally,
 and the publish script accepted both against isolated temporary storage. No
 signed release is published on Artifact yet, so the live feed and clean-machine
-bootstrap have not been exercised. The default-branch release workflow and
-restricted publication credentials also remain unconfigured.
+bootstrap have not been exercised. The Client now contains a default-branch
+release workflow and restricted publication receiver/provisioning scripts;
+the first live seed release and server/GitHub credential setup remain pending.
+
+## Restricted CI publication
+
+The default-branch Vapor release workflow streams one prepared bundle over SSH
+to `deploy/scripts/vapor-release-publish-receiver.sh`. It does not use an
+upload API, SCP, a general-purpose deploy key, or a shell account with arbitrary
+commands. The receiver accepts only `publish linux-x86_64` or
+`publish windows-x86_64`, rejects links, special files, unexpected paths,
+duplicate entries, and incomplete bundles, then delegates signature and
+artifact validation to the existing publisher.
+
+Provision the dedicated account and forced-command key after deploying the
+receiver and publisher scripts:
+
+```text
+sudo bash deploy/scripts/install-vapor-release-publisher.sh publisher_ed25519.pub vapor-release-public.pem
+```
+
+The first argument is a newly generated Ed25519 SSH public key whose private
+half is stored only as the protected `VAPOR_RELEASE_SSH_PRIVATE_KEY` GitHub
+environment secret. The second is the Ed25519 release verification public key
+matching the key pinned in Vapor Installer. The installer creates
+`vapor-release-publisher`, installs a forced-command key, and grants that user
+sudo permission for only the root-owned receiver. Do not reuse an operator or
+deployment SSH key.
+
+Configure the `vapor-stable-release` GitHub environment with the signing key
+secret `VAPOR_RELEASE_SIGNING_KEY_B64`, publisher key secret
+`VAPOR_RELEASE_SSH_PRIVATE_KEY`, pinned host key secret
+`VAPOR_RELEASE_SSH_KNOWN_HOSTS`, and variables `VAPOR_RELEASE_SSH_HOST` and
+`VAPOR_RELEASE_SSH_USER` (`vapor-release-publisher`). The environment should
+allow the `main` branch. Keep the signer key protected from pull-request jobs;
+the workflow publishes only after its Vapor build, staging, archive validation,
+and signing steps succeed on `main`.
+
+The workflow does not use GitHub checkout for project sources. It installs the
+current signed Vapor stable release, provisions Rust/Cargo and cross-build
+tools in Vapor User Data, and asks Vapor Installer to clone the Client at the
+triggering commit and Platform at a resolved commit under `~/Vapor/sources`.
+Cargo build, staging, and output-root discovery go through Vapor.
 
 ## Operator-managed storage
 
