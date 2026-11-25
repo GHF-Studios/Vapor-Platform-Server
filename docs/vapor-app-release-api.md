@@ -91,11 +91,14 @@ The current Vapor-Client feature branch contains the standalone Windows/Linux
 GUI bootstrap and CLI lifecycle. The Installer pins the production Ed25519
 public key, verifies the exact signed manifest, checks archive size and
 SHA-256, downloads over HTTPS, rejects unsafe archive entries, stages immutable
-versions, and atomically activates or repairs them. The GUI exposes install,
-update, repair, launch, and removal actions. Vapor-managed Linux and Windows
-application archives have been assembled and signed locally, and the publish
-script has been exercised against isolated temporary storage. No signed
-release is published on Artifact yet, so the live feed and clean-machine
+versions, and atomically activates or repairs them. The `vapor-setup` binary
+opens the GUI without arguments and accepts `install [--channel stable]` for
+headless automation through the same signed acquisition path. The GUI
+workspace compiled through Vapor-managed Linux and Windows release builds; the
+staged Linux binary's help output includes the headless command. Vapor-managed
+Linux and Windows application archives have been assembled and signed locally,
+and the publish script accepted both against isolated temporary storage. No
+signed release is published on Artifact yet, so the live feed and clean-machine
 bootstrap have not been exercised. The default-branch release workflow and
 restricted publication credentials also remain unconfigured.
 
