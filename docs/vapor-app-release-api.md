@@ -17,6 +17,7 @@ The stable Windows feed is:
 ```text
 GET /api/updates/v1/vapor/stable/windows-x86_64/latest.json
 GET /api/updates/v1/vapor/stable/windows-x86_64/latest.json.sig
+GET /api/updates/v1/vapor/stable/windows-x86_64/versions.json
 ```
 
 The exact immutable release endpoints are:
@@ -28,6 +29,16 @@ GET /api/updates/v1/vapor/releases/{version}/{platform}/vapor.tar.gz
 GET /api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe
 GET /api/updates/v1/vapor/releases/{version}/linux-x86_64/vapor-setup
 ```
+
+The channel's `versions.json` endpoint returns the complete, newest-first list
+of stable semantic versions that have a complete immutable release for that
+platform. It is derived from the immutable release directories; advancing a
+stable channel pointer does not require a separate history-file update. Each
+listed version still uses its own immutable manifest and detached signature;
+the endpoint is a discovery index, not a replacement signature. The Installer
+continues to verify the exact manifest bytes before installing. The Homepage
+keeps the channel's latest version as its primary download and renders older
+entries as stable-release history.
 
 The latest JSON response is served byte-for-byte from the selected immutable
 `manifest.json`; its `.sig` response is served byte-for-byte from the matching
