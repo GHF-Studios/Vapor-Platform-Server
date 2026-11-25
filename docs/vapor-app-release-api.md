@@ -87,14 +87,17 @@ match a public key trusted by the client build. Release preparation does not
 build Vapor; it packages a previously built archive, which must contain Vapor
 only and no Mad Max game files or extracted game content.
 
-This feed and archive pipeline is not yet a Windows GUI installer or a complete
-self-update installation flow. In the current Vapor-Client checkout, the
-Vapor-Installer source contains no client-side Ed25519 manifest verifier,
-archive size/SHA-256 verifier, network download, safe extraction, staged
-activation, rollback, or GUI update status. No production public trust key is
-embedded in that checkout. These remain client work before a public release is
-usable end to end. Recheck the live client source before changing this status;
-older copies of this document incorrectly described the verifier as present.
+The current Vapor-Client feature branch contains the standalone Windows/Linux
+GUI bootstrap and CLI lifecycle. The Installer pins the production Ed25519
+public key, verifies the exact signed manifest, checks archive size and
+SHA-256, downloads over HTTPS, rejects unsafe archive entries, stages immutable
+versions, and atomically activates or repairs them. The GUI exposes install,
+update, repair, launch, and removal actions. Vapor-managed Linux and Windows
+application archives have been assembled and signed locally, and the publish
+script has been exercised against isolated temporary storage. No signed
+release is published on Artifact yet, so the live feed and clean-machine
+bootstrap have not been exercised. The default-branch release workflow and
+restricted publication credentials also remain unconfigured.
 
 ## Operator-managed storage
 
