@@ -30,9 +30,9 @@ GET /api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe
 GET /api/updates/v1/vapor/releases/{version}/linux-x86_64/vapor-setup
 ```
 
-The channel's `versions.json` endpoint returns the complete, newest-first list of releases
+The `stable` channel is the distribution channel, not a claim that the SemVer lacks a prerelease marker. The channel's `versions.json` endpoint returns the complete, newest-first list of releases
 and includes only versions with a complete immutable release for that
-platform. During pre-alpha, versions use the pinned 0.5.0 compatibility target plus an inner SemVer (0.5.0-pre-alpha-0.1.0); history sorts those versions by inner SemVer, with final 0.5.0 after its pre-alpha releases. It is derived from the immutable release directories; advancing a
+platform. During pre-alpha, versions use the pinned 0.5.0 compatibility target plus an inner SemVer (0.5.0-pre-alpha-0.1.0); history sorts those versions by inner SemVer, with final 0.5.0 after its pre-alpha releases. The index is derived from the immutable release directories; advancing a
 stable channel pointer does not require a separate history-file update. Each
 listed version still uses its own immutable manifest and detached signature;
 the endpoint is a discovery index, not a replacement signature. The Installer
