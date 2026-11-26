@@ -1885,6 +1885,123 @@ const JS: &str = r#"
     refreshButton?.addEventListener('click', refresh); moreButton?.addEventListener('click', loadMore); refresh();
   }
 
+  (() => {
+    const form = document.querySelector('#ssh-request-form');
+    const status = document.querySelector('#ssh-request-status');
+    const submit = document.querySelector('#ssh-request-submit');
+    const cancel = document.querySelector('#ssh-request-cancel');
+    if (!form || !status || !submit || !cancel) return;
+    let stopRequested = false;
+    let active = false;
+    let submissionStarted = false;
+    let authorizationTab = null;
+    let deviceCode = null;
+    let credential = null;
+    let fallbackAuthorizationLink = null;
+    const allowedCapabilities = new Set(['vapor_deploy', 'vapor_service_control', 'host_admin']);
+    const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    const readSshString = (bytes, offset) => {
+      if (offset + 4 > bytes.length) throw new Error('The public key is malformed.');
+      const length = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0);
+      const start = offset + 4;
+      if (start + length > bytes.length) throw new Error('The public key is malformed.');
+      return [bytes.slice(start, start + length), start + length];
+    };
+    const publicKeyIdentity = async value => {
+      const line = value.trim();
+      if (line.includes('\n') || line.includes('\r')) throw new Error('Enter one OpenSSH Ed25519 public key line.');
+      const fields = line.split(/\s+/);
+      if (fields.length < 2 || fields[0] !== 'ssh-ed25519') throw new Error('Only OpenSSH Ed25519 public keys are supported.');
+      let raw;
+      try { raw = Uint8Array.from(atob(fields[1]), character => character.charCodeAt(0)); }
+      catch (_) { throw new Error('The public key encoding is invalid.'); }
+      if (btoa(String.fromCharCode(...raw)).replace(/=+$/, '') !== fields[1].replace(/=+$/, '')) throw new Error('The public key encoding is invalid.');
+      const [algorithm, next] = readSshString(raw, 0);
+      const [key, end] = readSshString(raw, next);
+      if (new TextDecoder().decode(algorithm) !== 'ssh-ed25519' || key.length !== 32 || end !== raw.length) throw new Error('The key must be a valid OpenSSH Ed25519 key.');
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', raw));
+      const fingerprint = `SHA256:${btoa(String.fromCharCode(...digest)).replace(/=+$/, '')}`;
+      return { publicKey: line, fingerprint };
+    };
+    const apiJson = async (url, init, expectedStatus = 200) => {
+      const response = await fetch(url, { ...init, cache: 'no-store', redirect: 'error', credentials: 'same-origin', signal: AbortSignal.timeout(15000) });
+      if (response.status !== expectedStatus) throw new Error(`The request failed (HTTP ${response.status}).`);
+      const body = await response.json().catch(() => null);
+      if (!body || typeof body !== 'object') throw new Error('The service returned an invalid response.');
+      return body;
+    };
+    cancel.addEventListener('click', () => {
+      stopRequested = true;
+      if (authorizationTab && !authorizationTab.closed) authorizationTab.close();
+      status.textContent = 'Stopped waiting. No Platform request was submitted.';
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (active) return;
+      active = true; stopRequested = false; submit.disabled = true; cancel.hidden = false; cancel.disabled = false; submissionStarted = false; status.textContent = 'Validating the public key…';
+      authorizationTab = window.open('about:blank', 'vapor-identity-ssh-authorization');
+      try {
+        if (location.protocol !== 'https:') throw new Error('SSH requests require the secure Platform website.');
+        const formData = new FormData(form);
+        const { publicKey, fingerprint } = await publicKeyIdentity(String(formData.get('public_key') || ''));
+        const purpose = String(formData.get('purpose') || '').trim();
+        const capabilities = formData.getAll('capability').map(String);
+        const durationHours = Number(formData.get('duration_hours'));
+        if (!purpose || new TextEncoder().encode(purpose).length > 500 || /[\u0000-\u001f\u007f]/.test(purpose)) throw new Error('Purpose must be plain text of 1–500 bytes.');
+        if (capabilities.length === 0 || capabilities.some(value => !allowedCapabilities.has(value)) || new Set(capabilities).size !== capabilities.length || (capabilities.includes('host_admin') && capabilities.length !== 1)) throw new Error('Choose supported, non-conflicting capabilities. Host administrator access must be requested alone.');
+        if (![1, 2, 4, 8].includes(durationHours)) throw new Error('Choose a supported request duration.');
+        const requestedDurationSeconds = durationHours * 3600;
+        status.textContent = 'Starting Identity confirmation…';
+        const start = await apiJson('/api/identity/v1/cli/ssh-authorization/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssh_fingerprint: fingerprint, purpose, requested_capabilities: capabilities, requested_duration_seconds: requestedDurationSeconds })
+        }, 201);
+        const verify = new URL(start.verification_uri);
+        if (verify.origin !== location.origin || verify.protocol !== 'https:' || verify.pathname !== '/cli/ssh/authorize' || !verify.searchParams.get('user_code') || typeof start.device_code !== 'string' || !start.device_code || !Number.isFinite(start.expires_in_seconds) || start.expires_in_seconds <= 0 || !Number.isFinite(start.poll_interval_seconds) || start.poll_interval_seconds <= 0) throw new Error('Identity returned an invalid confirmation response.');
+        if (stopRequested) return;
+        deviceCode = start.device_code;
+        if (authorizationTab) authorizationTab.location.replace(verify.href);
+        else {
+          fallbackAuthorizationLink = document.createElement('a'); fallbackAuthorizationLink.href = verify.href; fallbackAuthorizationLink.target = '_blank'; fallbackAuthorizationLink.rel = 'noopener noreferrer'; fallbackAuthorizationLink.textContent = 'Open Identity confirmation';
+        }
+        status.replaceChildren(document.createTextNode(authorizationTab ? 'Waiting for Identity confirmation. Review the key and request details in the opened tab.' : 'Open the confirmation page, approve the request, then return here. '));
+        if (fallbackAuthorizationLink) status.append(fallbackAuthorizationLink);
+        const deadline = Date.now() + Math.min(Number(start.expires_in_seconds), 600) * 1000;
+        while (!stopRequested && Date.now() < deadline) {
+          await wait(Math.min(Number(start.poll_interval_seconds), 30) * 1000);
+          if (stopRequested) break;
+          const poll = await apiJson('/api/identity/v1/cli/ssh-authorization/poll', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device_code: deviceCode })
+          });
+          if (poll.status === 'pending') continue;
+          if (poll.status === 'denied') throw new Error('Identity confirmation was denied.');
+          if (poll.status !== 'approved' || typeof poll.credential_token !== 'string' || !poll.credential_token) throw new Error('Identity returned an invalid authorization result.');
+          credential = poll.credential_token;
+          break;
+        }
+        if (stopRequested) return;
+        if (!credential) throw new Error('Identity confirmation expired. No Platform request was submitted.');
+        cancel.hidden = true; cancel.disabled = true; submissionStarted = true;
+        status.textContent = 'Identity confirmed. Submitting the request for separate root review…';
+        const created = await apiJson('/api/ssh-access/requests', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${credential}` },
+          body: JSON.stringify({ public_key: publicKey, purpose, requested_capabilities: capabilities, requested_duration_seconds: requestedDurationSeconds })
+        }, 202);
+        if (typeof created.id !== 'string' || !created.id || created.status !== 'pending') throw new Error('Platform returned an invalid request result.');
+        const link = document.createElement('a'); link.href = '/admin/approvals#pending-ssh-approvals'; link.textContent = 'Open pending SSH approvals';
+        status.replaceChildren(document.createTextNode(`Request ${created.id} is pending root approval. `), link);
+      } catch (error) {
+        if (authorizationTab && !authorizationTab.closed) authorizationTab.close();
+        status.textContent = submissionStarted
+          ? 'Submission outcome is uncertain. Check pending approvals before retrying.'
+          : error?.message || 'Could not submit the SSH request.';
+      } finally {
+        credential = null; deviceCode = null; fallbackAuthorizationLink = null;
+        active = false; submit.disabled = false; cancel.disabled = false; cancel.hidden = true;
+      }
+    });
+  })();
+
   const recoveryFeedback = document.querySelector('#recovery-feedback');
   const recoveryFacts = document.querySelector('#recovery-facts');
   const recoveryRefresh = document.querySelector('#recovery-refresh');
@@ -3127,7 +3244,7 @@ fn operations_page(view: OperationsView) -> String {
         )
         .to_owned(),
         OperationsView::Hosting => "<section class=\"card\"><h2>Service health and feature readiness</h2><p class=\"muted\">Health reports whether a service answers its probe. Feature readiness is shown only when the service reports it; “not reported” is not treated as ready.</p><div id=\"operations-status\" aria-live=\"polite\"><p class=\"muted\">Loading service status…</p></div></section><section class=\"card\"><h2>Runbooks</h2><p class=\"muted\">Use the service-owned recovery guidance for operational changes.</p><a href=\"/docs\">Open server runbooks</a></section>".to_owned(),
-        OperationsView::TemporaryAccess => "<p class=\"eyebrow\">Operate · Access</p><div class=\"request-queue-header\"><div><h1>SSH access</h1><p class=\"muted\">Manage active grants and closed access records. Pending requests are reviewed in <a href=\"/admin/approvals#pending-ssh-approvals\">Approvals</a>.</p></div><button id=\"ssh-access-refresh\" type=\"button\">Refresh</button></div><section class=\"ssh-workbench\" aria-label=\"SSH access workbench\"><div class=\"ssh-list-panel\"><div class=\"ssh-list-toolbar\"><label for=\"ssh-access-search\">Find a grant<input id=\"ssh-access-search\" type=\"search\" placeholder=\"Purpose, fingerprint, account\" autocomplete=\"off\"></label><label for=\"ssh-access-filter\">Show<select id=\"ssh-access-filter\"><option value=\"active\">Active grants</option><option value=\"all\">All grants</option><option value=\"history\">Closed grants</option></select></label><p id=\"ssh-access-count\" class=\"ssh-list-count\" aria-live=\"polite\">Loading grants…</p></div><ul id=\"ssh-access-list\" class=\"ssh-record-list\" aria-label=\"SSH grants\"><li class=\"muted\">Loading…</li></ul><button id=\"ssh-access-more\" type=\"button\" hidden>Load older records</button></div><section id=\"ssh-access-detail\" class=\"ssh-detail-panel\" aria-live=\"polite\"><p class=\"muted\">Choose a grant to inspect its details.</p></section></section>".to_owned(),
+        OperationsView::TemporaryAccess => "<p class=\"eyebrow\">Operate · Access</p><div class=\"request-queue-header\"><div><h1>SSH access</h1><p class=\"muted\">Manage active grants and closed access records. Pending requests are reviewed in <a href=\"/admin/approvals#pending-ssh-approvals\">Approvals</a>.</p></div><button id=\"ssh-access-refresh\" type=\"button\">Refresh</button></div><section class=\"card\" aria-labelledby=\"ssh-request-heading\"><h2 id=\"ssh-request-heading\">Request temporary SSH access</h2><p class=\"muted\">Enter a public key only. Vapor Identity confirms the exact request before it is submitted; a Platform root operator separately decides whether to grant it.</p><form id=\"ssh-request-form\"><label for=\"ssh-request-public-key\">OpenSSH Ed25519 public key<textarea id=\"ssh-request-public-key\" name=\"public_key\" required autocomplete=\"off\" spellcheck=\"false\"></textarea></label><label for=\"ssh-request-purpose\">Purpose<input id=\"ssh-request-purpose\" name=\"purpose\" required maxlength=\"500\" autocomplete=\"off\"></label><fieldset id=\"ssh-request-capabilities\"><legend>Requested capability</legend><label><input type=\"checkbox\" name=\"capability\" value=\"vapor_deploy\"> Vapor deploy</label><label><input type=\"checkbox\" name=\"capability\" value=\"vapor_service_control\"> Vapor service control</label><label><input type=\"checkbox\" name=\"capability\" value=\"host_admin\"> Host administrator access</label></fieldset><label for=\"ssh-request-duration\">Requested duration<select id=\"ssh-request-duration\" name=\"duration_hours\"><option value=\"1\">1 hour</option><option value=\"2\">2 hours</option><option value=\"4\">4 hours</option><option value=\"8\">8 hours</option></select></label><div class=\"form-actions\"><button id=\"ssh-request-submit\" type=\"submit\">Confirm identity and submit request</button><button id=\"ssh-request-cancel\" type=\"button\" hidden>Stop waiting</button></div></form><p id=\"ssh-request-status\" role=\"status\" aria-live=\"polite\"></p></section><section class=\"ssh-workbench\" aria-label=\"SSH access workbench\"><div class=\"ssh-list-panel\"><div class=\"ssh-list-toolbar\"><label for=\"ssh-access-search\">Find a grant<input id=\"ssh-access-search\" type=\"search\" placeholder=\"Purpose, fingerprint, account\" autocomplete=\"off\"></label><label for=\"ssh-access-filter\">Show<select id=\"ssh-access-filter\"><option value=\"active\">Active grants</option><option value=\"all\">All grants</option><option value=\"history\">Closed grants</option></select></label><p id=\"ssh-access-count\" class=\"ssh-list-count\" aria-live=\"polite\">Loading grants…</p></div><ul id=\"ssh-access-list\" class=\"ssh-record-list\" aria-label=\"SSH grants\"><li class=\"muted\">Loading…</li></ul><button id=\"ssh-access-more\" type=\"button\" hidden>Load older records</button></div><section id=\"ssh-access-detail\" class=\"ssh-detail-panel\" aria-live=\"polite\"><p class=\"muted\">Choose a grant to inspect its details.</p></section></section>".to_owned(),
         OperationsView::History => concat!(
             "<p class=\"eyebrow\">Platform · Records</p><h1>History</h1>",
             "<section class=\"card\"><p class=\"muted\">Search records from their owning services. Select a row to inspect its details.</p>",
@@ -4547,6 +4664,36 @@ mod tests {
     }
 
     #[test]
+    fn ssh_access_request_form_uses_identity_confirmation_and_public_key_only() {
+        let page = super::operations_page(super::OperationsView::TemporaryAccess);
+        assert!(page.contains("id=\"ssh-request-form\""));
+        assert!(page.contains("id=\"ssh-request-public-key\""));
+        assert!(page.contains("id=\"ssh-request-purpose\""));
+        assert!(page.contains("id=\"ssh-request-capabilities\""));
+        assert!(!page.contains("type=\"password\""));
+        assert!(!page.contains("private key"));
+        let script = super::JS;
+        assert!(script.contains("/api/identity/v1/cli/ssh-authorization/start"));
+        assert!(script.contains("/api/identity/v1/cli/ssh-authorization/poll"));
+        assert!(script.contains("/api/ssh-access/requests"));
+        assert!(script.contains("poll.status !== 'approved'"));
+        assert!(script.contains("credential_token"));
+        assert!(script.contains("vapor-identity-ssh-authorization"));
+        assert!(script
+            .contains("Submission outcome is uncertain. Check pending approvals before retrying."));
+        assert!(
+            script.find("poll.status !== 'approved'").unwrap()
+                < script.find("apiJson('/api/ssh-access/requests'").unwrap()
+        );
+        assert!(
+            script
+                .find("cancel.hidden = true; cancel.disabled = true; submissionStarted = true;")
+                .unwrap()
+                < script.find("apiJson('/api/ssh-access/requests'").unwrap()
+        );
+    }
+
+    #[test]
     fn approvals_inbox_collapses_owner_queues_and_shows_live_counts() {
         let page = super::approvals_page_content();
         assert!(page.contains("Decision inbox"));
@@ -4758,7 +4905,6 @@ mod tests {
             .next()
             .unwrap();
         assert!(ssh_access.contains("item.status !== 'pending'"));
-        assert!(!ssh_access.contains("/admin/approvals#pending-ssh-approvals"));
         assert!(!ssh_access.contains("/requests/${encodeURIComponent(item.id)}/approve"));
         assert!(!ssh_access.contains("/requests/${encodeURIComponent(item.id)}/reject"));
         assert!(ssh_access.contains("/grants/${encodeURIComponent(item.id)}/revoke"));
