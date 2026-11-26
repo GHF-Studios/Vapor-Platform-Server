@@ -86,4 +86,4 @@
 - [x] Run Vapor-managed tests and builds from each changed source workspace (Vapor-CLI and Platform root); no raw Cargo commands were used.
 - [x] Inspect the final diff for private-key/token exposure and run `git diff --check` in each changed repository.
 - [x] Record code/build/test evidence separately from any live SSH request, grant, host operation, or stable-release publication; those external steps are not validated by local checks.
-- [ ] Commit and push `Vapor-CLI`, then commit and push its updated gitlink in Vapor-Client, and separately commit/push Platform on its existing feature branch; preserve unrelated changes and the established dependency order.
+- [x] Commit and push `Vapor-CLI`, then commit and push its updated gitlink in Vapor-Client, and separately commit/push Platform on its existing feature branch; preserve unrelated changes and the established dependency order.
