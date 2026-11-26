@@ -30,15 +30,15 @@ GET /api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe
 GET /api/updates/v1/vapor/releases/{version}/linux-x86_64/vapor-setup
 ```
 
-The channel's `versions.json` endpoint returns the complete, newest-first list
-of stable semantic versions that have a complete immutable release for that
-platform. It is derived from the immutable release directories; advancing a
+The channel's `versions.json` endpoint returns the complete, newest-first list of releases
+and includes only versions with a complete immutable release for that
+platform. During pre-alpha, versions use the pinned 0.5.0 compatibility target plus an inner SemVer (0.5.0-pre-alpha-0.1.0); history sorts those versions by inner SemVer, with final 0.5.0 after its pre-alpha releases. It is derived from the immutable release directories; advancing a
 stable channel pointer does not require a separate history-file update. Each
 listed version still uses its own immutable manifest and detached signature;
 the endpoint is a discovery index, not a replacement signature. The Installer
 continues to verify the exact manifest bytes before installing. The Homepage
 keeps the channel's latest version as its primary download and renders older
-entries as stable-release history.
+entries as release history.
 
 The latest JSON response is served byte-for-byte from the selected immutable
 `manifest.json`; its `.sig` response is served byte-for-byte from the matching
@@ -77,9 +77,9 @@ not.
 Example operator flow:
 
 ```text
-bash deploy/scripts/prepare-vapor-release-bundle.sh vapor.tar.gz 0.5.0 stable windows-x86_64 0.5.0 vapor-release-2026 private-ed25519.pem /tmp/vapor-release-0.5.0
+bash deploy/scripts/prepare-vapor-release-bundle.sh vapor.tar.gz 0.5.0-pre-alpha-0.1.0 stable windows-x86_64 0.5.0 vapor-release-2026-11-24 private-ed25519.pem /tmp/vapor-release-0.5.0-pre-alpha-0.1.0
 # Transfer that prepared folder to the VPS through your approved secure method.
-VAPOR_UPDATES_ROOT=/var/lib/vapor-server/updates bash deploy/scripts/publish-vapor-release-bundle.sh /path/to/vapor-release-0.5.0 public-ed25519.pem vapor-release-2026
+VAPOR_UPDATES_ROOT=/var/lib/vapor-server/updates bash deploy/scripts/publish-vapor-release-bundle.sh /path/to/vapor-release-0.5.0-pre-alpha-0.1.0 public-ed25519.pem vapor-release-2026-11-24
 ```
 
 Use a private-key file kept outside the repository and VPS. The key id must
@@ -87,7 +87,7 @@ match a public key trusted by the client build. Release preparation does not
 build Vapor; it packages a previously built archive, which must contain Vapor
 only and no Mad Max game files or extracted game content.
 
-The current Vapor-Client feature branch contains the standalone Windows/Linux
+The Vapor-Client dev branch contains the standalone Windows/Linux
 GUI bootstrap and CLI lifecycle. The Installer pins the production Ed25519
 public key, verifies the exact signed manifest, checks archive size and
 SHA-256, downloads over HTTPS, rejects unsafe archive entries, stages immutable
@@ -101,7 +101,7 @@ and the publish script accepted both against isolated temporary storage. No
 signed release is published on Artifact yet, so the live feed and clean-machine
 bootstrap have not been exercised. The Client now contains a default-branch
 release workflow and restricted publication receiver/provisioning scripts;
-the first live seed release and server/GitHub credential setup remain pending.
+the first signed pre-alpha release must seed the feed before the default-branch workflow can publish subsequent releases; no release is currently published.
 
 ## Restricted CI publication
 
