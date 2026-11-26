@@ -100,6 +100,7 @@ import os
 import re
 import sys
 import tarfile
+import tomllib
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
@@ -167,6 +168,7 @@ member_count = 0
 unpacked_size = 0
 archive_paths = set()
 app_manifest = None
+vapor_home_manifest = None
 setup_member = None
 setup_digest = hashlib.sha256()
 setup_size = 0
@@ -176,6 +178,7 @@ target = {
 }[platform]
 required_runtime = {
     "windows-x86_64": [
+        "vapor-home.toml",
         f"bin/{target}/vapor-entrypoint.exe",
         f"bin/{target}/vapor.exe",
         f"bin/{target}/vapor-installer.exe",
@@ -187,6 +190,7 @@ required_runtime = {
         f"bin/{target}/libunwind.dll",
     ],
     "linux-x86_64": [
+        "vapor-home.toml",
         f"bin/{target}/vapor-entrypoint",
         f"bin/{target}/vapor",
         f"bin/{target}/vapor-installer",
@@ -235,6 +239,11 @@ try:
                     sys.exit("error: App.vapor.toml must be a regular file no larger than 64 KiB")
                 stream = package.extractfile(member)
                 app_manifest = stream.read(64 * 1024 + 1).decode("utf-8") if stream else None
+            if normalized == "vapor-home.toml":
+                if not member.isfile() or member.size > 64 * 1024:
+                    sys.exit("error: Vapor-Home.toml must be a regular file no larger than 64 KiB")
+                stream = package.extractfile(member)
+                vapor_home_manifest = stream.read(64 * 1024 + 1).decode("utf-8") if stream else None
             setup_relative = f"bin/{target}/{os.path.basename(os.environ['VAPOR_RELEASE_SETUP'])}".casefold()
             if normalized == setup_relative:
                 if not member.isfile() or member.size == 0 or member.size > 512 * 1024 * 1024:
@@ -259,6 +268,14 @@ if member_count == 0:
     sys.exit("error: release archive contains no files")
 if app_manifest is None:
     sys.exit("error: archive must contain the dedicated standalone App.vapor.toml")
+if vapor_home_manifest is None:
+    sys.exit("error: archive must contain Vapor-Home.toml so installed Vapor commands can resolve their home")
+try:
+    home_values = tomllib.loads(vapor_home_manifest)
+except (tomllib.TOMLDecodeError, UnicodeError) as error:
+    sys.exit(f"error: Vapor-Home.toml is invalid: {error}")
+if home_values.get("schema") != 1 or home_values.get("vapor", {}).get("id") != "ghf-studios/vapor":
+    sys.exit("error: Vapor-Home.toml does not identify the supported Vapor home")
 section = None
 root_values = {}
 for line in app_manifest.splitlines():

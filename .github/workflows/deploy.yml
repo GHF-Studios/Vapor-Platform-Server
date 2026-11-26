@@ -41,6 +41,8 @@ jobs:
     name: Require composed Platform CI
     uses: ./.github/workflows/ci.yml
     if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    secrets:
+      VAPOR_SOURCE_READ_TOKEN: ${{ secrets.VAPOR_SOURCE_READ_TOKEN }}
 
   request-approval:
     name: Create pending deploy request

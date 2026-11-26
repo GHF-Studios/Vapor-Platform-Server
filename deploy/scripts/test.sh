@@ -4,8 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
-CARGO="${CARGO:-cargo}"
-TARGET_DIR="${VAPOR_PLATFORM_SERVER_TARGET_DIR:-${REPO_ROOT}/target}"
+VAPOR_CLI="${VAPOR_CLI:-vapor}"
 
 PACKAGES=(
   .
@@ -61,10 +60,9 @@ python3 -m unittest discover   -s "${REPO_ROOT}/deploy/tests"   -p 'test_*.py'
 for package in "${PACKAGES[@]}"; do
   echo "test: ${package}"
 
-  "${CARGO}" test \
-    --locked \
-    --manifest-path "${REPO_ROOT}/${package}/Cargo.toml" \
-    --target-dir "${TARGET_DIR}"
+  "${VAPOR_CLI}" sdk \
+    --workspace "${REPO_ROOT}/${package}" \
+    test
 done
 
 echo "test: all Vapor Platform Server checks passed"

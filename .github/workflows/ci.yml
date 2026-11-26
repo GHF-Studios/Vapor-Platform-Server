@@ -2,92 +2,306 @@ name: CI
 
 on:
   workflow_call:
+    secrets:
+      VAPOR_SOURCE_READ_TOKEN:
+        required: false
   pull_request:
   push:
     branches-ignore:
       - main
 
+permissions:
+  contents: read
+
 jobs:
-  root-ci:
+  linux-vapor-ci:
+    name: Vapor-managed Linux checks and node-agent package
     runs-on: ubuntu-latest
+    env:
+      VAPOR_SOURCE_READ_TOKEN: ${{ secrets.VAPOR_SOURCE_READ_TOKEN || github.token }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - name: Verify signed Vapor bootstrap, install its toolchain, and clone this revision through Vapor
+        shell: bash
+        env:
+          PLATFORM_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import shutil
+          import subprocess
+          import urllib.request
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+          origin = "https://vapor.ghf-studios.site"
+          platform = "linux-x86_64"
+          key_id = "vapor-release-2026-11-24"
+          raw_key = bytes.fromhex("1e3ab22c2cf6cb7c67cf92ca5a9e242e8fc697c15ed04589da4cbd7ed1842a43")
+          api = f"{origin}/api/updates/v1/vapor/stable/{platform}/latest.json"
+          with urllib.request.urlopen(api, timeout=30) as response:
+              manifest_bytes = response.read(64 * 1024 + 1)
+          if len(manifest_bytes) > 64 * 1024:
+              raise SystemExit("release manifest is too large")
+          with urllib.request.urlopen(api + ".sig", timeout=30) as response:
+              signature_hex = response.read(256).decode("ascii").strip()
+          if not re.fullmatch(r"[0-9a-f]{128}", signature_hex):
+              raise SystemExit("release signature is malformed")
+          manifest = json.loads(manifest_bytes)
+          if manifest.get("key_id") != key_id or manifest.get("channel") != "stable" or manifest.get("platform") != platform:
+              raise SystemExit("release manifest identity does not match the pinned Vapor release")
+          version = manifest.get("version")
+          if not isinstance(version, str) or not re.fullmatch(r"0\.5\.0-pre-alpha-(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
+              raise SystemExit("bootstrap version does not follow the pinned pre-alpha SemVer policy")
+          setup = manifest.get("setup")
+          if not isinstance(setup, dict):
+              raise SystemExit("release manifest has no signed setup payload")
+          setup_url = setup.get("url")
+          expected_url = f"{origin}/api/updates/v1/vapor/releases/{version}/{platform}/vapor-setup"
+          if setup_url != expected_url:
+              raise SystemExit("signed setup URL is outside the expected immutable release path")
+          expected_size = setup.get("size")
+          expected_digest = setup.get("sha256")
+          if not isinstance(expected_size, int) or expected_size <= 0 or not re.fullmatch(r"[0-9a-f]{64}", str(expected_digest)):
+              raise SystemExit("signed setup size or digest is invalid")
 
-      - name: Run Platform Server test recipe
-        run: deploy/scripts/test.sh
+          temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          public_der = temp / "vapor-release-public.der"
+          public_der.write_bytes(bytes.fromhex("302a300506032b6570032100") + raw_key)
+          manifest_path = temp / "vapor-release-manifest.json"
+          signature_path = temp / "vapor-release-manifest.sig"
+          manifest_path.write_bytes(manifest_bytes)
+          signature_path.write_bytes(bytes.fromhex(signature_hex))
+          openssl = shutil.which("openssl")
+          if openssl is None:
+              raise SystemExit("OpenSSL is required to verify the signed Vapor bootstrap")
+          subprocess.run([
+              openssl, "pkeyutl", "-verify", "-pubin", "-keyform", "DER",
+              "-inkey", str(public_der), "-rawin", "-in", str(manifest_path),
+              "-sigfile", str(signature_path),
+          ], check=True, stdout=subprocess.DEVNULL)
 
-  node-agent-package:
-    name: Build Linux node-agent package
-    needs: root-ci
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+          with urllib.request.urlopen(setup_url, timeout=300) as response:
+              setup_bytes = response.read(expected_size + 1)
+          if len(setup_bytes) != expected_size or hashlib.sha256(setup_bytes).hexdigest() != expected_digest:
+              raise SystemExit("vapor-setup does not match its authenticated size and digest")
+          setup_path = temp / "vapor-setup"
+          setup_path.write_bytes(setup_bytes)
+          setup_path.chmod(0o700)
+          print(setup_path)
+          PY
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+          setup="$RUNNER_TEMP/vapor-setup"
+          vapor_home="$("$setup" install --channel stable --print-root)"
+          target_bin="$vapor_home/bin/x86_64-unknown-linux-gnu"
+          test -x "$target_bin/vapor-installer"
+          export VAPOR_HOME="$vapor_home"
+          export PATH="$target_bin:$PATH"
+          printf 'VAPOR_HOME=%s\n' "$vapor_home" >> "$GITHUB_ENV"
+          printf '%s\n' "$target_bin" >> "$GITHUB_PATH"
+          vapor-installer toolchain install
+          vapor-installer superworkspace create
 
-      - name: Build the worker agent and restricted operation helper
-        run: cargo build --locked --release --bin vapor_node_agent --bin vapor_node_ops
+          credential_helper="$RUNNER_TEMP/vapor-git-credential"
+          cat > "$credential_helper" <<'SH'
+          #!/bin/sh
+          protocol=
+          host=
+          path=
+          while IFS= read -r line; do
+            case "$line" in
+              protocol=*) protocol=${line#protocol=} ;;
+              host=*) host=${line#host=} ;;
+              path=*) path=${line#path=} ;;
+            esac
+          done
+          case "$protocol:$host:$path" in
+            https:github.com:GHF-Studios/*)
+              printf 'username=x-access-token\npassword=%s\n' "$VAPOR_SOURCE_READ_TOKEN"
+              ;;
+          esac
+          SH
+          chmod 700 "$credential_helper"
+          # Vapor's Git provider inherits Git's process-local environment config.
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0=credential.https://github.com.useHttpPath
+          export GIT_CONFIG_VALUE_0=true
+          export GIT_CONFIG_KEY_1=credential.helper
+          export GIT_CONFIG_VALUE_1="!$credential_helper"
+          vapor-installer source clone Vapor-Platform-Server --revision "$PLATFORM_REVISION"
+          source_root="$HOME/Vapor/sources/Vapor-Platform-Server"
+          test -f "$source_root/Workspace.vapor.toml"
+          printf 'VAPOR_PLATFORM_SOURCE=%s\n' "$source_root" >> "$GITHUB_ENV"
 
-      - name: Assemble checksummed install package
+      - name: Run the Platform test recipe through Vapor-managed Cargo
         shell: bash
         run: |
           set -euo pipefail
-          package_dir="${RUNNER_TEMP}/vapor-node-agent-package"
-          mkdir -p "${package_dir}" dist
-          install -m 0755 target/release/vapor_node_agent "${package_dir}/vapor-node-agent"
-          install -m 0755 target/release/vapor_node_ops "${package_dir}/vapor-node-ops"
-          install -m 0644 deploy/node-agent/vapor-node-agent.service "${package_dir}/vapor-node-agent.service"
-          install -m 0644 deploy/node-agent/vapor-node-agent.sudoers "${package_dir}/vapor-node-agent.sudoers"
-          install -m 0644 deploy/node-agent/README.md "${package_dir}/README.md"
-          archive="dist/vapor-node-agent-linux-x86_64.tar.gz"
-          tar -C "${package_dir}" -czf "${archive}" .
-          (cd dist && sha256sum vapor-node-agent-linux-x86_64.tar.gz > vapor-node-agent-linux-x86_64.tar.gz.sha256)
+          cd "$VAPOR_PLATFORM_SOURCE"
+          VAPOR_CLI=vapor deploy/scripts/test.sh
+
+      - name: Build the node-agent package through Vapor-managed release Cargo
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$VAPOR_PLATFORM_SOURCE"
+          vapor sdk --verbose --workspace "$VAPOR_PLATFORM_SOURCE" build-release 2>&1 | tee "$RUNNER_TEMP/vapor-platform-build.log"
+          target_dir="$(sed -n 's/^  cargo_target_dir: //p' "$RUNNER_TEMP/vapor-platform-build.log" | tail -n 1)"
+          test -n "$target_dir"
+          data_root="$(dirname "$(dirname "$(dirname "$target_dir")")")"
+          package_root="$data_root/output/vapor-node-agent-package"
+          package_dir="$package_root/files"
+          mkdir -p "$package_dir"
+          install -m 0755 "$target_dir/release/vapor_node_agent" "$package_dir/vapor-node-agent"
+          install -m 0755 "$target_dir/release/vapor_node_ops" "$package_dir/vapor-node-ops"
+          install -m 0644 "$VAPOR_PLATFORM_SOURCE/deploy/node-agent/vapor-node-agent.service" "$package_dir/vapor-node-agent.service"
+          install -m 0644 "$VAPOR_PLATFORM_SOURCE/deploy/node-agent/vapor-node-agent.sudoers" "$package_dir/vapor-node-agent.sudoers"
+          install -m 0644 "$VAPOR_PLATFORM_SOURCE/deploy/node-agent/README.md" "$package_dir/README.md"
+          archive="$package_root/vapor-node-agent-linux-x86_64.tar.gz"
+          tar -C "$package_dir" -czf "$archive" .
+          (cd "$package_root" && sha256sum vapor-node-agent-linux-x86_64.tar.gz > vapor-node-agent-linux-x86_64.tar.gz.sha256)
+          printf 'root=%s\n' "$package_root" >> "$GITHUB_OUTPUT"
 
       - name: Publish install package artifact
         uses: actions/upload-artifact@v4
         with:
           name: vapor-node-agent-linux-x86_64
-          path: dist/vapor-node-agent-linux-x86_64.tar.gz*
+          path: ${{ steps.package.outputs.root }}/vapor-node-agent-linux-x86_64.tar.gz*
           if-no-files-found: error
           retention-days: 30
 
-  windows-recovery-tests:
+  windows-recovery-checks:
     runs-on: windows-latest
+    env:
+      VAPOR_SOURCE_READ_TOKEN: ${{ secrets.VAPOR_SOURCE_READ_TOKEN || github.token }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Run deployment helper tests
+      - name: Verify signed Vapor bootstrap, install its toolchain, and clone this revision through Vapor
         shell: pwsh
-        run: python -m unittest discover -s deploy/tests -p 'test_*.py'
+        env:
+          PLATFORM_REVISION: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import shutil
+          import subprocess
+          import urllib.request
 
-      - name: Test owner-held USB recovery sync
-        shell: pwsh
-        run: ./deploy/tests/test_backup_to_usb.ps1
+          origin = "https://vapor.ghf-studios.site"
+          platform = "windows-x86_64"
+          key_id = "vapor-release-2026-11-24"
+          raw_key = bytes.fromhex("1e3ab22c2cf6cb7c67cf92ca5a9e242e8fc697c15ed04589da4cbd7ed1842a43")
+          api = f"{origin}/api/updates/v1/vapor/stable/{platform}/latest.json"
+          with urllib.request.urlopen(api, timeout=30) as response:
+              manifest_bytes = response.read(64 * 1024 + 1)
+          if len(manifest_bytes) > 64 * 1024:
+              raise SystemExit("release manifest is too large")
+          with urllib.request.urlopen(api + ".sig", timeout=30) as response:
+              signature_hex = response.read(256).decode("ascii").strip()
+          if not re.fullmatch(r"[0-9a-f]{128}", signature_hex):
+              raise SystemExit("release signature is malformed")
+          manifest = json.loads(manifest_bytes)
+          if manifest.get("key_id") != key_id or manifest.get("channel") != "stable" or manifest.get("platform") != platform:
+              raise SystemExit("release manifest identity does not match the pinned Vapor release")
+          version = manifest.get("version")
+          if not isinstance(version, str) or not re.fullmatch(r"0\.5\.0-pre-alpha-(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
+              raise SystemExit("bootstrap version does not follow the pinned pre-alpha SemVer policy")
+          setup = manifest.get("setup")
+          if not isinstance(setup, dict):
+              raise SystemExit("release manifest has no signed setup payload")
+          setup_url = setup.get("url")
+          expected_url = f"{origin}/api/updates/v1/vapor/releases/{version}/{platform}/vapor-setup"
+          if setup_url != expected_url:
+              raise SystemExit("signed setup URL is outside the expected immutable release path")
+          expected_size = setup.get("size")
+          expected_digest = setup.get("sha256")
+          if not isinstance(expected_size, int) or expected_size <= 0 or not re.fullmatch(r"[0-9a-f]{64}", str(expected_digest)):
+              raise SystemExit("signed setup size or digest is invalid")
 
-      - name: Test source-pinned state-only USB recovery kit
-        shell: pwsh
-        run: ./deploy/tests/test_backup_state_only_to_usb.ps1
+          temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          public_der = temp / "vapor-release-public.der"
+          public_der.write_bytes(bytes.fromhex("302a300506032b6570032100") + raw_key)
+          manifest_path = temp / "vapor-release-manifest.json"
+          signature_path = temp / "vapor-release-manifest.sig"
+          manifest_path.write_bytes(manifest_bytes)
+          signature_path.write_bytes(bytes.fromhex(signature_hex))
+          openssl = shutil.which("openssl") or r"C:\Program Files\Git\usr\bin\openssl.exe"
+          if not pathlib.Path(openssl).is_file():
+              raise SystemExit("OpenSSL is required to verify the signed Vapor bootstrap")
+          subprocess.run([
+              openssl, "pkeyutl", "-verify", "-pubin", "-keyform", "DER",
+              "-inkey", str(public_der), "-rawin", "-in", str(manifest_path),
+              "-sigfile", str(signature_path),
+          ], check=True, stdout=subprocess.DEVNULL)
 
-      - name: Test USB recovery task triggers
+          with urllib.request.urlopen(setup_url, timeout=300) as response:
+              setup_bytes = response.read(expected_size + 1)
+          if len(setup_bytes) != expected_size or hashlib.sha256(setup_bytes).hexdigest() != expected_digest:
+              raise SystemExit("vapor-setup does not match its authenticated size and digest")
+          setup_path = temp / "vapor-setup.exe"
+          setup_path.write_bytes(setup_bytes)
+          print(setup_path)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Signed Vapor bootstrap verification failed' }
+
+          $setup = Join-Path $env:RUNNER_TEMP 'vapor-setup.exe'
+          $vaporHome = (& $setup install --channel stable --print-root | Select-Object -Last 1).Trim()
+          if (-not $vaporHome) { throw 'Vapor setup returned no installation root' }
+          $targetBin = Join-Path $vaporHome 'bin\x86_64-pc-windows-msvc'
+          $installer = Join-Path $targetBin 'vapor-installer.exe'
+          if (-not (Test-Path $installer)) { throw 'Installed Vapor installer binary is missing' }
+          "VAPOR_HOME=$vaporHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VAPOR_PLATFORM_SOURCE=$HOME\Vapor\sources\Vapor-Platform-Server" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $targetBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $installer toolchain install
+          if ($LASTEXITCODE -ne 0) { throw 'Vapor-managed toolchain installation failed' }
+          & $installer superworkspace create
+          if ($LASTEXITCODE -ne 0) { throw 'Vapor Superworkspace creation failed' }
+
+          $helper = Join-Path $env:RUNNER_TEMP 'vapor-git-credential.ps1'
+          @'
+          param([string]$Operation)
+          $inputText = [Console]::In.ReadToEnd()
+          $protocol = [regex]::Match($inputText, '(?m)^protocol=(.*)$').Groups[1].Value
+          $hostName = [regex]::Match($inputText, '(?m)^host=(.*)$').Groups[1].Value
+          $path = [regex]::Match($inputText, '(?m)^path=(.*)$').Groups[1].Value
+          if ($Operation -eq 'get' -and $protocol -eq 'https' -and $hostName -eq 'github.com' -and $path.StartsWith('GHF-Studios/')) {
+            "username=x-access-token"
+            "password=$env:VAPOR_SOURCE_READ_TOKEN"
+          }
+          '@ | Set-Content -Path $helper -Encoding ascii
+          $helperCommand = "!powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$($helper -replace '\\','/')`""
+          # Vapor's Git provider inherits Git's process-local environment config.
+          $env:GIT_TERMINAL_PROMPT = '0'
+          $env:GIT_CONFIG_COUNT = '2'
+          $env:GIT_CONFIG_KEY_0 = 'credential.https://github.com.useHttpPath'
+          $env:GIT_CONFIG_VALUE_0 = 'true'
+          $env:GIT_CONFIG_KEY_1 = 'credential.helper'
+          $env:GIT_CONFIG_VALUE_1 = $helperCommand
+          & $installer source clone Vapor-Platform-Server --revision $env:PLATFORM_REVISION
+          if ($LASTEXITCODE -ne 0) { throw 'Vapor-managed Platform source clone failed' }
+          if (-not (Test-Path "$HOME\Vapor\sources\Vapor-Platform-Server\Workspace.vapor.toml")) { throw 'Vapor source checkout is missing its workspace manifest' }
+
+      - name: Run Windows recovery checks from the Vapor source checkout
         shell: pwsh
-        run: ./deploy/tests/test_usb_backup_task.ps1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location "$env:VAPOR_PLATFORM_SOURCE"
+          python -m unittest discover -s deploy/tests -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { throw 'Deployment helper tests failed' }
+          ./deploy/tests/test_backup_to_usb.ps1
+          ./deploy/tests/test_backup_state_only_to_usb.ps1
+          ./deploy/tests/test_usb_backup_task.ps1

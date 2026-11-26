@@ -30,15 +30,20 @@ GET /api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe
 GET /api/updates/v1/vapor/releases/{version}/linux-x86_64/vapor-setup
 ```
 
-The `stable` channel is the distribution channel, not a claim that the SemVer lacks a prerelease marker. The channel's `versions.json` endpoint returns the complete, newest-first list of releases
-and includes only versions with a complete immutable release for that
-platform. During pre-alpha, versions use the pinned 0.5.0 compatibility target plus an inner SemVer (0.5.0-pre-alpha-0.1.0); history sorts those versions by inner SemVer, with final 0.5.0 after its pre-alpha releases. The index is derived from the immutable release directories; advancing a
-stable channel pointer does not require a separate history-file update. Each
-listed version still uses its own immutable manifest and detached signature;
-the endpoint is a discovery index, not a replacement signature. The Installer
-continues to verify the exact manifest bytes before installing. The Homepage
-keeps the channel's latest version as its primary download and renders older
-entries as release history.
+The `stable` channel is the distribution channel, not a claim that the SemVer
+has no prerelease marker. During pre-alpha, release versions use the pinned
+compatibility target and rolling product version, for example
+`0.5.0-pre-alpha-0.1.0`. The channel's `versions.json` endpoint returns the
+complete, newest-first list of supported release versions that have a complete
+immutable release for that platform. Pre-alpha history is ordered by its inner
+SemVer, with a final version of the same compatibility target ordered after
+the pre-alpha releases. The index is derived from immutable release
+directories; advancing a stable channel pointer does not require a separate
+history-file update. Each listed version still uses its own immutable manifest
+and detached signature; the endpoint is a discovery index, not a replacement
+signature. The Installer continues to verify the exact manifest bytes before
+installing. The Homepage keeps the channel's latest version as its primary
+download and renders older entries as release history.
 
 The latest JSON response is served byte-for-byte from the selected immutable
 `manifest.json`; its `.sig` response is served byte-for-byte from the matching
@@ -52,6 +57,12 @@ Manifest fields are `schema` (integer `1`), `key_id`, SemVer `version`,
 signed setup record identifies the website-distributed `vapor-setup` binary;
 that binary installs only the signed application archive. The manifest is not rewritten or
 re-serialized by the server.
+
+The application archive includes `Vapor-Home.toml` alongside its
+`App.vapor.toml`. The installed release root is the active Vapor app home used
+by CLI and Installer discovery; without the marker, setup can activate a
+release but the first managed toolchain or source operation cannot resolve it.
+Bundle preparation validates the marker identity before signing.
 
 ## Preparing and publishing a release
 
@@ -101,7 +112,9 @@ and the publish script accepted both against isolated temporary storage. No
 signed release is published on Artifact yet, so the live feed and clean-machine
 bootstrap have not been exercised. The Client now contains a default-branch
 release workflow and restricted publication receiver/provisioning scripts;
-the first signed pre-alpha release must seed the feed before the default-branch workflow can publish subsequent releases; no release is currently published.
+the feed must be seeded with the first signed pre-alpha release before the
+default-branch workflow can publish subsequent releases. No release is
+currently published on Artifact.
 
 ## Restricted CI publication
 

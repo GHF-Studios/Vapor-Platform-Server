@@ -31,7 +31,7 @@ chmod 0700 "$stage"
 cleanup() { rm -rf -- "$stage"; }
 trap cleanup EXIT
 
-python3 - "$stage" "$platform" <<'PY'
+python3 - "$stage" "$platform" 3<&0 <<'PY'
 import os
 import re
 import sys
@@ -51,7 +51,9 @@ max_entries = 32
 entries = 0
 
 try:
-    archive = tarfile.open(fileobj=sys.stdin.buffer, mode="r|gz")
+    # Keep the streamed upload on fd 3: stdin carries this embedded Python
+    # program via the heredoc, so reading the archive from stdin loses it.
+    archive = tarfile.open(fileobj=os.fdopen(3, "rb"), mode="r|gz")
 except tarfile.TarError as error:
     sys.exit(f"error: incoming stream is not a valid gzip tar bundle: {error}")
 
