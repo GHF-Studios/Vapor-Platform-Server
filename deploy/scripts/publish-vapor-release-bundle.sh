@@ -95,9 +95,29 @@ case "$platform" in
   linux-x86_64) setup_name=vapor-setup ;;
 esac
 setup_path="$release_directory/$setup_name"
+git_artifact_path="$release_directory/git.tar.gz"
+git_source_path="$release_directory/git-source.tar.gz"
+git_notices_path="$release_directory/git-notices.tar.gz"
 export VAPOR_RELEASE_SETUP_PATH="$setup_path"
+export VAPOR_RELEASE_GIT_ARTIFACT_PATH="$git_artifact_path"
+export VAPOR_RELEASE_GIT_SOURCE_PATH="$git_source_path"
+export VAPOR_RELEASE_GIT_NOTICES_PATH="$git_notices_path"
 if [ ! -f "$manifest_path" ] || [ ! -f "$signature_path" ] || [ ! -f "$archive_path" ] || [ ! -f "$setup_path" ]; then
   echo "error: bundle is missing its manifest, signature, archive, or setup executable" >&2
+  exit 1
+fi
+git_asset_count=0
+for path in "$git_artifact_path" "$git_source_path" "$git_notices_path"; do
+  if [ -e "$path" ]; then
+    if [ ! -f "$path" ] || [ -L "$path" ]; then
+      echo "error: managed Git asset is not a regular file: $path" >&2
+      exit 1
+    fi
+    git_asset_count=$((git_asset_count + 1))
+  fi
+done
+if [ "$git_asset_count" -ne 0 ] && [ "$git_asset_count" -ne 3 ]; then
+  echo "error: managed Git bundle must contain binary, source, and notices assets together" >&2
   exit 1
 fi
 
@@ -141,7 +161,7 @@ except (UnicodeDecodeError, json.JSONDecodeError):
     sys.exit("error: manifest is not valid JSON")
 if not isinstance(manifest, dict):
     sys.exit("error: manifest root must be a JSON object")
-if set(manifest) != {
+base_fields = {
     "schema",
     "key_id",
     "version",
@@ -151,9 +171,12 @@ if set(manifest) != {
     "artifact",
     "setup",
     "release_notes_url",
-}:
+}
+schema = manifest.get("schema")
+expected_fields = base_fields | ({"managed_git"} if schema == 2 else set())
+if schema not in (1, 2) or set(manifest) != expected_fields:
     sys.exit("error: manifest fields do not match the supported release schema")
-if type(manifest.get("schema")) is not int or manifest["schema"] != 1:
+if type(schema) is not int:
     sys.exit("error: unsupported manifest schema")
 if not isinstance(manifest.get("version"), str) or manifest["version"] != version:
     sys.exit("error: manifest schema/version does not match its bundle path")
@@ -223,6 +246,52 @@ if (
     or not isinstance(setup.get("sha256"), str) or setup["sha256"] != digest.hexdigest()
 ):
     sys.exit("error: setup executable size/hash does not match the signed manifest")
+managed_git = manifest.get("managed_git")
+git_asset_paths = {
+    "artifact": os.environ["VAPOR_RELEASE_GIT_ARTIFACT_PATH"],
+    "source": os.environ["VAPOR_RELEASE_GIT_SOURCE_PATH"],
+    "notices": os.environ["VAPOR_RELEASE_GIT_NOTICES_PATH"],
+}
+if schema == 1 and managed_git is not None:
+    sys.exit("error: schema-1 manifest cannot contain managed Git assets")
+if schema == 2:
+    if not isinstance(managed_git, dict) or set(managed_git) != {"version", "platform", "artifact", "source", "notices"}:
+        sys.exit("error: schema-2 manifest must contain the complete managed Git record")
+    if not isinstance(managed_git.get("version"), str) or not semver.fullmatch(managed_git["version"]):
+        sys.exit("error: managed Git version is invalid")
+    if "-" in managed_git["version"] or "+" in managed_git["version"]:
+        sys.exit("error: managed Git version must be a stable SemVer release")
+    if managed_git.get("platform") != platform:
+        sys.exit("error: managed Git platform does not match the release platform")
+    expected_files = {
+        "artifact": "git.tar.gz",
+        "source": "git-source.tar.gz",
+        "notices": "git-notices.tar.gz",
+    }
+    maximums = {"artifact": 2 * 1024**3, "source": 8 * 1024**3, "notices": 64 * 1024**2}
+    for field, file_name in expected_files.items():
+        record = managed_git.get(field)
+        if not isinstance(record, dict) or set(record) != {"url", "size", "sha256"}:
+            sys.exit(f"error: managed Git {field} record is invalid")
+        expected_url = f"https://vapor.ghf-studios.site/api/updates/v1/vapor/releases/{version}/{platform}/{file_name}"
+        if record.get("url") != expected_url:
+            sys.exit(f"error: managed Git {field} URL is not canonical")
+        if type(record.get("size")) is not int or record["size"] <= 0 or record["size"] > maximums[field]:
+            sys.exit(f"error: managed Git {field} size is invalid")
+        if not isinstance(record.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]):
+            sys.exit(f"error: managed Git {field} digest is invalid")
+        digest = hashlib.sha256()
+        size = 0
+        with open(git_asset_paths[field], "rb") as asset_file:
+            for block in iter(lambda: asset_file.read(1024 * 1024), b""):
+                size += len(block)
+                if size > maximums[field]:
+                    sys.exit(f"error: managed Git {field} asset exceeds its size limit")
+                digest.update(block)
+        if size != record["size"] or digest.hexdigest() != record["sha256"]:
+            sys.exit(f"error: managed Git {field} asset does not match the signed manifest")
+elif any(os.path.lexists(path) for path in git_asset_paths.values()):
+    sys.exit("error: bundle has managed Git assets but its manifest omits them")
 with open(signature_path, "rb") as signature_file:
     signature_hex = signature_file.read(257)
 if not re.fullmatch(rb"[0-9a-f]{128}", signature_hex):
@@ -272,6 +341,11 @@ install -m 0644 -- "$manifest_path" "$stage_directory/releases/$version/$platfor
 install -m 0644 -- "$signature_path" "$stage_directory/releases/$version/$platform.manifest.json.sig"
 install -m 0644 -- "$archive_path" "$stage_directory/releases/$version/$platform.vapor.tar.gz"
 install -m 0644 -- "$setup_path" "$stage_directory/releases/$version/$platform.$setup_name"
+if [ "$git_asset_count" -eq 3 ]; then
+  install -m 0644 -- "$git_artifact_path" "$stage_directory/releases/$version/$platform.git.tar.gz"
+  install -m 0644 -- "$git_source_path" "$stage_directory/releases/$version/$platform.git-source.tar.gz"
+  install -m 0644 -- "$git_notices_path" "$stage_directory/releases/$version/$platform.git-notices.tar.gz"
+fi
 
 release_stage="$stage_directory/releases/$version/$platform"
 mkdir -p -- "$release_stage"
@@ -280,6 +354,11 @@ mv -- "$stage_directory/releases/$version/$platform.manifest.json" "$release_sta
 mv -- "$stage_directory/releases/$version/$platform.manifest.json.sig" "$release_stage/manifest.json.sig"
 mv -- "$stage_directory/releases/$version/$platform.vapor.tar.gz" "$release_stage/vapor.tar.gz"
 mv -- "$stage_directory/releases/$version/$platform.$setup_name" "$release_stage/$setup_name"
+if [ "$git_asset_count" -eq 3 ]; then
+  mv -- "$stage_directory/releases/$version/$platform.git.tar.gz" "$release_stage/git.tar.gz"
+  mv -- "$stage_directory/releases/$version/$platform.git-source.tar.gz" "$release_stage/git-source.tar.gz"
+  mv -- "$stage_directory/releases/$version/$platform.git-notices.tar.gz" "$release_stage/git-notices.tar.gz"
+fi
 mv -T -- "$release_stage" "$final_release_directory"
 
 pointer_directory="$updates_root/channels/$channel"

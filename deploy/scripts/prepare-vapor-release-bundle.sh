@@ -4,14 +4,14 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  prepare-vapor-release-bundle.sh ARCHIVE VERSION CHANNEL PLATFORM MINIMUM_UPDATER_VERSION KEY_ID ED25519_PRIVATE_KEY OUTPUT_DIRECTORY [RELEASE_NOTES_URL]
+  prepare-vapor-release-bundle.sh ARCHIVE VERSION CHANNEL PLATFORM MINIMUM_UPDATER_VERSION KEY_ID ED25519_PRIVATE_KEY OUTPUT_DIRECTORY [RELEASE_NOTES_URL [GIT_VERSION GIT_ARCHIVE GIT_SOURCE_BUNDLE GIT_NOTICES_BUNDLE]]
 
 Prepares a signed, immutable Vapor release bundle on the operator's machine.
 The private key is read locally and is never copied into the bundle.
 EOF
 }
 
-if [ "$#" -lt 8 ] || [ "$#" -gt 9 ]; then
+if [ "$#" -ne 8 ] && [ "$#" -ne 9 ] && [ "$#" -ne 13 ]; then
   usage
   exit 2
 fi
@@ -25,6 +25,10 @@ release_key_id="$6"
 signing_key_input="$7"
 output_input="$8"
 release_notes_url="${9:-https://vapor.ghf-studios.site/docs/}"
+git_version="${10:-}"
+git_archive_input="${11:-}"
+git_source_input="${12:-}"
+git_notices_input="${13:-}"
 public_origin="${VAPOR_RELEASE_PUBLIC_ORIGIN:-https://vapor.ghf-studios.site}"
 
 safe_path_segment='^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$'
@@ -52,6 +56,22 @@ if [ ! -f "$archive_input" ] || [ ! -f "$signing_key_input" ]; then
   echo "error: archive and signing key must both be regular files" >&2
   exit 1
 fi
+if [ -n "$git_version" ]; then
+  if [[ ! "$git_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+    echo "error: GIT_VERSION must be a SemVer version" >&2
+    exit 2
+  fi
+  for path in "$git_archive_input" "$git_source_input" "$git_notices_input"; do
+    if [ ! -f "$path" ] || [ -L "$path" ]; then
+      echo "error: all managed Git archive inputs must be regular files" >&2
+      exit 1
+    fi
+  done
+fi
+if [ "$#" -eq 13 ] && [ -z "$git_version" ]; then
+  echo "error: GIT_VERSION is required when managed Git asset inputs are supplied" >&2
+  exit 2
+fi
 
 archive_path="$(cd -- "$(dirname -- "$archive_input")" && pwd)/$(basename -- "$archive_input")"
 signing_key_path="$(cd -- "$(dirname -- "$signing_key_input")" && pwd)/$(basename -- "$signing_key_input")"
@@ -60,6 +80,14 @@ output_name="$(basename -- "$output_input")"
 mkdir -p -- "$output_parent_input"
 output_parent="$(cd -- "$output_parent_input" && pwd)"
 output_directory="$output_parent/$output_name"
+git_archive_path=""
+git_source_path=""
+git_notices_path=""
+if [ -n "$git_version" ]; then
+  git_archive_path="$(cd -- "$(dirname -- "$git_archive_input")" && pwd)/$(basename -- "$git_archive_input")"
+  git_source_path="$(cd -- "$(dirname -- "$git_source_input")" && pwd)/$(basename -- "$git_source_input")"
+  git_notices_path="$(cd -- "$(dirname -- "$git_notices_input")" && pwd)/$(basename -- "$git_notices_input")"
+fi
 
 if [ -e "$output_directory" ]; then
   echo "error: output already exists; immutable bundles are never overwritten: $output_directory" >&2
@@ -77,6 +105,11 @@ trap cleanup EXIT
 release_directory="$bundle_temp/releases/$release_version/$release_platform"
 mkdir -p -- "$release_directory" "$bundle_temp/channels/$release_channel"
 install -m 0644 -- "$archive_path" "$release_directory/vapor.tar.gz"
+if [ -n "$git_version" ]; then
+  install -m 0644 -- "$git_archive_path" "$release_directory/git.tar.gz"
+  install -m 0644 -- "$git_source_path" "$release_directory/git-source.tar.gz"
+  install -m 0644 -- "$git_notices_path" "$release_directory/git-notices.tar.gz"
+fi
 case "$release_platform" in
   windows-x86_64) setup_name=vapor-setup.exe ;;
   linux-x86_64) setup_name=vapor-setup ;;
@@ -92,6 +125,10 @@ export VAPOR_RELEASE_KEY_ID="$release_key_id"
 export VAPOR_RELEASE_NOTES_URL="$release_notes_url"
 export VAPOR_RELEASE_PUBLIC_ORIGIN="$public_origin"
 export VAPOR_RELEASE_MANIFEST="$release_directory/manifest.json"
+export VAPOR_RELEASE_GIT_VERSION="$git_version"
+export VAPOR_RELEASE_GIT_ARTIFACT="$release_directory/git.tar.gz"
+export VAPOR_RELEASE_GIT_SOURCE="$release_directory/git-source.tar.gz"
+export VAPOR_RELEASE_GIT_NOTICES="$release_directory/git-notices.tar.gz"
 
 python3 - <<'PY'
 import hashlib
@@ -112,6 +149,7 @@ segment = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$")
 
 version = os.environ["VAPOR_RELEASE_VERSION"]
 minimum = os.environ["VAPOR_RELEASE_MINIMUM_UPDATER"]
+git_version = os.environ["VAPOR_RELEASE_GIT_VERSION"]
 channel = os.environ["VAPOR_RELEASE_CHANNEL"]
 key_id = os.environ["VAPOR_RELEASE_KEY_ID"]
 platform = os.environ["VAPOR_RELEASE_PLATFORM"]
@@ -121,6 +159,10 @@ archive_path = os.environ["VAPOR_RELEASE_ARCHIVE"]
 
 if not semver.fullmatch(version) or not semver.fullmatch(minimum):
     sys.exit("error: release and minimum-updater versions must be valid SemVer")
+if git_version and not semver.fullmatch(git_version):
+    sys.exit("error: managed Git version must be valid SemVer")
+if git_version and ("-" in git_version or "+" in git_version):
+    sys.exit("error: managed Git version must be a stable SemVer release")
 if platform not in {"windows-x86_64", "linux-x86_64"}:
     sys.exit("error: unsupported release platform")
 if not segment.fullmatch(channel) or not segment.fullmatch(key_id):
@@ -299,7 +341,7 @@ if setup_size == 0:
     sys.exit("error: extracted standalone setup executable is empty")
 
 manifest = {
-    "schema": 1,
+    "schema": 2 if git_version else 1,
     "key_id": key_id,
     "version": version,
     "channel": channel,
@@ -317,6 +359,31 @@ manifest = {
     },
     "release_notes_url": notes_url,
 }
+if git_version:
+    def digest_file(path, maximum_size):
+        digest = hashlib.sha256()
+        size = 0
+        with open(path, "rb") as source:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                size += len(block)
+                if size > maximum_size:
+                    sys.exit(f"error: managed Git asset exceeds its size limit: {path}")
+                digest.update(block)
+        if size == 0:
+            sys.exit(f"error: managed Git asset is empty: {path}")
+        return {"size": size, "sha256": digest.hexdigest()}
+
+    base = f"{origin}/api/updates/v1/vapor/releases/{version}/{platform}"
+    managed_git = {"version": git_version, "platform": platform}
+    for field, env_name, file_name, maximum_size in (
+        ("artifact", "VAPOR_RELEASE_GIT_ARTIFACT", "git.tar.gz", 2 * 1024**3),
+        ("source", "VAPOR_RELEASE_GIT_SOURCE", "git-source.tar.gz", 8 * 1024**3),
+        ("notices", "VAPOR_RELEASE_GIT_NOTICES", "git-notices.tar.gz", 64 * 1024**2),
+    ):
+        record = digest_file(os.environ[env_name], maximum_size)
+        record["url"] = f"{base}/{file_name}"
+        managed_git[field] = record
+    manifest["managed_git"] = managed_git
 encoded = (json.dumps(manifest, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
 with open(os.environ["VAPOR_RELEASE_MANIFEST"], "wb") as output:
     output.write(encoded)

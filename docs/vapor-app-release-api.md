@@ -26,9 +26,23 @@ The exact immutable release endpoints are:
 GET /api/updates/v1/vapor/releases/{version}/{platform}/manifest.json
 GET /api/updates/v1/vapor/releases/{version}/{platform}/manifest.json.sig
 GET /api/updates/v1/vapor/releases/{version}/{platform}/vapor.tar.gz
+GET /api/updates/v1/vapor/releases/{version}/{platform}/git.tar.gz
+GET /api/updates/v1/vapor/releases/{version}/{platform}/git-source.tar.gz
+GET /api/updates/v1/vapor/releases/{version}/{platform}/git-notices.tar.gz
 GET /api/updates/v1/vapor/releases/{version}/windows-x86_64/vapor-setup.exe
 GET /api/updates/v1/vapor/releases/{version}/linux-x86_64/vapor-setup
 ```
+
+The three `git*.tar.gz` endpoints are optional developer-tool payloads. They
+are published as an all-or-none set in the same immutable release directory;
+the Git binary, corresponding-source bundle, and notices/inventory are each
+covered by the signed manifest's exact size and SHA-256. A release without
+these assets remains schema 1 and behaves as before. Schema 2 requires the
+complete `managed_git` record (`version`, `platform`, `artifact`, `source`, and
+`notices`); both setup and in-app update verification accept schema 1 and 2,
+and reject inconsistent Git URLs, platforms, sizes, or digests. The Player
+archive and its setup executable remain separate from managed Git, so a
+Player-only install does not acquire Developer tools.
 
 The `stable` channel is the distribution channel, not a claim that the SemVer
 has no prerelease marker. During pre-alpha, release versions use the pinned
@@ -51,12 +65,21 @@ immutable `.sig`. The signature is lowercase hexadecimal Ed25519 over the exact
 manifest response bytes. The client release contract requires checking that
 signature and the artifact size and SHA-256 before staging an update.
 
-Manifest fields are `schema` (integer `1`), `key_id`, SemVer `version`,
+Schema-1 manifest fields are `schema` (integer `1`), `key_id`, SemVer `version`,
 `channel`, `platform`, `minimum_updater_version`, `artifact` (`url`, `size`,
 `sha256`), `setup` (`url`, `size`, `sha256`), and `release_notes_url`. The
 signed setup record identifies the website-distributed `vapor-setup` binary;
 that binary installs only the signed application archive. The manifest is not rewritten or
 re-serialized by the server.
+
+Schema 2 adds `managed_git`: its independent SemVer tool version and matching
+platform plus signed `artifact`, `source`, and `notices` records, each with the
+same `url`, `size`, and lowercase `sha256` shape. Preparation emits schema 2
+only when all three Git inputs are explicitly supplied; it does not build Git
+or change the default release pipeline. Publication requires every declared
+file, verifies all three hashes and sizes before promotion, and installs them
+before advancing the channel pointer. Stable history only advertises schema-2
+releases when all three payload files are present.
 
 The application archive includes `Vapor-Home.toml` alongside its
 `App.vapor.toml`. The installed release root is the active Vapor app home used
@@ -168,6 +191,9 @@ releases/{version}/{platform}/manifest.json
 releases/{version}/{platform}/manifest.json.sig
 releases/{version}/{platform}/vapor.tar.gz
 releases/{version}/{platform}/vapor-setup[.exe]
+releases/{version}/{platform}/git.tar.gz             # optional, schema 2
+releases/{version}/{platform}/git-source.tar.gz      # optional, schema 2
+releases/{version}/{platform}/git-notices.tar.gz     # optional, schema 2
 ```
 
 The pointer contains only the selected version and a trailing newline is
